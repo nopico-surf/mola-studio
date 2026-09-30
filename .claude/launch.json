@@ -4,14 +4,57 @@
     {
       "name": "mola",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["serve", ".", "-l", "3000"],
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3000"
+      ],
       "port": 3000
     },
     {
       "name": "mola-2",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["serve", ".", "-l", "3001"],
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3001"
+      ],
       "port": 3001
+    },
+    {
+      "name": "mola-3",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3002"
+      ],
+      "port": 3002
+    },
+    {
+      "name": "mola-4",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3003"
+      ],
+      "port": 3003
+    },
+    {
+      "name": "mola-5",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3004"
+      ],
+      "port": 3004
     }
   ]
 }

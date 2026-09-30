@@ -22,16 +22,25 @@ function h(tag, attrs = {}, kids = []) {
   for (const c of [].concat(kids)) if (c != null) e.append(c);
   return e;
 }
+// cor com opacidade = "#rrggbbaa" (o canvas e o CSS já entendem); opaca segue "#rrggbb"
+function colA(c) { const x = String(c || '').replace('#', ''); return x.length === 8 ? parseInt(x.slice(6), 16) / 255 : 1; }
+function withA(c, a) {
+  const b = String(c || '#000000').slice(0, 7), n = Math.round(clamp(a, 0, 1) * 255);
+  return n >= 255 ? b : b + n.toString(16).padStart(2, '0');
+}
 function hexA(hex, a) {
   let c = (hex || '#000').replace('#', '');
   if (c.length === 3) c = c.split('').map(x => x + x).join('');
   const n = parseInt(c.slice(0, 6), 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${+(a * (c.length === 8 ? parseInt(c.slice(6), 16) / 255 : 1)).toFixed(4)})`;
 }
-function toast(msg, ms = 2600) {
+// act = { label, fn }: botão no próprio aviso (ex.: Desfazer)
+function toast(msg, ms = 2600, act) {
   const t = $('#toast'); t.textContent = msg; t.hidden = false;
+  if (act) { t.append(h('button', { class:'toast-act', text:act.label, onclick:() => { t.hidden = true; act.fn(); } })); ms = Math.max(ms, 5000); }
   clearTimeout(toast._t); toast._t = setTimeout(() => t.hidden = true, ms);
 }
+const UNDO_ACT = { label:'Desfazer', fn:() => undo() };
 const readAs = (file, how) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r[how](file); });
 const loadImg = src => new Promise((res, rej) => { const i = new Image(); i.decoding = 'async'; i.onload = () => res(i); i.onerror = () => rej(new Error('Imagem não carregou')); i.src = src; });
 
@@ -91,7 +100,7 @@ const BP = { // blocos: logo, botão, imagem
   draw:    {label:'Desenhar traço', svg:true, shape:true, special:true, dur:2.4},
   assemble:{label:'Montar peças', svg:true, special:true, dur:1.8},
   handwrite:{label:'Escrever letra a letra', pen:true, special:true, dur:3.2},
-  line:    {label:'Linha e revela', special:true, dur:1.5},
+  line:    {label:'Linha e revela', ease:'linear', dur:1.5, fn:({p})=>p>=1?{}:({line:p})},
   spring:  {label:'Mola', ease:'spring', dur:1.0, fn:({e,p,I})=>({sc:Math.max(0,e), rot:(1-e)*-.25*I, a:clamp(p*4)})},
   pop:     {label:'Pulo', ease:'spring', dur:1.0, fn:({e,p,h,dir})=>({dy:(1-e)*h*.6*dir, sc:.6+.4*e, a:clamp(p*4)})},
   drop:    {label:'Cai e quica', ease:'spring', dur:1.2, fn:({e,p,h,dir})=>({dy:-(1-e)*h*2.2*dir, a:clamp(p*5)})},
@@ -135,17 +144,110 @@ for (const t in BLOCK_IN) {
 TEXT_IN.push(...BLOCK_TO_TEXT);
 TEXT_OUT.push('blur','slide','wipe','circle','spring','spin');
 
-const IDLE = { none:'Sem animação', float:'Flutuar', breathe:'Respirar', sway:'Balançar', shine:'Brilho', pulse:'Pulsar', spin:'Girar' };
+/* ------------ presets universais ------------
+   Escritos uma vez e usados por texto, logo (SVG ou PNG), botão, imagem e forma (entrada e saída).
+   O fn recebe { e, p, I, dir, i, n, seed, W, H, uh } (uh = meia altura da unidade: letra, palavra, linha ou o bloco inteiro)
+   e, além do estado de sempre, pode devolver (tudo desenhado por drawState e rasterFx, na seção Efeitos):
+   - kx: inclinação; bright: brilho (filtro); glow: luz que vaza da própria cor.
+   - clip: 'blinds' | 'diag' | 'diamond' | 'clock' | 'ink' | 'scan' (ce = progresso com curva, cp = linear, edge = linha na frente do corte).
+   - fx: 'slices' | 'pixel' | 'dust' | 'tiles' | 'rgb' | 'liquid' | 'persp' | 'glitch': o elemento vira imagem e é redesenhado em pedaços
+     (fp = progresso linear, fe = com curva, fI = intensidade, fdir = 1 entrando e -1 saindo, para a saída continuar o movimento).
+   whole: no texto, anima o bloco inteiro de uma vez (recortes e efeitos de imagem). trail: cópias atrasadas (rastro) enquanto se move.
+   pivot: 'base' ou 'top' (gira e estica a partir da base ou do topo da unidade). */
+// balanço de dobradiça: 1 (aberto) → passa um pouco do ponto → 0; a intensidade dá mais balanço
+const hingeSwing = (p, I) => Math.exp(-2.2 * p) * Math.cos(p * Math.PI * (1 + .7 * I)) * Math.pow(1 - p, .6);
+const SP = {
+  // movimento
+  whip:   { label:'Chicote', cat:'mov', unit:'word', s:.3, ease:'expoOut', dur:.9, trail:{ n:4, lag:.035 },
+            fn:({e,p,I,dir,W}) => { const v = 1 - e, wob = Math.sin(p * 13) * (1 - p) * (1 - p) * .2 * I;
+              return { dx:-v * W * (.35 + .45 * I) * dir, kx:-v * (.3 + .5 * I) + wob, sx:1 + v * (.2 + .35 * I), a:clamp(p * 3) }; } },
+  jelly:  { label:'Gelatina', cat:'mov', unit:'char', s:.5, ease:'linear', dur:1.4, pivot:'base',
+            fn:({p,I,uh,H}) => {
+              const t1 = .3; // cai esticada, bate, amassa e treme até parar
+              if (p < t1) { const q = p / t1; return { dy:-(1 - q * q) * (uh * 3 + H * .1) * (.6 + I), sy:1 + .3 * q * (.4 + I), sx:1 - .12 * q * (.4 + I), a:clamp(q * 4) }; }
+              const q = (p - t1) / (1 - t1), d = Math.exp(-4 * q) * (1 - q) * Math.cos(q * Math.PI * (4 + 2 * I)) * (.28 + .32 * I);
+              return { sy:1 - d, sx:1 + d * .8 };
+            } },
+  swing:  { label:'Pêndulo', cat:'mov', unit:'char', s:.45, ease:'linear', dur:1.5, pivot:'top',
+            fn:({p,I}) => ({ rot:(.7 + .9 * I) * Math.exp(-3 * p) * (1 - p) * Math.cos(p * Math.PI * (3 + I)), a:clamp(p * 5) }) },
+  roll:   { label:'Rolar', cat:'mov', unit:'char', s:.7, ease:'cubicOut', dur:1.5, // rola como roda (o giro acompanha a distância), chega e sai pela direita
+            fn:({e,p,I,uh}) => { const r = Math.max(uh, 12), dx = (1 - e) * TAU * r * (.5 + .7 * I); return { dx, rot:dx / r, a:clamp(p * 4) }; } },
+  warp:   { label:'Hiperespaço', cat:'mov', unit:'all', s:0, ease:'expoOut', dur:1.1, trail:{ n:5, lag:.04 },
+            fn:({e,p,I}) => ({ sc:1 + (1 - e) * (1.6 + 3 * I), blur:(1 - e) * 10, a:clamp(p * 2.5) }) },
+  // 3D de verdade: o elemento vira imagem e cada fatia é desenhada com perspectiva
+  door:   { label:'Porta 3D', cat:'3d', unit:'all', whole:true, ease:'linear', dur:1.5,
+            fn:({p,I,dir}) => p >= 1 ? {} : ({ fx:'persp', fax:'y', fhinge:-1, fang:-hingeSwing(p, I) * 1.45 * dir, a:clamp(p * 4) }) },
+  tilt:   { label:'Tombar 3D', cat:'3d', unit:'all', whole:true, ease:'linear', dur:1.5,
+            fn:({p,I,dir}) => p >= 1 ? {} : ({ fx:'persp', fax:'x', fhinge:1, fang:-hingeSwing(p, I) * 1.45 * dir, a:clamp(p * 4) }) },
+  coin:   { label:'Moeda 3D', cat:'3d', unit:'all', whole:true, ease:'expoOut', dur:1.4,
+            fn:({e,p,I,dir}) => p >= 1 ? {} : ({ fx:'persp', fax:'y', fhinge:0, fang:(1 - e) * TAU * (1 + Math.round(I)) * dir, sc:1 + (1 - e) * .15, a:clamp(p * 3) }) },
+  // revelações
+  blinds: { label:'Persianas', cat:'rev', unit:'all', whole:true, ease:'cubicInOut', dur:1.2,
+            fn:({p,I}) => p >= 1 ? {} : ({ clip:'blinds', cp:p, cn:Math.round(4 + 8 * I) }) },
+  slices: { label:'Fatias', cat:'rev', unit:'all', whole:true, ease:'expoOut', dur:1.2,
+            fn:({p,I,dir}) => p >= 1 ? {} : ({ fx:'slices', fp:p, fI:I, fcount:Math.round(2 + 7 * I), fdir:dir }) },
+  diag:   { label:'Corte diagonal', cat:'rev', unit:'all', whole:true, ease:'cubicInOut', dur:1.1,
+            fn:({e,p,dir}) => p >= 1 ? {} : ({ clip:'diag', ce:e, cdir:dir, edge:true }) },
+  diamond:{ label:'Losango', cat:'rev', unit:'all', whole:true, ease:'expoOut', dur:1.1,
+            fn:({e,p,I}) => p >= 1 ? {} : ({ clip:'diamond', ce:e, sc:1 + (1 - e) * .15 * I }) },
+  clock:  { label:'Relógio', cat:'rev', unit:'all', whole:true, ease:'cubicInOut', dur:1.2,
+            fn:({e,p,dir}) => p >= 1 ? {} : ({ clip:'clock', ce:e, cdir:dir }) },
+  ink:    { label:'Mancha de tinta', cat:'rev', unit:'all', whole:true, ease:'linear', dur:1.6,
+            fn:({p,I}) => p >= 1 ? {} : ({ clip:'ink', cp:p, cI:I }) },
+  scan:   { label:'Scanner', cat:'rev', unit:'all', whole:true, ease:'cubicInOut', dur:1.2,
+            fn:({e,p,dir}) => p >= 1 ? {} : ({ clip:'scan', ce:e, cdir:dir, edge:true, bright:1 + (1 - e) * .5 }) },
+  // efeitos
+  flash:  { label:'Flash de luz', cat:'fx', unit:'char', s:.45, ease:'cubicOut', dur:1.1,
+            fn:({e,p,I}) => ({ bright:1 + (1 - e) * (1.5 + 2.5 * I), glow:(1 - e) * (.8 + .8 * I), blur:(1 - e) * (3 + 8 * I), sc:1 + (1 - e) * .06, a:clamp(p * 4) }) },
+  neon:   { label:'Neon', cat:'fx', unit:'char', s:.55, ease:'linear', dur:1.4,
+            fn:({p,I,i,seed}) => { // acende piscando, como lâmpada velha; quanto mais perto do fim, mais tempo acesa
+              if (p >= 1) return {}; if (p <= 0) return { a:0 };
+              const on = p > .8 || rand(seed + i * 13, i + 5) < .12 + p * 1.1;
+              return { a:on ? 1 : .1, glow:on ? (.6 + .9 * I) * (1 - p) : 0 }; } },
+  rgb:    { label:'Aberração RGB', cat:'fx', unit:'all', whole:true, ease:'expoOut', dur:1.0,
+            fn:({e,p,I,seed}) => p >= 1 ? {} : ({ fx:'rgb', fe:e, fI:I, fseed:seed, sc:1 + (1 - e) * .1 * I, a:clamp(p * 4) }) },
+  pixel:  { label:'Pixels', cat:'fx', unit:'all', whole:true, ease:'cubicOut', dur:1.2,
+            fn:({e,p,I}) => p >= 1 ? {} : ({ fx:'pixel', fe:e, fI:I, a:clamp(p * 3) }) },
+  dust:   { label:'Poeira', cat:'fx', unit:'all', whole:true, ease:'linear', dur:1.8,
+            fn:({p,I,dir}) => p >= 1 ? {} : ({ fx:'dust', fp:p, fI:I, fdir:dir }) },
+  tiles:  { label:'Mosaico', cat:'fx', unit:'all', whole:true, ease:'linear', dur:1.3,
+            fn:({p,I,dir}) => p >= 1 ? {} : ({ fx:'tiles', fp:p, fI:I, fdir:dir }) },
+  liquid: { label:'Líquido', cat:'fx', unit:'all', whole:true, ease:'cubicOut', dur:1.5,
+            fn:({e,p,I}) => p >= 1 ? {} : ({ fx:'liquid', fe:e, fp:p, fI:I, blur:(1 - e) * 5 * I, a:clamp(p * 2.5) }) },
+};
+for (const k in SP) {
+  const D = SP[k], unit = D.unit || 'all';
+  const com = { label:D.label, cat:D.cat, ease:D.ease, dur:D.dur, pivot:D.pivot, trail:D.trail, whole:D.whole };
+  TP[k] = { ...com, unit, s:D.s || 0, fn:a => D.fn({ ...a, H:H(), uh:unit === 'all' ? a.bh / 2 : a.size * .42 }) };
+  BP[k] = { ...com, fn:a => D.fn({ ...a, H:H(), i:0, n:1, uh:a.h / 2 }) };
+}
+// "Linha e revela" também no texto e na forma
+TP.line = { label:BP.line.label, unit:'all', s:0, ease:'linear', dur:BP.line.dur, whole:true, fn:BP.line.fn };
+const SP_KEYS = ['line', ...Object.keys(SP)];
+for (const L of [TEXT_IN, TEXT_OUT, ...Object.values(BLOCK_IN), ...Object.values(BLOCK_OUT)]) L.push(...SP_KEYS.filter(k => !L.includes(k)));
+
+/* categorias, só para organizar a grade de presets */
+const CATS = [['', ''], ['pen', 'Traço'], ['mov', 'Movimento'], ['rev', 'Revelação'], ['3d', '3D'], ['fx', 'Efeitos'], ['txt', 'Só texto']];
+Object.entries({ rise:'mov', springWord:'mov', lineMask:'rev', blurChar:'fx', wave:'mov', stamp:'mov', highlight:'txt', type:'txt', track:'txt', drop:'mov', elastic:'mov', flip:'3d',
+  scramble:'txt', glitch:'fx', zoom:'mov', slideWord:'mov', slideAlt:'mov', counter:'txt', fade:'mov', line:'rev' }).forEach(([k, c]) => TP[k].cat = c);
+Object.entries({ draw:'pen', assemble:'pen', handwrite:'pen', line:'rev', spring:'mov', pop:'mov', drop:'mov', spin:'mov', flip:'3d', slide:'mov', rise:'rev', blur:'fx',
+  circle:'rev', wipe:'rev', fade:'mov' }).forEach(([k, c]) => BP[k].cat = c);
+for (const k in TEXT_TO_BLOCK) BP[k].cat ||= TP[k].cat;
+for (const k of BLOCK_TO_TEXT) TP[k].cat ||= BP[k].cat;
+
+const IDLE = { none:'Sem animação', float:'Flutuar', breathe:'Respirar', sway:'Balançar', shine:'Brilho', pulse:'Pulsar', spin:'Girar',
+               float3d:'Flutuar 3D', bounce:'Quicar', wiggle:'Tremer', glow:'Neon', glitch:'Interferência' };
 const IDLE_BY = { text:['none','float','breathe','sway','pulse'], logo:['none','shine','breathe','float','sway','pulse'], cta:['none','pulse','shine','breathe','sway','float'], image:['none','float','breathe','sway','shine','pulse'],
                  shape:['none','float','breathe','sway','spin','pulse','shine'] };
+for (const t in IDLE_BY) IDLE_BY[t].push(...['shine','float3d','bounce','wiggle','glow','glitch','spin'].filter(k => !IDLE_BY[t].includes(k)));
 const SHAPE_KINDS = { rect:'Retângulo', ellipse:'Círculo', triangle:'Triângulo', polygon:'Polígono', star:'Estrela', line:'Linha', custom:'Vetor SVG' };
 const BG_MODES = { mesh:'Gradiente vivo', linear:'Linear girando', spot:'Holofote', solid:'Sólido', image:'Imagem' };
 
 const FORMATS = { '1x1':{w:1080,h:1080,label:'1:1'}, '4x5':{w:1080,h:1350,label:'4:5'}, '3x4':{w:1080,h:1440,label:'3:4'}, '9x16':{w:1080,h:1920,label:'9:16'} };
 const FPS_OPTS = [24, 25, 30, 50, 60];
 const fps = () => (S && FPS_OPTS.includes(S.fps) ? S.fps : 30);
-const TYPE_LABEL = { bg:'Fundo', text:'Texto', logo:'Logo', cta:'Botão', image:'Imagem', shape:'Forma' };
-const TYPE_COLOR = { bg:'var(--c-bg)', text:'var(--c-text)', logo:'var(--c-logo)', cta:'var(--c-cta)', image:'var(--c-image)', shape:'var(--c-shape)' };
+const TYPE_LABEL = { bg:'Fundo', text:'Texto', logo:'Logo', cta:'Botão', image:'Imagem', shape:'Forma', camera:'Câmera', fx:'Transição' };
+const TYPE_COLOR = { bg:'var(--c-bg)', text:'var(--c-text)', logo:'var(--c-logo)', cta:'var(--c-cta)', image:'var(--c-image)', shape:'var(--c-shape)', camera:'var(--c-camera)', fx:'var(--c-fx)' };
 const ROLE_NAME = { logo:'Logo', logoSmall:'Logo pequeno', brand:'Nome da marca', title:'Título', sub:'Subtítulo', cta:'Botão', big:'Número grande', offer:'Oferta', tag:'Etiqueta', kicker:'Chamada', k1:'Frase 1', k2:'Frase 2', k3:'Frase 3', image:'Imagem', bg:'Fundo' };
 const ROLE_TEXT = { brand:'GRÃO LENTO', title:'Café de verdade,\nsem pressa.', sub:'Torra artesanal na sua porta em 24h', cta:'Peça agora  →', big:'-30%', offer:'na primeira assinatura', tag:'Só até domingo', kicker:'LANÇAMENTO', k1:'Moído na hora.', k2:'Torrado ontem.', k3:'Na sua porta amanhã.' };
 const GOOGLE_SUGGEST = ['Urbanist','Inter Tight','Roboto','Open Sans','Lato','Nunito','Nunito Sans','Raleway','Work Sans','Mulish','Karla','Barlow','Barlow Condensed','Josefin Sans','Quicksand','Kanit','Prompt','Jost','Albert Sans','Be Vietnam Pro','Public Sans','IBM Plex Sans','IBM Plex Serif','Libre Franklin','Merriweather','Lora','EB Garamond','Crimson Pro','Source Serif 4','Noto Sans','Noto Serif','Playfair','Abril Fatface','Alfa Slab One','Space Mono','JetBrains Mono','Fraunces','Manrope','Unbounded','Bricolage Grotesque','Syne','Sora','Outfit','Plus Jakarta Sans','DM Sans','DM Serif Display','Instrument Serif','Instrument Sans','Space Grotesk','Archivo','Archivo Black','Anton','Bebas Neue','Oswald','Montserrat','Poppins','Inter','Figtree','Onest','Rubik','Geist','Hanken Grotesk','Schibsted Grotesk','Familjen Grotesk','Big Shoulders Display','Bodoni Moda','Playfair Display','Cormorant Garamond','Gloock','Caveat','Permanent Marker','Lexend','Red Hat Display','Chivo','Darker Grotesque','Krona One','Dela Gothic One','Rethink Sans','Epilogue','Young Serif','Libre Caslon Display','Shrikhand','Righteous','Bowlby One','Lilita One'];
@@ -165,7 +267,8 @@ const DEMO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">
    ============================================================ */
 let S;                     // projeto
 let T = 0, playing = false, needs = true;
-const RT = { logo:null, images:new Map(), layout:new Map(), fontsOk:new Set(), fontsBad:new Set(), selected:null, dirtyUndo:false, exporting:false, drag:null, guide:null };
+const RT = { logo:null, images:new Map(), layout:new Map(), fontsOk:new Set(), fontsBad:new Set(), selected:null, dirtyUndo:false, exporting:false, drag:null, guide:null,
+  rev:0, imgRev:0, gBox:new Map(), noGrp:false }; // rev: sobe a cada mudança (caixa dos grupos); noGrp: ao medir posições de repouso o grupo não se anima
 const undoStack = [];
 
 function defaultBrand() {
@@ -180,13 +283,14 @@ function marginSides() {
   const m = S.margin || {}, d = m.px ?? 64, v = k => Math.max(0, m[k] ?? d);
   return { on:!!m.on, top:v('top'), right:v('right'), bottom:v('bottom'), left:v('left') };
 }
-function marginBox() {
+function marginBox(fmt = S.format) {
   const m = marginSides(); if (!m.on) return null;
-  const x0 = Math.min(m.left, W() - 1), y0 = Math.min(m.top, H() - 1);
-  return { x0, y0, x1:Math.max(x0 + 1, W() - m.right), y1:Math.max(y0 + 1, H() - m.bottom) };
+  const w = FORMATS[fmt].w, hh = FORMATS[fmt].h;
+  const x0 = Math.min(m.left, w - 1), y0 = Math.min(m.top, hh - 1);
+  return { x0, y0, x1:Math.max(x0 + 1, w - m.right), y1:Math.max(y0 + 1, hh - m.bottom) };
 }
-function fitInMargin(ax, ay, w, h) {
-  const M = marginBox(); if (!M) return { ax, ay, k:1 };
+function fitInMargin(ax, ay, w, h, fmt) {
+  const M = marginBox(fmt); if (!M) return { ax, ay, k:1 };
   const aw = Math.max(1, M.x1 - M.x0), ah = Math.max(1, M.y1 - M.y0), k = Math.min(1, aw / Math.max(w, 1), ah / Math.max(h, 1));
   const hw = w * k / 2, hh = h * k / 2;
   return { ax:clamp(ax, M.x0 + hw, M.x1 - hw), ay:clamp(ay, M.y0 + hh, M.y1 - hh), k };
@@ -194,11 +298,247 @@ function fitInMargin(ax, ay, w, h) {
 function W() { return FORMATS[S.format].w; }
 function H() { return FORMATS[S.format].h; }
 
+/* ------------ outros formatos: reorganização automática ------------
+   x/y valem no formato principal (`baseFmt`: S.base, o formato em que o arquivo ganhou o primeiro elemento; arquivo antigo
+   fica com o que estava aberto). Nos outros, `adaptLayout` refaz a diagramação na vertical (a largura é 1080 em todos):
+   - os blocos (texto, logo, botão, imagem e forma soltos) não mudam de tamanho; só os vãos entre eles esticam ou encolhem,
+     e vão pequeno quase não muda (peso g³/(g²+τ²)): título e subtítulo continuam juntos, o que encosta na margem continua
+     encostado, o que estava centralizado continua centralizado.
+   - foto ou forma em retângulo sozinha na sua altura muda a altura da máscara junto com os vãos (a imagem cobre, não distorce):
+     mais baixa, alarga até as margens laterais; com sobra, fica mais alta. Se ainda não couber, imagem e forma diminuem e só
+     por último texto, logo e botão (pedido do usuário). Quem muda de largura fica apoiado na mesma borda (anchorX).
+   - blocos que se sobrepõem na vertical (mesmo em momentos diferentes) andam juntos: nada passa a se sobrepor.
+   - a faixa útil é a margem em todos os formatos. O 9:16 não foge da interface do Stories sozinho (decisão do usuário:
+     no exemplo dele a marca fica no topo e a foto ocupa o resto); o destaque "Zona segura 9:16" continua para conferir.
+   - imagem e forma que sangram pela borda do quadro ficam presas nela; retângulo (máscara ou forma) estica a borda de dentro
+     junto com o layout e o que cobre o quadro inteiro continua cobrindo (hh = nova altura, px).
+   Mover ou redimensionar no palco num formato que não é o principal grava só nele (`L.fpos[formato]`); "Voltar ao automático" apaga.
+   Ler a posição com `posOf`/`placeOf` e escrever com `setPos` (no principal, mexem em x/y). */
+const GAP_TAU = 80; // px: vão bem menor que isso conta como "junto" e quase não estica
+const baseFmt = () => (FORMATS[S.base] ? S.base : S.format);
+const hasContent = () => S.layers.some(l => l.type !== 'bg' && !NOBOX(l));
+// faixa vertical onde o conteúdo fica: a margem (sem margem, o quadro)
+function contentBand(fmt) {
+  const M = marginBox(fmt), hh = FORMATS[fmt].h;
+  return M ? { y0:M.y0, y1:M.y1 } : { y0:0, y1:hh };
+}
+// caixa de repouso de uma camada num formato, sem desenhar (px; centro já empurrado para dentro da margem)
+function restBoxIn(L, fmt) {
+  let w, hh;
+  if (L.type === 'text') { const lay = layoutText(L, L.upper ? L.text.toUpperCase() : L.text); w = lay.blockW; hh = lay.blockH; }
+  else { const G = blockGeom(L); if (!G) return null; w = G.w; hh = G.h; }
+  const Hf = FORMATS[fmt].h, f = freeType(L) ? { ax:L.x * W(), ay:L.y * Hf, k:1 } : fitInMargin(L.x * W(), L.y * Hf, w, hh, fmt);
+  const r = (L.rot || 0) * Math.PI / 180, c = Math.abs(Math.cos(r)), s = Math.abs(Math.sin(r));
+  const ew = (w * c + hh * s) * f.k, eh = (w * s + hh * c) * f.k;
+  return { cx:f.ax, cy:f.ay, t:f.ay - eh / 2, b:f.ay + eh / 2, l:f.ax - ew / 2, r:f.ax + ew / 2, hh:hh * f.k, fk:f.k };
+}
+// Map id → { x, y (frações do formato aberto), k (escala), ww/hh (tamanho novo da máscara em px, ou null) }
+function adaptLayout() {
+  const bf = baseFmt(), Hb = FORMATS[bf].h, Ht = H(), dH = Ht - Hb, all = [], out = new Map();
+  for (const L of S.layers) {
+    if (L.type === 'bg' || NOBOX(L)) continue;
+    const r = restBoxIn(L, bf); if (!r) continue;
+    const up = freeType(L) && r.t <= 1, dn = freeType(L) && r.b >= Hb - 1; // só imagem e forma sangram
+    all.push({ L, ...r, edge:up && dn ? 'cover' : up ? 'top' : dn ? 'bottom' : null,
+      stretch:!L.rot && ((L.type === 'image' && L.mask === 'rect') || (L.type === 'shape' && L.kind === 'rect')) });
+  }
+  // cada camada se organiza só com quem aparece na tela junto com ela: cenas diferentes na mesma altura não se empurram
+  // nem se espremem (a foto da cena 1 não comprime os textos da cena 2). Quem tem o mesmo conjunto faz a conta uma vez só
+  const span = L => [L.start || 0, L.end ?? S.duration];
+  const meets = (p, q) => { const [a0, a1] = span(p.L), [b0, b1] = span(q.L); return Math.min(a1, b1) - Math.max(a0, b0) > .01; };
+  const groups = new Map();
+  for (const i of all) {
+    const set = all.filter(j => j === i || meets(i, j)), key = set.map(j => j.L.id).join(',');
+    if (!groups.has(key)) groups.set(key, { set, want:[] });
+    groups.get(key).want.push(i);
+  }
+  for (const g of groups.values()) solve(g.set, g.want);
+  // texto, logo e botão que aparecem juntos e estão colados no principal (vão pequeno ou sobrepostos) andam como um bloco só:
+  // com entradas e saídas diferentes eles podem ter caído em contas diferentes e se desencontrar ("Como funciona?" + título)
+  const solid = all.filter(i => !i.edge && i.L.type !== 'image' && i.L.type !== 'shape' && out.has(i.L.id));
+  const par = new Map(solid.map(i => [i, i])), root = i => { while (par.get(i) !== i) i = par.get(i); return i; };
+  for (const a of solid) for (const b of solid) {
+    if (a === b || !meets(a, b) || Math.max(a.t, b.t) - Math.min(a.b, b.b) >= GAP_TAU * .75) continue;
+    const ra = root(a), rb = root(b); if (ra !== rb) par.set(ra, rb);
+  }
+  const blocks = new Map();
+  for (const i of solid) { const r = root(i); if (!blocks.has(r)) blocks.set(r, []); blocks.get(r).push(i); }
+  for (const bl of blocks.values()) {
+    if (bl.length < 2) continue;
+    const rep = bl.reduce((p, q) => (q.b - q.t > p.b - p.t ? q : p)), pr = out.get(rep.L.id); // o maior manda
+    for (const i of bl) if (i !== rep) { const p = out.get(i.L.id); p.y = (pr.y * Ht + (i.cy - rep.cy) * pr.k) / Ht; }
+  }
+  return out;
+
+  function solve(its, want) {
+  // faixa útil do principal: cresce para caber o que estava fora dela (ex.: logo na faixa da interface, num 9:16)
+  const cb = contentBand(bf), ct = contentBand(S.format), body = its.filter(i => !i.edge);
+  const A = Math.min(cb.y0, ...body.map(i => i.t)), B = Math.max(cb.y1, ...body.map(i => i.b));
+  const M = marginBox() || { x0:0, x1:W() }, Mw = M.x1 - M.x0; // na horizontal é igual em todos os formatos
+  const len = s => s.b - s.a, wt = g => g * g * g / (g * g + GAP_TAU * GAP_TAU), least = g => Math.min(g, 12 + g * .25);
+  const pic = i => i.L.type === 'image' || i.L.type === 'shape';
+  // o que se sobrepõe na vertical vira um trecho rígido só; imagem ou forma sozinha na sua altura pode mudar
+  const runs = [];
+  for (const i of body.filter(i => i.L.visible).sort((p, q) => p.t - q.t)) {
+    const r = runs[runs.length - 1];
+    if (r && i.t <= r.b) { r.b = Math.max(r.b, i.b); r.its.push(i); } else runs.push({ a:i.t, b:i.b, its:[i] });
+  }
+  // a borda de dentro de uma faixa presa ao quadro (foto no topo, tarja embaixo) divide o vão: o que está colado nela continua colado
+  const cuts = its.filter(i => i.edge === 'top' || i.edge === 'bottom').map(i => i.edge === 'top' ? i.b : i.t)
+    .filter(v => v > A && v < B && !runs.some(r => v > r.a && v < r.b)).sort((p, q) => p - q);
+  const segs = [], gap = (a, b) => { let s = a; for (const c of cuts) if (c > a && c < b) { segs.push({ a:s, b:c }); s = c; } segs.push({ a:s, b }); };
+  let y = A;
+  for (const r of runs) {
+    gap(y, r.a);
+    // a imagem ou forma que domina o trecho (metade da altura ou mais) pode mudar; texto por cima dela ou de outro momento acompanha
+    const dp = r.its.filter(pic).sort((p, q) => (q.b - q.t) - (p.b - p.t))[0];
+    if (dp && dp.b - dp.t >= (r.b - r.a) * .5) {
+      const peers = r.its.filter(i => pic(i) && Math.abs(i.t - dp.t) < 12 && Math.abs(i.b - dp.b) < 12); // fotos lado a lado, mesma altura
+      // alarga só se nada do trecho ficar ao lado dela (o que está por cima, dentro da largura dela, não atrapalha)
+      const wide = peers.length === 1 && r.its.every(i => i === dp || (i.l >= dp.l - 1 && i.r <= dp.r + 1));
+      if (dp.t > r.a) segs.push({ a:r.a, b:dp.t, run:true });
+      segs.push({ a:dp.t, b:dp.b, run:true, pic:dp, peers, wide });
+      if (dp.b < r.b) segs.push({ a:dp.b, b:r.b, run:true });
+    } else segs.push({ a:r.a, b:r.b, run:true });
+    y = r.b;
+  }
+  gap(y, B);
+  // cada trecho tem um tamanho (n) que pode ir de lo a hi; os vãos grandes cedem ou ganham quase tudo (peso wt)
+  const setUp = grow => segs.forEach(s => {
+    const h = len(s); s.n = h; s.lo = s.hi = h; s.w = 0;
+    if (!s.run) { s.lo = least(h); s.hi = Infinity; s.w = wt(h); }
+    else if (s.pic && s.peers.every(p => p.stretch) && h >= 120) {
+      // foto em retângulo: a máscara muda de altura (a imagem cobre, não distorce); mais baixa, alarga até a margem.
+      // Na falta, divide com os vãos; na sobra, fica com quase toda (até 2× a altura)
+      const w = s.pic.r - s.pic.l;
+      s.crop = true; s.lo = Math.min(h, Math.max(h * .3, (s.wide ? Math.max(w, Mw) : w) / 2.4)); s.hi = Math.max(h, Math.min(h * 2, w * 1.6)); s.w = h * (grow ? 1.2 : .25);
+    }
+  });
+  // distribui d (positivo: sobra; negativo: falta) entre os trechos, na proporção do peso e sem passar dos limites
+  const fill = (rs, d) => {
+    for (let g = 0; g < 40 && Math.abs(d) > .01; g++) {
+      const act = rs.filter(s => d > 0 ? s.hi - s.n > .01 : s.n - s.lo > .01); if (!act.length) break;
+      const Wt = act.reduce((n, s) => n + (s.w || 1e-6), 0); let used = 0;
+      for (const s of act) { const q = Math.min(Math.abs(d) * (s.w || 1e-6) / Wt, d > 0 ? s.hi - s.n : s.n - s.lo); s.n += Math.sign(d) * q; used += q; }
+      d -= Math.sign(d) * used;
+    }
+    return d;
+  };
+  const Ct = ct.y1 - ct.y0;
+  let D = Ct - (B - A), sc = 1;
+  setUp(D >= 0);
+  if (D >= 0) {
+    if (segs.some(s => s.w > .01)) D = fill(segs, D);
+    if (D > .01) { const e = segs.filter(s => !s.run); e[0].n += D / 2; e[e.length - 1].n += D / 2; } // tudo colado: fica no meio
+    segs.forEach(s => { s.c = s.n; });
+  } else {
+    // falta altura: 1) vãos e recorte das fotos; 2) imagem e forma diminuem (até 35%); 3) só então o resto (texto, logo, botão)
+    D = fill(segs, D);
+    segs.forEach(s => { s.c = s.n; });
+    if (D < -.01) {
+      const ps = segs.filter(s => s.pic); ps.forEach(s => { s.lo = len(s) * .35; s.hi = s.n; s.w = s.n; });
+      D = fill(ps, D);
+    }
+    if (D < -.01) sc = Math.max(.5, Ct / (Ct - D));
+  }
+  const total = segs.reduce((n, s) => n + s.n, 0) * sc;
+  let pos = ct.y0 + Math.min(0, Ct - total) / 2;
+  for (const s of segs) { s.ta = pos; s.tn = s.n * sc; pos += s.tn; }
+  const F = v => {
+    if (v <= A) return segs[0].ta - (A - v) * sc;
+    for (const s of segs) if (v <= s.b) return s.ta + (len(s) > 0 ? (v - s.a) / len(s) * s.tn : 0);
+    const z = segs[segs.length - 1]; return z.ta + z.tn + (v - B) * sc;
+  };
+  const edgeY = v => v <= A ? v : v >= B ? v + dH : F(v); // fora da faixa útil, fica presa à borda do quadro
+  // com outra largura, fica apoiado na mesma borda: texto pelo alinhamento; o resto pela margem em que encosta
+  // (a margem vem antes do alinhamento: texto "centro" encostado na margem esquerda continua na linha dos outros)
+  const anchorX = (i, w2) => {
+    const lf = Math.abs(i.l - M.x0) < 16, rt = Math.abs(i.r - M.x1) < 16, own = i.L.type === 'text' ? i.L.align : 'center';
+    const al = lf && rt ? own : lf ? 'left' : rt ? 'right' : own;
+    let cx = al === 'left' ? i.l + w2 / 2 : al === 'right' ? i.r - w2 / 2 : i.cx;
+    if (i.l >= M.x0 - 1 && i.r <= M.x1 + 1 && w2 <= Mw) cx = clamp(cx, M.x0 + w2 / 2, M.x1 - w2 / 2);
+    return cx;
+  };
+  const picSeg = new Map(segs.filter(s => s.pic).flatMap(s => s.peers.map(p => [p, s])));
+  for (const i of want) {
+    let cx = i.cx, cy = i.cy, k = 1, hh = null, ww = null;
+    const w0 = i.r - i.l;
+    if (!i.edge) {
+      cy = F(i.cy); k = sc;
+      const s = picSeg.get(i);
+      // texto (ou outro bloco) por cima da foto: mantém a distância até a borda dela mais próxima, sem ser espremido
+      const ov = !s && segs.find(q => q.pic && i.cy > q.a && i.cy < q.b);
+      if (ov) { const d0 = i.cy - ov.a, d1 = ov.b - i.cy; cy = clamp(d0 <= d1 ? ov.ta + d0 * sc : ov.ta + ov.tn - d1 * sc, ov.ta, ov.ta + ov.tn); }
+      if (s && s.crop) {
+        const h0 = i.b - i.t, c = h0 * s.c / len(s), f = s.n / s.c; // c = altura da máscara, f = quanto a foto diminuiu depois disso
+        if (Math.abs(c - h0) > .5) { hh = c; ww = c < h0 && s.wide ? Math.min(Math.max(w0, Mw), w0 * h0 / c) : w0; }
+        k = f * sc;
+        cx = anchorX(i, (ww || w0) * k);
+      } else if (s) { const f = s.n / len(s); k = i.fk * f * sc; cx = anchorX(i, w0 * f * sc); }
+      else if (sc < 1) cx = anchorX(i, w0 * sc);
+    }
+    else if (i.edge === 'cover') { cy = i.cy + dH / 2; if (i.stretch) hh = Math.max(40, i.hh + dH); else k = Math.max(1, (i.b - i.t + dH) / Math.max(1, i.b - i.t)); }
+    else if (i.edge === 'top') { const d = edgeY(i.b) - i.b; if (i.stretch) { hh = Math.max(40, i.hh + d); cy = i.cy + (hh - i.hh) / 2; } }
+    else { const d = edgeY(i.t) - i.t - dH; cy = i.cy + dH; if (i.stretch) { hh = Math.max(40, i.hh - d); cy -= (hh - i.hh) / 2; } }
+    out.set(i.L.id, { x:cx / W(), y:cy / Ht, k, hh, ww });
+  }
+  }
+}
+// uma conta por quadro (renderFrame avança RT.frameNo)
+function placement() {
+  const key = `${RT.frameNo}|${S.format}|${baseFmt()}`;
+  if (RT.placeKey !== key) { RT.place = adaptLayout(); RT.placeKey = key; }
+  return RT.place;
+}
+// onde a camada fica no formato aberto: no principal, x/y; nos outros, o ajuste feito ali ou a adaptação automática
+// fpos[formato] também guarda o que foi mexido no palco só naquele formato: s (escala pela alça do canto),
+// ww/hh (máscara pelas alças laterais, px) e zoom/ix/iy (enquadramento da imagem)
+function placeOf(L) {
+  if (S.format === baseFmt()) return { x:L.x, y:L.y, k:1, hh:null, ww:null };
+  const p = placement().get(L.id) || { x:L.x, y:L.y, k:1, hh:null, ww:null }, f = L.fpos && L.fpos[S.format];
+  return f ? { ...p, x:f.x ?? p.x, y:f.y ?? p.y, k:p.k * (f.s ?? 1), ww:f.ww ?? p.ww, hh:f.hh ?? p.hh } : p;
+}
+function posOf(L) { const p = placeOf(L); return { x:p.x, y:p.y }; }
+const fmtOwn = () => S.format !== baseFmt(); // mexer no palco agora grava só neste formato
+const fOf = L => (fmtOwn() && L.fpos && L.fpos[S.format]) || {};
+function setFmt(L, patch) { L.fpos ||= {}; L.fpos[S.format] = { ...L.fpos[S.format], ...patch }; }
+// null mantém o eixo como está
+function setPos(L, x, y) {
+  if (!fmtOwn()) { if (x != null) L.x = x; if (y != null) L.y = y; return; }
+  const p = posOf(L); setFmt(L, { x:x ?? p.x, y:y ?? p.y });
+}
+// enquadramento da imagem dentro da máscara (Alt + arrastar, roda do mouse): fora do principal vale só no formato aberto
+function panOf(L) {
+  if (L._pan) return L._pan; // movimento da imagem, durante o desenho (imageMotion)
+  const f = fOf(L);
+  return { ix:(f.ix ?? L.ix) || 0, iy:(f.iy ?? L.iy) || 0, zoom:(f.zoom ?? L.zoom) ?? 1 };
+}
+function setFrame(L, patch) { if (fmtOwn()) setFmt(L, patch); else Object.assign(L, patch); }
+const setPan = (L, ix, iy) => setFrame(L, { ix, iy });
+// escala pela alça do canto (e "Tamanho da seleção"): fora do principal, um fator só deste formato
+const size0 = o => ({ size:o.size, mh:o.mh, padX:o.padX, padY:o.padY, fs:fOf(o).s ?? 1 });
+function scaleAny(L, s0, f) {
+  if (!fmtOwn()) return scaleLayer(L, s0, f);
+  const s = +clamp(s0.fs * f, .05, 8).toFixed(4); setFmt(L, { s }); return s / s0.fs; // a escala que valeu de fato
+}
+const ownPos = L => S.format !== baseFmt() && !!(L.fpos && L.fpos[S.format]);
+function resetPos(ls) {
+  const ms = ls.filter(ownPos); if (!ms.length) return;
+  pushUndo();
+  for (const L of ms) { delete L.fpos[S.format]; if (!Object.keys(L.fpos).length) delete L.fpos; }
+  changed({ props:true }); toast(ms.length > 1 ? `${ms.length} elementos voltaram ao automático` : 'Voltou ao automático');
+}
+const fmtLabel = f => FORMATS[f].label;
+
 /* ------------ fábrica de camadas ------------ */
 function base(type, role, defs, o = {}) {
   return Object.assign({ id:uid(), type, role, name:ROLE_NAME[role] || TYPE_LABEL[type], visible:true, start:0, end:null,
-    in:'fade', out:'cut', inDur:1, outDur:.6, speed:1, intensity:.6, idle:'none', x:.5, y:.5, opacity:1 }, defs, o);
+    in:'fade', out:'cut', inDur:1, outDur:.6, inSpeed:1, inInt:.6, outSpeed:1, outInt:.6, idleSpeed:1, idleInt:.6, idle:'none', x:.5, y:.5, opacity:1 }, defs, o);
 }
+// velocidade e intensidade são de cada fase (entrada, na tela, saída); arquivos antigos tinham um valor só (speed, intensity)
+const RHY = { in:['inSpeed', 'inInt'], out:['outSpeed', 'outInt'], idle:['idleSpeed', 'idleInt'] };
+const spdOf = (L, m) => L[RHY[m][0]] ?? (m === 'idle' ? 1 : L.speed ?? 1);
+const intOf = (L, m) => L[RHY[m][1]] ?? L.intensity ?? .6;
 function mkText(role, o = {}) {
   const B = S.brand;
   const L = base('text', role, { in:'rise', inDur:TP.rise.dur, text:ROLE_TEXT[role] ?? 'Seu texto aqui', font:B.fonts[1], weight:700, italic:false, size:80,
@@ -228,7 +568,7 @@ function mkShape(o = {}) {
   const c = S.brand.colors;
   const L = base('shape', 'shape', { in:'pop', inDur:BP.pop.dur, idle:'none', kind:'rect', size:.5, mh:.3, radius:40, points:5, inner:.45, d:'M10 80 C 40 10, 65 10, 95 80 S 150 150, 180 80', rot:0,
     mode:'mesh', c1:c[2], c2:c[0], c3:c[3], c4:c[4], motion:1, angle:135, src:null, darken:.25, grain:0,
-    stroke:false, strokeColor:c[1], strokeW:8 }, o);
+    fill:true, stroke:false, strokeColor:c[1], strokeW:8, strokeDash:'solid', strokeGap:1, strokeCap:'round', strokeJoin:'round' }, o);
   if (o.in && BP[o.in] && o.inDur == null) L.inDur = BP[o.in].dur;
   return L;
 }
@@ -1177,7 +1517,7 @@ async function getImage(src) {
   if (!src) return null;
   if (RT.images.has(src)) return RT.images.get(src);
   RT.images.set(src, null);
-  try { const img = await loadImg(src); RT.images.set(src, img); needs = true; return img; } catch (e) { return null; }
+  try { const img = await loadImg(src); RT.images.set(src, img); RT.imgRev++; needs = true; return img; } catch (e) { return null; }
 }
 function imgNow(src) { if (!src) return null; const i = RT.images.get(src); if (i === undefined) getImage(src); return i || null; }
 
@@ -1187,7 +1527,7 @@ function imgNow(src) { if (!src) return null; const i = RT.images.get(src); if (
 function phase(L, t) {
   const end = L.end ?? S.duration;
   if (t < L.start || t > end + 1e-6) return null;
-  const sp = L.speed || 1; let inD = L.in === 'cut' ? 0 : L.inDur / sp, outD = L.out === 'cut' ? 0 : L.outDur / sp;
+  let inD = L.in === 'cut' ? 0 : L.inDur / (spdOf(L, 'in') || 1), outD = L.out === 'cut' ? 0 : L.outDur / (spdOf(L, 'out') || 1);
   const span = end - L.start;
   if (inD + outD > span && span > 0) { const k = span / (inD + outD); inD *= k; outD *= k; }
   if (inD > 0 && t < L.start + inD) return { mode:'in', p:(t - L.start) / inD, inD, outD };
@@ -1196,7 +1536,9 @@ function phase(L, t) {
 }
 
 /* ------------ grupos: tempo e animação do grupo inteiro ------------ */
-// S.groups[gid] = { name?, open }. O grupo só organiza a timeline (do primeiro que entra ao último que sai); as animações são de cada item.
+// S.groups[gid] = { name?, open, in?, out?, idle?, inDur?, outDur?, inSpeed?, inInt?, … }. O grupo vai do primeiro que entra ao último que sai
+// e tem animação própria (mesmos campos de uma camada): o conjunto é desenhado junto (`drawGroup`) e o preset age sobre ele,
+// por cima da animação de cada item, que não é alterada.
 function gmeta(gid, mk) {
   const g = S.groups && S.groups[gid]; if (g || !mk) return g;
   return ((S.groups ||= {})[gid] = { open:true });
@@ -1205,12 +1547,355 @@ function gwin(gid) {
   const m = S.layers.filter(l => l.grp === gid); if (!m.length) return null;
   return { start:Math.min(...m.map(l => l.start)), end:Math.max(...m.map(l => l.end ?? S.duration)) };
 }
+// presets do grupo: os de imagem (qualquer elemento serve: o grupo é uma imagem do conjunto)
+const G_KEYS = { in:BLOCK_IN.image, out:BLOCK_OUT.image, idle:IDLE_BY.image };
+const gAnimOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.in || 'cut') !== 'cut' || (g.out || 'cut') !== 'cut' || (g.idle || 'none') !== 'none') && S.layers.filter(l => l.grp === gid).length > 1; };
+// o grupo como uma camada de tempo (start/end do conjunto + a animação dele): serve para `phase`, `idleState`, `spdOf`, `intOf` e para a barra
 function gpseudo(gid) {
   const w = gwin(gid); if (!w) return null;
-  return { start:w.start, end:w.end, in:'cut', out:'cut', inDur:0, outDur:0, speed:1 };
+  const g = gmeta(gid) || {}, inK = (g.in || 'cut') !== 'cut', outK = (g.out || 'cut') !== 'cut';
+  return { ...g, start:w.start, end:w.end, in:inK ? g.in : 'cut', out:outK ? g.out : 'cut', idle:g.idle || 'none', inDur:inK ? g.inDur ?? .8 : 0, outDur:outK ? g.outDur ?? .5 : 0 };
 }
 function groupNum(gid) { const ids = []; S.layers.forEach(l => { if (l.grp && !ids.includes(l.grp)) ids.push(l.grp); }); return ids.indexOf(gid) + 1; }
 const groupName = gid => (gmeta(gid) || {}).name || `Grupo ${groupNum(gid)}`;
+
+/* ============================================================
+   Efeitos: o que texto e blocos desenham do mesmo jeito
+   ============================================================ */
+// movimento contínuo ("Enquanto está na tela"). tx = texto (amplitudes menores). hh = meia altura do elemento
+// t0 = segundos desde que a camada entrou; a velocidade da fase acelera o relógio do movimento
+function idleState(L, t0, ph, tx, hh) {
+  const I = intOf(L, 'idle'), sp = spdOf(L, 'idle'), tl = t0 * sp;
+  const st = {}, hold = ph.mode === 'hold', th = (t0 - ph.inD) * sp, k = .4 + I;
+  switch (L.idle) {
+    case 'float': st.dy = Math.sin(tl * TAU / 3.4) * (tx ? 7 : 9) * k; break;
+    case 'breathe': st.sc = 1 + Math.sin(tl * TAU / 3) * (tx ? .015 : .025) * k; break;
+    case 'pulse': if (hold) st.sc = 1 + (tx ? .03 : .045) * I * Math.pow(Math.max(0, Math.sin(tl * TAU / 1.6)), 6); break;
+    case 'sway': st.rot = Math.sin(tl * TAU / 3.2) * (tx ? .03 : .05) * k; break;
+    case 'spin': st.rot = tl * (.25 + .9 * I); break;
+    case 'shine': if (hold) { const sk = (th % 3.2) / 1.15; if (sk < 1) st.shine = sk; } break;
+    case 'wiggle': // tremida orgânica: senos de frequências que não se repetem juntas
+      st.dx = (Math.sin(tl * 7.3) + .6 * Math.sin(tl * 12.1 + 1.3)) * 2.4 * k;
+      st.dy = (Math.sin(tl * 8.7 + 2) + .5 * Math.sin(tl * 13.9)) * 2.4 * k;
+      st.rot = Math.sin(tl * 9.4 + .7) * .014 * k; break;
+    case 'bounce': if (hold) { // pulinho e amassada ao cair, a cada 1,7 s
+      const u = (th % 1.7) / 1.7, h0 = Math.min(hh, 140) * .35 * k;
+      if (u < .42) st.dy = -Math.sin(u / .42 * Math.PI) * h0;
+      else if (u < .6) { const s = Math.sin((u - .42) / .18 * Math.PI) * .07 * k; st.sy = 1 - s; st.sx = 1 + s * .8; st.dy = hh * s; }
+    } break;
+    case 'glow': if (hold) st.glow = (.35 + .65 * I) * (.5 - .5 * Math.cos(th * TAU / 2.6)); break;
+    case 'float3d': // o giro nasce do zero quando termina de entrar (sem salto depois de uma entrada 3D)
+      st.dy = Math.sin(tl * TAU / 3.4) * (tx ? 5 : 7) * k;
+      if (th > 0) { st.fx = 'persp'; st.fax = 'y'; st.fhinge = 0; st.fang = Math.sin(th * TAU / 5.5) * (.2 + .35 * I); }
+      break;
+    case 'glitch': if (hold) { const u = th % 2.6; if (u < .32) { st.fx = 'glitch'; st.fe = Math.sin(u / .32 * Math.PI) * (.35 + .65 * I); st.fseed = Math.floor(tl * 24); } } break;
+  }
+  return st;
+}
+// o rastro some quando o movimento assenta (fim da entrada) e cresce quando acelera (saída)
+const trailFade = ph => clamp((ph.mode === 'in' ? 1 - ph.p : ph.p) * 2.5);
+// só a parte do idle que desenha (o texto aplica o movimento por fora)
+function rasterIdle(idl) { const r = { ...idl }; for (const k of ['dx', 'dy', 'rot', 'sc', 'sx', 'sy']) delete r[k]; return r; }
+// junta o estado do preset (a) com o do movimento contínuo (b): deslocamentos somam, escalas multiplicam, efeitos do preset vencem
+function mergeSt(a, b) {
+  const o = { ...b, ...a };
+  for (const k of ['dx', 'dy', 'rot', 'kx', 'glow']) if (k in a || k in b) o[k] = (a[k] || 0) + (b[k] || 0);
+  for (const k of ['sc', 'sx', 'sy', 'a']) if (k in a || k in b) o[k] = (a[k] ?? 1) * (b[k] ?? 1);
+  return o;
+}
+// rotação, inclinação e escala do estado; pv = pivô vertical (base ou topo), r0 = rotação fixa da camada
+function applyXf(ctx, st, pv = 0, r0 = 0) {
+  if (r0) ctx.rotate(r0);
+  const sc = st.sc ?? 1, sx = sc * (st.sx ?? 1), sy = sc * (st.sy ?? 1), piv = pv && (st.rot || st.kx || sx !== 1 || sy !== 1);
+  if (piv) ctx.translate(0, pv);
+  if (st.rot) ctx.rotate(st.rot);
+  if (st.kx) ctx.transform(1, 0, st.kx, 1, 0, 0);
+  if (sx !== 1 || sy !== 1) ctx.scale(sx, sy);
+  if (piv) ctx.translate(0, -pv);
+}
+// só o desfoque vai no ctx.filter: brightness() e filtro junto com sombra são lentos demais no Chrome.
+// O brilho (bright) entra pela cor na letra (brightCol) e pela soma da imagem com ela mesma nos blocos (brighten)
+function fxFilter(st, rs) { return st.blur > .15 ? `blur(${(st.blur * rs).toFixed(2)}px)` : ''; }
+function brightCol(c, b) {
+  if (!(b > 1.005)) return c;
+  const x = String(c || '#000').replace('#', ''); if (!/^([0-9a-f]{3}|[0-9a-f]{6,8})$/i.test(x)) return c;
+  const n = parseInt((x.length === 3 ? x.split('').map(v => v + v).join('') : x).slice(0, 6), 16), k = v => Math.min(255, Math.round(v * b));
+  return `rgba(${k(n >> 16 & 255)},${k(n >> 8 & 255)},${k(n & 255)},${+colA(c).toFixed(4)})`;
+}
+function brighten(c, cw, ch, b) {
+  const t = fxCanvas(3, cw, ch); t.getContext('2d').drawImage(c, 0, 0, cw, ch, 0, 0, cw, ch);
+  const x = c.getContext('2d'); x.globalCompositeOperation = 'lighter';
+  for (let r = b - 1; r > .005; r -= 1) { x.globalAlpha = Math.min(1, r); x.drawImage(t, 0, 0, cw, ch, 0, 0, cw, ch); }
+  x.globalAlpha = 1; x.globalCompositeOperation = 'source-over';
+}
+// O Chrome prende texto sem rotação no pixel inteiro na vertical (na horizontal não): subir ou descer vira degraus
+// de 1 px, e cada linha pula num quadro diferente. Um giro imperceptível (0,17°, ~0,1 px na letra) faz o texto ser
+// desenhado na posição exata. Abaixo de ~1e-3 o Chrome ignora o giro.
+const SUBPX = 3e-3;
+// letra desfocada sem filtro: desenha longe, fora da tela, e só a sombra desfocada (px do canvas) cai no lugar
+const OFFX = 40000;
+function blurText(c, ch, x, y, col, px) {
+  const m = c.getTransform();
+  c.save();
+  c.setTransform(m.a, m.b, m.c, m.d, m.e - OFFX, m.f);
+  c.fillStyle = col; c.shadowColor = col; c.shadowBlur = px * 2; c.shadowOffsetX = OFFX; c.shadowOffsetY = 0;
+  c.fillText(ch, x, y);
+  c.restore();
+}
+/* ------------ recortes ------------ */
+const DIAG_A = .42; // inclinação do corte diagonal
+function clipFront(st, w, h) { // onde está a frente dos cortes 'diag' e 'scan'
+  const e = clamp(st.ce), v = st.cdir < 0 ? 1 - e : e;
+  if (st.clip === 'diag') { const D = w / 2 * Math.cos(DIAG_A) + h / 2 * Math.sin(DIAG_A) + 30; return lerp(-D, D, v); }
+  return lerp(-h / 2 - 12, h / 2 + 12, v);
+}
+// manchas que crescem e se juntam, com a borda viva (sem sorteio: o mesmo quadro sempre sai igual)
+// gotas pequenas pingam primeiro; a mancha do centro cresce devagar e cobre tudo
+const INK = [[0, 0, 1.42, 0], [-.42, .3, .55, 0], [.4, -.28, .5, .08], [.18, .42, .42, .16], [-.25, -.38, .38, .24]];
+function inkPath(ctx, p, I, w, h) {
+  const R0 = Math.hypot(w, h) / 2 + 20;
+  INK.forEach(([bx, by, rk, d], j) => {
+    const e = j ? Ease.cubicOut(clamp((p - d) / .5)) : Ease.cubicInOut(p); if (e <= 0) return;
+    const R = e * R0 * rk * (j ? .6 + .6 * I : 1), cx = bx * w / 2, cy = by * h / 2;
+    const f1 = rand(j, 1) * TAU, f2 = rand(j, 2) * TAU, f3 = rand(j, 3) * TAU;
+    for (let s = 0; s <= 72; s++) {
+      const a = s / 72 * TAU, r = R * (1 + .14 * Math.sin(3 * a + f1 + p * 2.2) + .08 * Math.sin(5 * a + f2 - p * 3.1) + .05 * Math.sin(9 * a + f3 + p * 1.7));
+      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+      if (s) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+    }
+    ctx.closePath();
+  });
+}
+// recorta pelo estado (w×h = caixa do elemento, centrada em 0,0). 'bounds' e a máscara de linha do texto ficam com quem desenha
+function clipFx(ctx, st, w, h) {
+  const c = st.clip; if (!c || c === true || c === 'bounds') return;
+  const hyp = Math.hypot(w, h), BIG = hyp * 4 + 800;
+  ctx.beginPath();
+  if (c === 'circle') ctx.arc(0, 0, Math.max(0, st.ce) * hyp / 2 * 1.08, 0, TAU);
+  else if (c === 'wipe') { const L0 = -w / 2 - 20, full = w + 40, v = clamp(st.ce); if (st.cdir > 0) ctx.rect(L0, -h, full * v, h * 2); else ctx.rect(L0 + full * (1 - v), -h, full * v, h * 2); }
+  else if (c === 'blinds') {
+    const n = st.cn || 8, pad = h * .08 + 12, sh = (h + pad * 2) / n;
+    for (let i = 0; i < n; i++) {
+      const v = Ease.cubicInOut(unitP(st.cp, i, n, .5)); if (v <= 0) continue;
+      const yc = -h / 2 - pad + (i + .5) * sh, top = v >= 1 && !i ? -BIG : yc - sh * v / 2 - .5, bot = v >= 1 && i === n - 1 ? BIG : yc + sh * v / 2 + .5;
+      ctx.rect(-BIG, top, BIG * 2, bot - top);
+    }
+  }
+  else if (c === 'diag') { const f = clipFront(st, w, h); ctx.rotate(DIAG_A); if (st.cdir < 0) ctx.rect(f, -BIG, BIG * 2, BIG * 2); else ctx.rect(-BIG * 2, -BIG, BIG * 2 + f, BIG * 2); ctx.rotate(-DIAG_A); }
+  else if (c === 'scan') { const f = clipFront(st, w, h); if (st.cdir < 0) ctx.rect(-BIG, f, BIG * 2, BIG * 2); else ctx.rect(-BIG, -BIG * 2, BIG * 2, BIG * 2 + f); }
+  else if (c === 'diamond') { const r = Math.max(0, st.ce) * ((w + h) / 2 + 40); ctx.moveTo(0, -r); ctx.lineTo(r, 0); ctx.lineTo(0, r); ctx.lineTo(-r, 0); ctx.closePath(); }
+  else if (c === 'clock') {
+    const v = clamp(st.ce), R = hyp / 2 + 40, a0 = -Math.PI / 2;
+    if (v > 0) { ctx.moveTo(0, 0); if (st.cdir < 0) ctx.arc(0, 0, R, a0 + (1 - v) * TAU, a0 + TAU); else ctx.arc(0, 0, R, a0, a0 + v * TAU); ctx.closePath(); }
+  }
+  else if (c === 'ink') inkPath(ctx, st.cp, st.cI ?? .6, w, h);
+  ctx.clip();
+}
+// linha luminosa na frente do corte (diagonal e scanner)
+function edgeFx(ctx, st, w, h, color) {
+  const e = clamp(st.ce), a = Math.min(1, e * 12, (1 - e) * 12); if (a <= 0) return;
+  const m = ctx.getTransform(), k = Math.hypot(m.a, m.b) || 1, f = clipFront(st, w, h), BIG = Math.hypot(w, h) + 200;
+  ctx.save(); ctx.globalAlpha *= a; ctx.filter = 'none'; // sombra com filtro é lenta
+  ctx.strokeStyle = color; ctx.lineWidth = Math.max(2, Math.min(w, h) * .012 + 1.5); ctx.lineCap = 'round';
+  ctx.shadowColor = color; ctx.shadowBlur = 16 * k;
+  ctx.beginPath();
+  if (st.clip === 'diag') { ctx.rect(-w / 2 - 14, -h / 2 - 14, w + 28, h + 28); ctx.clip(); ctx.rotate(DIAG_A); ctx.beginPath(); ctx.moveTo(f, -BIG); ctx.lineTo(f, BIG); }
+  else { ctx.moveTo(-w / 2 - 16, f); ctx.lineTo(w / 2 + 16, f); }
+  ctx.stroke(); ctx.stroke(); ctx.restore();
+}
+// "Linha e revela": a linha se estende e o elemento sobe de trás dela
+function lineReveal(ctx, pp, w, h, color) {
+  const lp = Ease.cubicInOut(clamp(pp / .45)), rise = Ease.quintOut(clamp((pp - .3) / .7)), la = 1 - clamp((pp - .78) / .22);
+  const ly = h / 2 + h * .08 + 6;
+  if (lp > 0 && la > 0) { ctx.save(); ctx.globalAlpha *= la; ctx.fillStyle = color; const lw = w * 1.1 * lp; ctx.fillRect(-lw / 2, ly - 2.5, lw, 5); ctx.restore(); }
+  ctx.beginPath(); ctx.rect(-w * 2, -h * 4, w * 4, h * 4 + ly - 3); ctx.clip();
+  ctx.translate(0, (1 - rise) * (h * 1.1 + 10));
+}
+/* Desenha um elemento com o estado da animação: movimento, recorte, filtros e efeitos de imagem.
+   O contexto já está no centro do elemento; draw(c, st) desenha o conteúdo parado, centrado em 0,0 (caixa w×h).
+   o = { k: encaixe na margem, rot: rotação fixa, piv: pivô vertical, pad: folga do raster, color: cor das linhas } */
+function drawState(ctx, st, w, h, R, draw, o = {}) {
+  const a = st.a ?? 1; if (a <= .001) return;
+  ctx.save();
+  if (st.dx || st.dy) ctx.translate(st.dx || 0, st.dy || 0);
+  if (o.k && o.k !== 1) ctx.scale(o.k, o.k);
+  applyXf(ctx, st, o.piv || 0, o.rot || 0);
+  ctx.globalAlpha *= a;
+  const f = fxFilter(st, R.rs); if (f) ctx.filter = f;
+  ctx.save();
+  clipFx(ctx, st, w, h);
+  if (st.line != null) lineReveal(ctx, st.line, w, h, o.color);
+  if (st.fx || st.shine != null || st.glow > .01 || st.bright > 1.005) rasterFx(ctx, st, w, h, o.pad ?? 12, R, c => draw(c, st));
+  else draw(ctx, st);
+  ctx.restore();
+  if (st.edge) edgeFx(ctx, st, w, h, o.color || '#fff');
+  ctx.restore();
+}
+/* ------------ efeitos de imagem ------------
+   O elemento é desenhado parado num canvas à parte (na escala em que vai aparecer) e redesenhado em pedaços. */
+const FXC = [];
+function fxCanvas(i, w, h) {
+  const c = FXC[i] || (FXC[i] = document.createElement('canvas'));
+  if (c.width < w || c.height < h) { c.width = Math.max(c.width, w); c.height = Math.max(c.height, h); }
+  const x = c.getContext('2d');
+  x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1; x.filter = 'none';
+  x.shadowBlur = 0; x.shadowColor = 'transparent'; x.imageSmoothingEnabled = true;
+  x.clearRect(0, 0, w + 2, h + 2);
+  return c;
+}
+const fxEase = (name, q, dir) => Ease[dir < 0 && (name === 'spring' || name === 'backOut') ? 'cubicOut' : name](clamp(q));
+// separa vermelho, verde e azul e desloca cada um (off em px do raster); devolve o canvas com margem M
+function rgbSplit(src, cw, ch, off, seed) {
+  const M = Math.ceil(off * 1.6) + 2, ow = cw + M * 2, oh = ch + M * 2, oc = fxCanvas(2, ow, oh), ox = oc.getContext('2d');
+  const tc = fxCanvas(1, cw, ch), tx = tc.getContext('2d');
+  ox.globalCompositeOperation = 'lighter';
+  [['#f00', -1], ['#0f0', 0], ['#00f', 1]].forEach(([col, sg], j) => {
+    tx.globalCompositeOperation = 'source-over'; tx.clearRect(0, 0, cw, ch); tx.drawImage(src, 0, 0, cw, ch, 0, 0, cw, ch);
+    tx.globalCompositeOperation = 'multiply'; tx.fillStyle = col; tx.fillRect(0, 0, cw, ch);
+    tx.globalCompositeOperation = 'destination-in'; tx.drawImage(src, 0, 0, cw, ch, 0, 0, cw, ch);
+    ox.drawImage(tc, 0, 0, cw, ch, M + sg * off + (rand(seed, j + 1) - .5) * off * .7, M + (rand(seed, j + 4) - .5) * off * .5, cw, ch);
+  });
+  ox.globalCompositeOperation = 'source-over';
+  return { c:oc, M, ow, oh };
+}
+function shineOver(c, cw, ch, sk) {
+  c.globalCompositeOperation = 'source-atop';
+  const bx = -cw * .5 + Ease.cubicInOut(sk) * cw * 2;
+  const gr = c.createLinearGradient(bx - cw * .22, 0, bx + cw * .22, ch * .35);
+  gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(.5, 'rgba(255,255,255,.6)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = gr; c.fillRect(0, 0, cw, ch); c.globalCompositeOperation = 'source-over';
+}
+function rasterFx(ctx, st, w, h, pad, R, draw) {
+  const m = ctx.getTransform();
+  let k = Math.min(3, Math.max(Math.hypot(m.a, m.b), Math.hypot(m.c, m.d)));
+  if (!(k > .002)) return;
+  const bw = w + pad * 2, bh = h + pad * 2;
+  if (bw * bh * k * k > 8e6) k = Math.sqrt(8e6 / (bw * bh));
+  const cw = Math.max(1, Math.ceil(bw * k)), ch = Math.max(1, Math.ceil(bh * k)), u = 1 / k;
+  const src = fxCanvas(0, cw, ch), sx = src.getContext('2d');
+  sx.setTransform(k, 0, 0, k, cw / 2, ch / 2);
+  sx.save(); draw(sx); sx.restore();
+  sx.setTransform(1, 0, 0, 1, 0, 0);
+  if (st.shine != null) shineOver(sx, cw, ch, st.shine);
+  if (st.bright > 1.005) brighten(src, cw, ch, st.bright);
+  const X0 = -cw / 2 * u, Y0 = -ch / 2 * u, I = st.fI ?? .6, dir = st.fdir || 1, a0 = ctx.globalAlpha;
+  // efeito em muitos pedaços com transparência ou filtro: os pedaços vão para um buffer (senão as emendas somam
+  // opacidade e aparecem listras) e a transparência e o filtro entram uma vez só, ao copiar o buffer
+  const many = { slices:1, dust:1, tiles:1, glitch:1, liquid:1, persp:1 }[st.fx];
+  const buf = many && (a0 < .999 || (ctx.filter && ctx.filter !== 'none'));
+  let g = ctx, A = a0, bk = 1, ow = 0, oh = 0, out = null;
+  if (buf) {
+    bk = Math.min(1, Math.sqrt(8e6 / (9 * cw * ch))); ow = Math.ceil(cw * 3 * bk); oh = Math.ceil(ch * 3 * bk);
+    out = fxCanvas(4, ow, oh); g = out.getContext('2d'); A = 1;
+    g.setTransform(k * bk, 0, 0, k * bk, ow / 2, oh / 2);
+  }
+  const whole = () => g.drawImage(src, 0, 0, cw, ch, X0, Y0, cw * u, ch * u);
+  const put = (x, y, sw, sh, dx, dy, dw = sw * u, dh = sh * u) => g.drawImage(src, x, y, sw, sh, dx, dy, dw, dh);
+  switch (st.fx) {
+    case 'slices': { // faixas que chegam alternando os lados
+      const n = st.fcount || 6, D = (bw * .5 + 120) * (.5 + I);
+      for (let i = 0; i < n; i++) {
+        const q = unitP(st.fp, i, n, .45); if (q <= 0) continue;
+        const y0 = Math.floor(i * ch / n), y1 = i === n - 1 ? ch : Math.floor((i + 1) * ch / n) + 1;
+        g.globalAlpha = A * clamp(q * 3);
+        put(0, y0, cw, y1 - y0, X0 + (1 - fxEase('expoOut', q, dir)) * D * (i % 2 ? 1 : -1) * dir, Y0 + y0 * u);
+      }
+      break;
+    }
+    case 'pixel': { // resolução baixa que vai subindo
+      const big = Math.max(cw, ch) / (4 + 10 * (1 - I)), b = Math.round(Math.pow(Math.max(1, big), 1 - clamp(st.fe)));
+      if (b <= 1) { whole(); break; }
+      const tw = Math.ceil(cw / b), th = Math.ceil(ch / b), tc = fxCanvas(1, tw, th), tx = tc.getContext('2d');
+      tx.imageSmoothingQuality = 'high'; tx.drawImage(src, 0, 0, cw, ch, 0, 0, cw / b, ch / b);
+      const sm = g.imageSmoothingEnabled; g.imageSmoothingEnabled = false;
+      g.drawImage(tc, 0, 0, tw, th, X0, Y0, tw * b * u, th * b * u);
+      g.imageSmoothingEnabled = sm;
+      break;
+    }
+    case 'dust': { // partículas que pousam da esquerda (entrada) ou se desfazem ao vento (saída)
+      const p = st.fp, cs = Math.max(2, Math.ceil(Math.sqrt(cw * ch / 3000))), nx = Math.ceil(cw / cs), ny = Math.ceil(ch / cs), sp = .6, amp = .5 + I;
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const id = j * nx + i, r1 = rand(id, 1), xn = (i + .5) / nx;
+        const q = clamp((p - clamp((dir > 0 ? xn : 1 - xn) * .72 + r1 * .28) * sp) / (1 - sp)); if (q <= 0) continue;
+        const x = i * cs, y = j * cs, sw = Math.min(cs, cw - x), sh = Math.min(cs, ch - y);
+        if (q >= 1) { g.globalAlpha = A; put(x, y, Math.min(sw + 1, cw - x), Math.min(sh + 1, ch - y), X0 + x * u, Y0 + y * u); continue; }
+        const e = Ease.cubicOut(q), v = 1 - e, r2 = rand(id, 2), r3 = rand(id, 3), s = .3 + .7 * e;
+        const ox = -dir * v * (bw * (.12 + .45 * r2) + 50) * amp, oy = -v * (bh * (.15 + .9 * r3) + 30) * amp + Math.sin(v * 5 + r1 * TAU) * bh * .08 * v;
+        g.globalAlpha = A * Math.min(1, e * 1.6);
+        put(x, y, sw, sh, X0 + (x + sw * (1 - s) / 2) * u + ox, Y0 + (y + sh * (1 - s) / 2) * u + oy, sw * s * u, sh * s * u);
+      }
+      break;
+    }
+    case 'tiles': { // ladrilhos que brotam em diagonal
+      const p = st.fp, n = Math.round(5 + 7 * I), ts = Math.max(cw, ch) / n, nx = Math.ceil(cw / ts), ny = Math.ceil(ch / ts);
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const q = clamp((p - ((i + .5) / nx + (j + .5) / ny) / 2 * .55) / .45); if (q <= 0) continue;
+        const x = i * ts, y = j * ts, sw = Math.min(ts, cw - x), sh = Math.min(ts, ch - y);
+        g.globalAlpha = A * clamp(q * 2.5);
+        if (q >= 1) { put(x, y, Math.min(sw + 1, cw - x), Math.min(sh + 1, ch - y), X0 + x * u, Y0 + y * u); continue; }
+        const e = dir > 0 ? Ease.backOut(q, I) : Ease.cubicOut(q);
+        g.save(); g.translate(X0 + (x + sw / 2) * u, Y0 + (y + sh / 2) * u); g.rotate((1 - e) * (rand(i, j) - .5) * 1.4); g.scale(e, e);
+        put(x, y, sw, sh, -sw / 2 * u, -sh / 2 * u); g.restore();
+      }
+      break;
+    }
+    case 'rgb': { // canais de cor separados que se juntam
+      const off = (1 - clamp(st.fe)) * (bw * .04 + 14) * (.5 + I) * k;
+      if (off < .5) { whole(); break; }
+      const sp = rgbSplit(src, cw, ch, off, st.fseed || 0);
+      g.drawImage(sp.c, 0, 0, sp.ow, sp.oh, X0 - sp.M * u, Y0 - sp.M * u, sp.ow * u, sp.oh * u);
+      break;
+    }
+    case 'glitch': { // faixas deslocadas com as cores separadas
+      const g0 = clamp(st.fe), sd = st.fseed || 0, off = g0 * (bw * .02 + 8) * k;
+      const sp = off >= .5 ? rgbSplit(src, cw, ch, off, sd) : { c:src, M:0, ow:cw, oh:ch };
+      for (let y = 0, j = 0; y < sp.oh; j++) {
+        const sh = Math.min(Math.max(2, Math.round((.04 + rand(sd, j * 3 + 1) * .2) * sp.oh)), sp.oh - y);
+        const shx = rand(sd, j * 3 + 2) < .4 ? (rand(sd, j * 3 + 3) - .5) * g0 * sp.ow * .22 : 0;
+        g.drawImage(sp.c, 0, y, sp.ow, Math.min(sh + 1, sp.oh - y), X0 + (shx - sp.M) * u, Y0 + (y - sp.M) * u, sp.ow * u, Math.min(sh + 1, sp.oh - y) * u);
+        y += sh;
+      }
+      break;
+    }
+    case 'liquid': { // ondas horizontais que se acalmam
+      const amp = (1 - clamp(st.fe)) * (bw * .04 + bh * .12) * (.4 + I) * k;
+      if (amp < .3) { whole(); break; }
+      const sh = Math.max(2, Math.ceil(ch / 160)), p = st.fp || 0;
+      for (let y = 0; y < ch; y += sh) {
+        const yn = y / ch, off = amp * (Math.sin(yn * TAU * 1.2 + p * 7) + .45 * Math.sin(yn * TAU * 3.1 - p * 11));
+        put(0, y, cw, Math.min(sh + 1, ch - y), X0 + off * u, Y0 + y * u);
+      }
+      break;
+    }
+    case 'persp': { // giro 3D com perspectiva: fatias finas, cada uma na profundidade dela
+      const ang = st.fang || 0; if (Math.abs(ang) < 1e-3) { whole(); break; }
+      const yAx = st.fax !== 'x', len = (yAx ? cw : ch) * u, oth = (yAx ? ch : cw) * u, pn = yAx ? cw : ch, d = Math.max(bw, bh) * 2.4;
+      const hinge = (st.fhinge || 0) * len / 2, c = Math.cos(ang), s = Math.sin(ang), n = Math.max(12, Math.min(220, Math.round(pn / 3)));
+      const pr = x => { const r = x - hinge, f = d / Math.max(d * .15, d + r * s); return [(hinge + r * c) * f, f]; };
+      let [xa, fa] = pr(-len / 2);
+      for (let i = 0; i < n; i++) {
+        const [xb, fb] = pr(-len / 2 + (i + 1) / n * len), lo = Math.min(xa, xb), wd = Math.abs(xb - xa), ex = oth * (fa + fb) / 2;
+        const s0 = i / n * pn, s1 = Math.min(pn, (i + 1) / n * pn + 1);
+        if (wd > 1e-4) {
+          if (yAx) g.drawImage(src, s0, 0, s1 - s0, ch, lo, -ex / 2, wd + u, ex);
+          else g.drawImage(src, 0, s0, cw, s1 - s0, -ex / 2, lo, ex, wd + u);
+        }
+        xa = xb; fa = fb;
+      }
+      break;
+    }
+    default: whole();
+  }
+  ctx.globalAlpha = a0;
+  if (buf) { const q = 1 / (k * bk); ctx.drawImage(out, 0, 0, ow, oh, -ow / 2 * q, -oh / 2 * q, ow * q, oh * q); }
+  if (st.glow > .01 && !st.fx) { // luz que vaza da própria cor: cópias desfocadas somadas por cima
+    const r = (Math.min(bw, bh) * .05 + 5) * k;
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    ctx.filter = `blur(${r.toFixed(1)}px)`; ctx.globalAlpha = a0 * Math.min(1, st.glow * .5); whole();
+    ctx.filter = `blur(${(r * 3).toFixed(1)}px)`; ctx.globalAlpha = a0 * Math.min(1, st.glow * .35); whole();
+    ctx.restore();
+  }
+}
 
 /* ============================================================
    Texto: layout e desenho
@@ -1295,7 +1980,7 @@ function drawText(ctx, L, t, R) {
   const ph = phase(L, t); if (!ph) return;
   const key = ph.mode === 'in' ? L.in : ph.mode === 'out' ? L.out : null;
   const P = key ? (TP[key] || TP.cut) : null;
-  const I = L.intensity ?? .6, tl = t - L.start;
+  const I = intOf(L, ph.mode === 'out' ? 'out' : 'in'), tl = t - L.start;
   let txt = L.upper ? L.text.toUpperCase() : L.text;
   const seed = Math.floor(t * 24);
 
@@ -1306,16 +1991,14 @@ function drawText(ctx, L, t, R) {
   }
   const lay = layoutText(L, txt);
   const size = lay.size;
-  const fit = fitInMargin(L.x * W(), L.y * H(), lay.blockW, lay.blockH), ax = fit.ax, ay = fit.ay;
-  let idy = 0, isc = 1;
-  if (L.idle === 'float') idy = Math.sin(tl * TAU / 3.4) * 7 * (.4 + I);
-  if (L.idle === 'breathe') isc = 1 + Math.sin(tl * TAU / 3) * .015 * (.4 + I);
-  if (L.idle === 'pulse' && ph.mode === 'hold') isc = 1 + .03 * I * Math.pow(Math.max(0, Math.sin(tl * TAU / 1.6)), 6);
-  const irot = L.idle === 'sway' ? Math.sin(tl * TAU / 3.2) * .03 * (.4 + I) : 0;
-  L._bounds = { x:ax - lay.blockW * fit.k / 2, y:ay - lay.blockH * fit.k / 2, w:lay.blockW * fit.k, h:lay.blockH * fit.k };
+  const pl = placeOf(L), fit = fitInMargin(pl.x * W(), pl.y * H(), lay.blockW * pl.k, lay.blockH * pl.k), ax = fit.ax, ay = fit.ay, fk = fit.k * pl.k;
+  const idl = idleState(L, tl, ph, true, lay.blockH / 2);
+  L._bounds = { x:ax - lay.blockW * fk / 2, y:ay - lay.blockH * fk / 2, w:lay.blockW * fk, h:lay.blockH * fk, k:fk };
 
   ctx.save();
-  ctx.translate(ax, ay + idy); if (irot) ctx.rotate(irot); if (isc * fit.k !== 1) ctx.scale(isc * fit.k, isc * fit.k);
+  ctx.translate(ax + (idl.dx || 0), ay + (idl.dy || 0)); if (idl.rot) ctx.rotate(idl.rot);
+  const isx = (idl.sc ?? 1) * (idl.sx ?? 1) * fk, isy = (idl.sc ?? 1) * (idl.sy ?? 1) * fk;
+  if (isx !== 1 || isy !== 1) ctx.scale(isx, isy);
   ctx.globalAlpha *= L.opacity ?? 1;
   ctx.font = lay.font; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
 
@@ -1327,82 +2010,98 @@ function drawText(ctx, L, t, R) {
     const asc = Math.max(m.actualBoundingBoxAscent || 0, size * .8), desc = Math.max(m.actualBoundingBoxDescent || 0, size * .2);
     lay.mask = { top:asc + pad, bot:desc + pad, h:asc + desc + pad * 2 };
   }
-  const stCache = new Map();
   const dir = ph.mode === 'out' ? -1 : 1;
-  const stateFor = (idx) => {
-    if (stCache.has(idx)) return stCache.get(idx);
-    let st;
-    if (!P) st = {};
-    else {
-      const q = unitP(ph.p, idx, nOf, P.s);
-      const e = ph.mode === 'in' ? easeIn(P.ease, q, I) : easeOutPhase(P.ease, q, I);
-      const p = ph.mode === 'in' ? q : 1 - q;
-      st = P.fn({ e, p, I, size, lineH:lay.lineH, maskH:lay.mask.h, dir, i:idx, n:nOf, seed, W:W(), bw:lay.blockW, bh:lay.blockH });
-    }
-    stCache.set(idx, st); return st;
+  // estado da unidade idx com o progresso da fase em pr (o rastro pede progressos atrasados)
+  const stAt = (idx, pr) => {
+    if (!P) return {};
+    const q = unitP(pr, idx, nOf, P.s);
+    const e = ph.mode === 'in' ? easeIn(P.ease, q, I) : easeOutPhase(P.ease, q, I);
+    const p = ph.mode === 'in' ? q : 1 - q;
+    return P.fn({ e, p, I, size, lineH:lay.lineH, maskH:lay.mask.h, dir, i:idx, n:nOf, seed, W:W(), bw:lay.blockW, bh:lay.blockH });
   };
+  const stCache = new Map();
+  const stateFor = idx => { if (!stCache.has(idx)) stCache.set(idx, stAt(idx, ph.p)); return stCache.get(idx); };
+  const none = () => ({});
+  // bloco inteiro de uma vez (recortes e efeitos de imagem dos presets universais, brilho e 3D do "enquanto está na tela")
+  const whole = !!((P && P.whole) || idl.fx || idl.shine != null);
+  const glowIdle = whole ? 0 : idl.glow || 0;
+  const trail = P && P.trail && ph.mode !== 'hold' ? P.trail : null, tfade = trailFade(ph);
   // cursor da máquina de escrever
   let lastVisible = -1;
 
-  for (const line of lay.lines) {
-    const nInLine = line.glyphs.length;
-    // barra de marca-texto: anima quando o preset atual é "highlight"; fica cheia enquanto a camada entrou com ele
-    if ((L.in === 'highlight' || key === 'highlight') && line.text.trim()) {
-      let b;
-      if (key === 'highlight') b = stateFor(line.li).bar ?? 0;
-      else b = L.in === 'highlight' ? 1 : 0;
-      if (b > 0) {
-        const padX = size * .18;
-        const x = line.x0 - padX, wBar = (line.width + padX * 2) * b;
-        ctx.save(); ctx.fillStyle = L.hl || '#D98E4A';
-        ctx.fillRect(x, line.baseline - size * .86, wBar, size * 1.12);
-        ctx.restore();
+  const drawGlyph = (c, line, g, st, px, py, track) => {
+    const a = st.a == null ? 1 : st.a;
+    if (a <= .001) return false;
+    c.save();
+    if (st.clip === true) { c.beginPath(); c.rect(line.x0 - size * 2, line.baseline - lay.mask.top, line.width + size * 4, lay.mask.h); c.clip(); }
+    else if (st.clip) clipFx(c, st, lay.blockW, lay.blockH);
+    c.globalAlpha *= a;
+    c.translate(px + (st.dx || 0), py + (st.dy || 0));
+    applyXf(c, st);
+    c.translate(-px, -py);
+    if (lay.mixed) c.font = g.f;
+    let ch = g.ch, gx = line.x0 + g.x + track;
+    if (st.scr) { ch = SCR[Math.floor(rand(seed, g.ci + 3) * SCR.length)]; gx = line.x0 + g.x + g.w / 2 - c.measureText(ch).width / 2; }
+    c.translate(gx, line.baseline); c.rotate(SUBPX); // ver SUBPX: sem isso a letra anda em degraus de 1 px na vertical
+    // sem ctx.filter por letra (brilho e filtro com sombra custam centenas de ms por quadro): desfoque pela sombra, brilho pela cor
+    const bl = st.blur > .15 ? st.blur * R.rs : 0;
+    const put = (col, x) => { c.fillStyle = col; if (bl) blurText(c, ch, x, 0, col, bl); else c.fillText(ch, x, 0); };
+    if (st.split) { c.save(); c.globalAlpha *= .7; put('#FF3D6E', -st.split); put('#3DD6FF', st.split); c.restore(); }
+    const col = brightCol(g.c || L.color, st.bright), gl = (st.glow || 0) + glowIdle;
+    put(col, 0);
+    if (gl > .01) { // luz na cor da própria letra (neon, flash): só o halo desfocado, por cima
+      const m = c.getTransform(), r = size * (.12 + .16 * Math.min(gl, 2)) * Math.hypot(m.a, m.b);
+      c.globalAlpha *= Math.min(1, gl);
+      blurText(c, ch, 0, 0, col, r);
+      if (gl > .6) blurText(c, ch, 0, 0, col, r * 2.5);
+    }
+    c.restore();
+    return true;
+  };
+  const paint = (c, stOf) => {
+    for (const line of lay.lines) {
+      const nInLine = line.glyphs.length;
+      // barra de marca-texto: anima quando o preset atual é "highlight"; fica cheia enquanto a camada entrou com ele
+      if ((L.in === 'highlight' || key === 'highlight') && line.text.trim()) {
+        let b;
+        if (key === 'highlight') b = stOf(line.li).bar ?? 0;
+        else b = L.in === 'highlight' ? 1 : 0;
+        if (b > 0) {
+          const padX = size * .18;
+          const x = line.x0 - padX, wBar = (line.width + padX * 2) * b;
+          c.save(); c.fillStyle = L.hl || '#D98E4A';
+          c.fillRect(x, line.baseline - size * .86, wBar, size * 1.12);
+          c.restore();
+        }
+      }
+      for (const g of line.glyphs) {
+        if (g.space) continue;
+        const idx = unit === 'char' ? g.ci : unit === 'word' ? g.word : unit === 'line' ? line.li : 0;
+        const st = stOf(idx);
+        // pivô da unidade
+        let px, py;
+        if (unit === 'char') { px = line.x0 + g.x + g.w / 2; }
+        else if (unit === 'word') { const wg = line.glyphs.filter(x => x.word === g.word); px = line.x0 + (wg[0].x + wg[wg.length - 1].x + wg[wg.length - 1].w) / 2; }
+        else if (unit === 'line') px = line.x0 + line.width / 2;
+        else px = 0;
+        py = (unit === 'all') ? 0 : (P && P.pivot === 'base' ? line.baseline : P && P.pivot === 'top' ? line.baseline - size * .74 : line.baseline - size * .34);
+        const track = st.track ? (g.k - (nInLine - 1) / 2) * st.track : 0;
+        // rastro: a mesma unidade alguns instantes antes, cada vez mais apagada
+        if (trail && stOf !== none) for (let j = trail.n; j >= 1; j--) {
+          const pr = ph.p - j * trail.lag; if (pr <= 0) continue;
+          const sj = stAt(idx, pr);
+          drawGlyph(c, line, g, { ...sj, a:(sj.a ?? 1) * (1 - j / (trail.n + 1)) * .45 * tfade }, px, py, track);
+        }
+        if (drawGlyph(c, line, g, st, px, py, track) && P && P.cursor) lastVisible = Math.max(lastVisible, g.ci);
       }
     }
-    for (const g of line.glyphs) {
-      if (g.space) continue;
-      const idx = unit === 'char' ? g.ci : unit === 'word' ? g.word : unit === 'line' ? line.li : 0;
-      const st = stateFor(idx);
-      const a = st.a == null ? 1 : st.a;
-      if (a <= .001) continue;
-      if (P && P.cursor && a > 0) lastVisible = Math.max(lastVisible, g.ci);
-      // pivô da unidade
-      let px, py;
-      if (unit === 'char') { px = line.x0 + g.x + g.w / 2; }
-      else if (unit === 'word') { const wg = line.glyphs.filter(x => x.word === g.word); px = line.x0 + (wg[0].x + wg[wg.length - 1].x + wg[wg.length - 1].w) / 2; }
-      else if (unit === 'line') px = line.x0 + line.width / 2;
-      else px = 0;
-      py = (unit === 'all') ? 0 : (P && P.pivot === 'base' ? line.baseline : line.baseline - size * .34);
-      const track = st.track ? (g.k - (nInLine - 1) / 2) * st.track : 0;
-      ctx.save();
-      if (st.clip === 'circle') { ctx.beginPath(); ctx.arc(0, 0, Math.max(0, st.ce) * Math.hypot(lay.blockW, lay.blockH) / 2 * 1.08, 0, TAU); ctx.clip(); }
-      else if (st.clip === 'wipe') {
-        const L0 = -lay.blockW / 2 - 20, full = lay.blockW + 40, v = clamp(st.ce);
-        ctx.beginPath(); if (st.cdir > 0) ctx.rect(L0, -lay.blockH, full * v, lay.blockH * 2); else ctx.rect(L0 + full * (1 - v), -lay.blockH, full * v, lay.blockH * 2); ctx.clip();
-      }
-      else if (st.clip) { ctx.beginPath(); ctx.rect(line.x0 - size * 2, line.baseline - lay.mask.top, line.width + size * 4, lay.mask.h); ctx.clip(); }
-      ctx.globalAlpha *= a;
-      ctx.translate(px + (st.dx || 0), py + (st.dy || 0));
-      if (st.rot) ctx.rotate(st.rot);
-      const sc = st.sc == null ? 1 : st.sc;
-      const sx = sc * (st.sx == null ? 1 : st.sx), sy = sc * (st.sy == null ? 1 : st.sy);
-      if (sx !== 1 || sy !== 1) ctx.scale(sx, sy);
-      ctx.translate(-px, -py);
-      if (st.blur > .15) ctx.filter = `blur(${(st.blur * R.rs).toFixed(2)}px)`;
-      if (lay.mixed) ctx.font = g.f;
-      let ch = g.ch, gx = line.x0 + g.x + track;
-      if (st.scr) { ch = SCR[Math.floor(rand(seed, g.ci + 3) * SCR.length)]; gx = line.x0 + g.x + g.w / 2 - ctx.measureText(ch).width / 2; }
-      if (st.split) {
-        ctx.save(); ctx.globalAlpha *= .7;
-        ctx.fillStyle = '#FF3D6E'; ctx.fillText(ch, gx - st.split, line.baseline);
-        ctx.fillStyle = '#3DD6FF'; ctx.fillText(ch, gx + st.split, line.baseline);
-        ctx.restore();
-      }
-      ctx.fillStyle = g.c || L.color;
-      ctx.fillText(ch, gx, line.baseline);
-      ctx.restore();
-    }
-  }
+  };
+  if (whole) {
+    // preset do bloco inteiro: o estado vale para o todo; senão (3D ou brilho contínuo) as letras seguem animando dentro
+    const own = P && P.whole, st = mergeSt(own ? stateFor(0) : {}, rasterIdle(idl));
+    drawState(ctx, st, lay.blockW, lay.blockH, R, c => { c.font = lay.font; c.textBaseline = 'alphabetic'; c.textAlign = 'left'; paint(c, own || !P ? none : stateFor); },
+      { pad:size * .6, color:L.lineColor || S.brand.colors[2] });
+  } else paint(ctx, stateFor);
   // cursor
   if (P && P.cursor && ph.mode === 'in') {
     let gx = 0, by = 0, found = false;
@@ -1410,25 +2109,20 @@ function drawText(ctx, L, t, R) {
     if (!found && lay.lines[0]) { gx = lay.lines[0].x0; by = lay.lines[0].baseline; }
     if (Math.floor(t * 3) % 2 === 0 || ph.p < .95) { ctx.fillStyle = L.color; ctx.fillRect(gx, by - size * .78, Math.max(3, size * .06), size * .9); }
   }
+  drawMark(ctx, L, lay, ph, t, R); // marca à mão (sublinhar, circular, riscar…)
   ctx.restore();
 }
 
 /* ============================================================
    Blocos: logo, botão, imagem
    ============================================================ */
-let OFF = null;
-function getOff(w, h) {
-  if (!OFF) OFF = document.createElement('canvas');
-  if (OFF.width < w || OFF.height < h) { OFF.width = Math.max(OFF.width, w); OFF.height = Math.max(OFF.height, h); }
-  return OFF;
-}
 function blockGeom(L) {
   if (L.type === 'logo') {
     const lg = logoOf(L); if (!lg) return null;
     const w = L.size * W(); const s = w / lg.bw; return { w, h:lg.bh * s, s };
   }
   if (L.type === 'image') {
-    const img = imgNow(L.src); const w = L.size * W();
+    const img = (L.video && videoEl(L)) || imgNow(L.src); const w = L.size * W(); // vídeo: o quadro atual; até carregar, o pôster (src)
     const h = L.mask && L.mask !== 'fit' && L.mh != null ? L.mh * W() : img ? w * img.naturalHeight / img.naturalWidth : w * .75;
     return { w, h, img };
   }
@@ -1470,6 +2164,27 @@ function ngon(w, h, n, inner) {
   const pts = [], m = inner ? n * 2 : n;
   for (let i = 0; i < m; i++) { const a = -Math.PI / 2 + i * TAU / m, k = inner && i % 2 ? inner : 1; pts.push([Math.cos(a) * w / 2 * k, Math.sin(a) * h / 2 * k]); }
   return pts;
+}
+// estilos do traçado: padrão em múltiplos da espessura (traço, vão, ...); o ponto é um traço de comprimento 0 com ponta redonda
+const STROKE_STYLES = { solid:'Sólido', dash:'Tracejado', long:'Longo', dot:'Pontilhado', dashdot:'Traço-ponto' };
+const STROKE_PAT = { dash:[3, 2], long:[6, 3], dot:[0, 2], dashdot:[4, 2, 0, 2] };
+function strokeCap(L) { return L.strokeDash === 'dot' ? 'round' : (L.strokeCap || 'round'); }
+// lista para setLineDash. dp < 1 = traço sendo desenhado: o padrão é cortado no comprimento já percorrido
+function strokeDash(L, len, dp) {
+  const pat = STROKE_PAT[L.strokeDash], far = len * 2 + 10;
+  if (!pat) return dp < 1 ? [len * dp, far] : [];
+  const w = Math.max(3, L.strokeW || 8), cap = strokeCap(L), g = clamp(L.strokeGap ?? 1, .4, 3);
+  // ponta redonda/quadrada avança meia espessura de cada lado: encurta o traço e alarga o vão, o desenho fica igual
+  const ext = cap === 'butt' ? 0 : w;
+  const a = pat.map((v, i) => i % 2 ? Math.max(.5, v * w * g + ext) : Math.max(.01, v * w - ext));
+  if (dp >= 1) return a;
+  const end = len * dp, out = []; let pos = 0;
+  for (let i = 0; pos < end && i < 6000; i++) {
+    const take = Math.min(a[i % a.length], end - pos);
+    out.push(take); pos += take;
+  }
+  if (out.length % 2) out.push(far); else out[out.length - 1] += far;
+  return out;
 }
 function shapeVec(L, G) {
   const w = G.w, h = G.h, k = L.kind;
@@ -1565,9 +2280,10 @@ function drawBlockContent(ctx, L, G, info, R) {
       if (L.mask === 'circle') { ctx.beginPath(); ctx.ellipse(0, 0, G.w / 2, G.h / 2, 0, 0, TAU); }
       else rrect(ctx, -G.w / 2, -G.h / 2, G.w, G.h, L.radius || 0);
       ctx.clip();
-      const iw = G.img.naturalWidth, ih = G.img.naturalHeight, k = Math.max(G.w / iw, G.h / ih) * (L.zoom ?? 1);
+      const pn = panOf(L), iw = G.img.naturalWidth, ih = G.img.naturalHeight, k = Math.max(G.w / iw, G.h / ih) * pn.zoom; // enquadramento do formato aberto
       const dw = iw * k, dh = ih * k;
-      ctx.drawImage(G.img, -dw / 2 + (L.ix || 0) * G.w, -dh / 2 + (L.iy || 0) * G.h, dw, dh); ctx.restore();
+      ctx.drawImage(G.img, -dw / 2 + pn.ix * G.w, -dh / 2 + pn.iy * G.h, dw, dh); ctx.restore();
+      drawDevice(ctx, L, G); // moldura de celular ou navegador em volta da máscara
     } else if (!R.export) {
       ctx.save(); rrect(ctx, -G.w / 2, -G.h / 2, G.w, G.h, L.radius || 0);
       ctx.fillStyle = 'rgba(255,255,255,.06)'; ctx.fill(); ctx.setLineDash([14, 10]); ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.stroke();
@@ -1578,9 +2294,9 @@ function drawBlockContent(ctx, L, G, info, R) {
   }
   if (L.type === 'shape') {
     const V = shapeVec(L, G), pp = info.pp, drawing = info.key === 'draw';
-    const line = L.kind === 'line', stroked = line || L.stroke;
+    const line = L.kind === 'line', filled = !line && L.fill !== false, stroked = !filled || L.stroke; // sem preenchimento, o contorno é a forma
     const dp = drawing ? Ease.cubicInOut(clamp(pp / .72)) : 1;
-    const fillA = line ? 0 : drawing ? Ease.cubicInOut(clamp((pp - .5) / .5)) : 1;
+    const fillA = !filled ? 0 : drawing ? Ease.cubicInOut(clamp((pp - .5) / .5)) : 1;
     if (fillA > 0) {
       ctx.save(); ctx.clip(V.path); ctx.globalAlpha *= fillA; ctx.translate(-G.w / 2, -G.h / 2);
       paintFill(ctx, L, info.t, G.w, G.h); ctx.restore();
@@ -1588,9 +2304,10 @@ function drawBlockContent(ctx, L, G, info, R) {
     const tmp = drawing && !stroked; // traço de apoio: some no fim
     const sa = tmp ? 1 - Ease.cubicInOut(clamp((pp - .82) / .18)) : 1;
     if ((stroked || tmp) && sa > 0 && dp > .002) {
-      ctx.save(); ctx.globalAlpha *= sa; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.save(); ctx.globalAlpha *= sa; ctx.lineJoin = stroked ? (L.strokeJoin || 'round') : 'round'; ctx.lineCap = stroked ? strokeCap(L) : 'round';
       ctx.lineWidth = stroked ? L.strokeW : 5; ctx.strokeStyle = stroked ? L.strokeColor : (L.mode === 'solid' ? L.c1 : L.c2);
-      if (dp < 1) ctx.setLineDash([V.len * dp, V.len * 2 + 10]);
+      const dash = stroked ? strokeDash(L, V.len, dp) : dp < 1 ? [V.len * dp, V.len * 2 + 10] : [];
+      if (dash.length) ctx.setLineDash(dash);
       ctx.stroke(V.path); ctx.restore();
     }
     return;
@@ -1604,79 +2321,53 @@ function drawBlockContent(ctx, L, G, info, R) {
     }
     rrect(ctx, -G.w / 2, -G.h / 2, G.w, G.h, L.radius); ctx.fillStyle = L.bg; ctx.fill();
     ctx.font = fontStr(L, L.size); ctx.fillStyle = L.color; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-    ctx.fillText(L.text, 0, L.size * .35);
+    ctx.translate(0, L.size * .35); ctx.rotate(SUBPX / 3); // o botão é largo: giro menor, também acima do limite (ver SUBPX)
+    ctx.fillText(L.text, 0, 0);
   }
 }
 const freeType = L => (L.type === 'image' && !L.keepIn) || L.type === 'shape'; // sem margem: podem sangrar (imagem com "Manter dentro da margem" obedece)
+// tamanho do bloco no formato aberto (fora do principal, a máscara de foto ou forma em retângulo pode mudar)
+function geomNow(L) { const G = blockGeom(L); if (!G) return G; const pl = placeOf(L); return pl.hh || pl.ww ? { ...G, h:pl.hh || G.h, w:pl.ww || G.w } : G; }
 function drawBlock(ctx, L, t, R) {
-  const G = blockGeom(L); if (!G) return;
+  const G = geomNow(L); if (!G) return;
   const ph = phase(L, t); if (!ph) return;
-  const I = L.intensity ?? .6, tl = t - L.start;
-  const fit = freeType(L) ? { ax:L.x * W(), ay:L.y * H(), k:1 } : fitInMargin(L.x * W(), L.y * H(), G.w, G.h), ax = fit.ax, ay = fit.ay;
-  L._bounds = { x:ax - G.w * fit.k / 2, y:ay - G.h * fit.k / 2, w:G.w * fit.k, h:G.h * fit.k };
+  const I = intOf(L, ph.mode === 'out' ? 'out' : 'in'), tl = t - L.start;
+  // no formato aberto: posição e escala adaptadas
+  const pl = placeOf(L);
+  const fit = freeType(L) ? { ax:pl.x * W(), ay:pl.y * H(), k:1 } : fitInMargin(pl.x * W(), pl.y * H(), G.w * pl.k, G.h * pl.k), ax = fit.ax, ay = fit.ay, fk = fit.k * pl.k;
+  L._bounds = { x:ax - G.w * fk / 2, y:ay - G.h * fk / 2, w:G.w * fk, h:G.h * fk };
   let key = ph.mode === 'in' ? L.in : ph.mode === 'out' ? L.out : null;
   if (key) key = effKey(L, key);
   const P = key ? BP[key] : null;
   const dir = ph.mode === 'out' ? -1 : 1;
   const pp = ph.mode === 'in' ? ph.p : ph.mode === 'out' ? 1 - ph.p : 1;
-  let st = {};
-  if (P && P.fn) {
-    const e = ph.mode === 'in' ? easeIn(P.ease, ph.p, I) : easeOutPhase(P.ease, ph.p, I);
-    st = P.fn({ e, p:pp, I, w:G.w, h:G.h, dir, W:W(), seed:Math.floor(t * 24) });
-  }
-  // movimento contínuo
-  let idy = 0, isc = 1, irot = 0;
-  if (L.idle === 'float') idy = Math.sin(tl * TAU / 3.4) * 9 * (.4 + I);
-  if (L.idle === 'breathe') isc = 1 + Math.sin(tl * TAU / 3) * .025 * (.4 + I);
-  if (L.idle === 'sway') irot = Math.sin(tl * TAU / 3.2) * .05 * (.4 + I);
-  if (L.idle === 'spin') irot = tl * (.25 + .9 * I);
-  if (L.idle === 'pulse' && ph.mode === 'hold') isc = 1 + .045 * I * Math.pow(Math.max(0, Math.sin(tl * TAU / 1.6)), 6);
+  const seed = Math.floor(t * 24);
+  const stAt = q => {
+    const e = ph.mode === 'in' ? easeIn(P.ease, q, I) : easeOutPhase(P.ease, q, I);
+    return P.fn({ e, p:ph.mode === 'in' ? q : 1 - q, I, w:G.w, h:G.h, dir, W:W(), seed });
+  };
+  const st = P && P.fn ? stAt(ph.p) : {};
+  const idl = idleState(L, tl, ph, false, G.h / 2); // movimento contínuo
 
+  // parado na tela, I e tl são os do movimento contínuo (anel do botão pulsante)
+  const info = { key, pp, I:key ? I : intOf(L, 'idle'), mode:ph.mode, tl:tl * spdOf(L, 'idle'), t };
+  const content = (c, s) => {
+    if (s.clip === 'bounds') { const padX = G.w * .35, padY = G.h * .06; c.beginPath(); c.rect(-G.w / 2 - padX, -G.h / 2 - padY, G.w + padX * 2, G.h + padY * 2); c.clip(); }
+    if (s.cdy) c.translate(0, s.cdy);
+    drawBlockContent(c, L, G, info, R);
+  };
+  const o = { k:fk, rot:(L.rot || 0) * Math.PI / 180, piv:P && P.pivot ? (P.pivot === 'top' ? -G.h / 2 : G.h / 2) : 0,
+    pad:Math.max(12, L.stroke || L.fill === false || L.kind === 'line' ? (L.strokeW || 8) : 0, Math.max(G.w, G.h) * .04), color:L.lineColor || S.brand.colors[2] };
   ctx.save();
-  ctx.translate(ax + (st.dx || 0), ay + (st.dy || 0) + idy);
-  if (fit.k !== 1) ctx.scale(fit.k, fit.k);
-  const rot = (st.rot || 0) + irot + (L.rot || 0) * Math.PI / 180; if (rot) ctx.rotate(rot);
-  const sc = (st.sc == null ? 1 : st.sc) * isc, sx = sc * (st.sx == null ? 1 : st.sx), sy = sc * (st.sy == null ? 1 : st.sy);
-  if (sx !== 1 || sy !== 1) ctx.scale(sx, sy);
-  ctx.globalAlpha *= (st.a == null ? 1 : st.a) * (L.opacity ?? 1);
-  if (st.blur > .15) ctx.filter = `blur(${(st.blur * R.rs).toFixed(2)}px)`;
-
-  // recortes
-  const padX = G.w * .35, padY = G.h * .06;
-  if (st.clip === 'bounds') { ctx.beginPath(); ctx.rect(-G.w / 2 - padX, -G.h / 2 - padY, G.w + padX * 2, G.h + padY * 2); ctx.clip(); }
-  if (st.clip === 'circle') { ctx.beginPath(); ctx.arc(0, 0, Math.max(0, st.ce) * Math.hypot(G.w, G.h) / 2 * 1.08, 0, TAU); ctx.clip(); }
-  if (st.clip === 'wipe') {
-    const L0 = -G.w / 2 - 20, full = G.w + 40, v = clamp(st.ce);
-    ctx.beginPath(); if (st.cdir > 0) ctx.rect(L0, -G.h, full * v, G.h * 2); else ctx.rect(L0 + full * (1 - v), -G.h, full * v, G.h * 2); ctx.clip();
+  ctx.translate(ax, ay);
+  ctx.globalAlpha *= L.opacity ?? 1;
+  // rastro: o bloco alguns instantes antes, cada vez mais apagado
+  if (P && P.trail && ph.mode !== 'hold') for (let j = P.trail.n; j >= 1; j--) {
+    const q = ph.p - j * P.trail.lag; if (q <= 0) continue;
+    const sj = stAt(q);
+    drawState(ctx, mergeSt({ ...sj, a:(sj.a ?? 1) * (1 - j / (P.trail.n + 1)) * .45 * trailFade(ph) }, idl), G.w, G.h, R, content, o);
   }
-  if (key === 'line') {
-    const lp = Ease.cubicInOut(clamp(pp / .45)), rise = Ease.quintOut(clamp((pp - .3) / .7)), la = 1 - clamp((pp - .78) / .22);
-    const ly = G.h / 2 + G.h * .08 + 6;
-    if (lp > 0 && la > 0) { ctx.save(); ctx.globalAlpha *= la; ctx.fillStyle = L.lineColor || S.brand.colors[2]; const lw = G.w * 1.1 * lp; ctx.fillRect(-lw / 2, ly - 2.5, lw, 5); ctx.restore(); }
-    ctx.beginPath(); ctx.rect(-G.w * 2, -G.h * 4, G.w * 4, G.h * 4 + ly - 3); ctx.clip();
-    ctx.translate(0, (1 - rise) * (G.h * 1.1 + 10));
-  }
-  if (st.cdy) ctx.translate(0, st.cdy);
-
-  const info = { key, pp, I, mode:ph.mode, tl, t };
-  const shineOn = L.idle === 'shine' && ph.mode === 'hold';
-  const cyc = 3.2, sk = ((tl - ph.inD) % cyc) / 1.15;
-  if (shineOn && sk >= 0 && sk < 1) {
-    const m = ctx.getTransform(); const k = Math.max(.1, Math.hypot(m.a, m.b)); const pad = 6;
-    const cw = Math.ceil(G.w * k) + pad * 2, chh = Math.ceil(G.h * k) + pad * 2;
-    const oc = getOff(cw, chh), o = oc.getContext('2d');
-    o.setTransform(1, 0, 0, 1, 0, 0); o.clearRect(0, 0, oc.width, oc.height);
-    o.setTransform(k, 0, 0, k, cw / 2, chh / 2);
-    drawBlockContent(o, L, G, info, R);
-    o.setTransform(1, 0, 0, 1, 0, 0); o.globalCompositeOperation = 'source-atop';
-    const bx = -cw * .5 + Ease.cubicInOut(sk) * cw * 2;
-    const gr = o.createLinearGradient(bx - cw * .22, 0, bx + cw * .22, chh * .35);
-    gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(.5, 'rgba(255,255,255,.6)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
-    o.fillStyle = gr; o.fillRect(0, 0, cw, chh); o.globalCompositeOperation = 'source-over';
-    ctx.drawImage(oc, 0, 0, cw, chh, -cw / 2 / k, -chh / 2 / k, cw / k, chh / k);
-  } else {
-    drawBlockContent(ctx, L, G, info, R);
-  }
+  drawState(ctx, mergeSt(st, idl), G.w, G.h, R, content, o);
   ctx.restore();
 }
 
@@ -1740,6 +2431,7 @@ function paintFill(ctx, L, t, w, hh) {
    ============================================================ */
 function renderFrame(ctx, t, rs, isExport) {
   const R = { rs, export:!!isExport };
+  RT.frameNo = (RT.frameNo || 0) + 1; // a adaptação ao formato (placement) é refeita uma vez por quadro
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.filter = 'none'; ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -1752,7 +2444,400 @@ function renderFrame(ctx, t, rs, isExport) {
     } catch (e) { console.error(e); }
     c.filter = 'none'; c.globalAlpha = 1; c.globalCompositeOperation = 'source-over';
   };
-  for (const L of S.layers) if (L.visible) one(ctx, L);
+  // câmera (camadas 'camera' e transições com movimento) mexe em todo o quadro; sombra e movimento da imagem são de cada camada
+  const cam = camAt(t), buf = cam.blur > .3 || cam.whip ? frameBuf(ctx.canvas, 0) : null, tc = buf ? buf.getContext('2d') : ctx;
+  if (buf) { tc.setTransform(1, 0, 0, 1, 0, 0); tc.fillStyle = '#000'; tc.fillRect(0, 0, buf.width, buf.height); tc.setTransform(rs, 0, 0, rs, 0, 0); }
+  const els = S.layers.filter(L => L.visible && !NOBOX(L));
+  // grupo com animação própria: os itens são desenhados juntos, à parte, e o conjunto entra no lugar do primeiro item
+  const gAct = new Map(), gDone = new Set();
+  const gActive = gid => {
+    if (!gAct.has(gid)) { const gp = !RT.noGrp && gAnimOn(gid) && gpseudo(gid); gAct.set(gid, gp && phase(gp, t) ? gp : null); }
+    return gAct.get(gid);
+  };
+  els.forEach((L, i) => {
+    const gp = L.grp && gActive(L.grp);
+    if (gp) {
+      if (!gDone.has(L.grp)) { gDone.add(L.grp); try { drawGroup(tc, L.grp, gp, els, t, R, cam, one); } catch (e) { console.error(e); } }
+      return;
+    }
+    drawLayerFx(tc, L, t, R, cam, layerDepth(L, i, els.length), one);
+  });
+  if (buf) camComposite(ctx, buf, cam);
+  // transições por cima de tudo
+  for (const L of S.layers) if (L.visible && L.type === 'fx') drawFx(ctx, L, t, R);
+}
+
+/* ============================================================
+   Câmera, transições, sombra, movimento da imagem, moldura e marcas à mão
+   Tudo por preset. Câmera e transição são camadas da timeline (tipos 'camera' e 'fx'): não aparecem no palco
+   e só valem entre o início e o fim da barra. Sombra, marca, movimento e moldura são escolhas da própria camada.
+   ============================================================ */
+const NOBOX = L => L.type === 'camera' || L.type === 'fx';
+const sinIO = u => .5 - .5 * Math.cos(Math.PI * clamp(u));
+const hashId = s => { let x = 7; for (const c of String(s)) x = (x * 31 + c.charCodeAt(0)) % 100003; return x; };
+// telas de apoio do tamanho do quadro: uma por uso e por tamanho
+// 0 câmera · 1 camada à parte (sombra, mesclagem) · 2 e 3 sombra longa · 4 desfoque de movimento (exportação) · 5 sombra + mesclagem · 6 transição com mesclagem · 7 grupo animado
+const FBUF = new Map();
+function frameBuf(ref, slot) {
+  const k = `${slot}:${ref.width}x${ref.height}`; let c = FBUF.get(k);
+  if (!c) { if (FBUF.size > 20) FBUF.clear(); c = document.createElement('canvas'); c.width = ref.width; c.height = ref.height; FBUF.set(k, c); }
+  return c;
+}
+
+/* ------------ mesclagem (blend mode): como a camada se mistura com o que está atrás dela.
+   Vale para tudo que desenha: texto, logo, botão, imagem, forma, fundo e transição (L.blend; ausente = normal).
+   A camada inteira (com sombra e efeitos) é desenhada à parte e só então mistura com o quadro, então letras e pedaços
+   que se sobrepõem não misturam duas vezes. A chave é o próprio globalCompositeOperation do canvas; normal desenha
+   direto, sem tela extra. Cada modo: [chave, nome, dica] ------------ */
+const BLEND_GROUPS = [
+  ['', [['normal', 'Normal', '']]],
+  ['Escurecem', [
+    ['darken', 'Escurecer', 'Darken. Fica só o que é mais escuro que o que está atrás.'],
+    ['multiply', 'Multiplicar', 'Multiply. Escurece: o branco some e o preto fica. Bom para sombras e texturas.'],
+    ['color-burn', 'Queimar cores', 'Color Burn. Escurece e aumenta o contraste.']]],
+  ['Clareiam', [
+    ['lighten', 'Clarear', 'Lighten. Fica só o que é mais claro que o que está atrás.'],
+    ['screen', 'Tela', 'Screen. Clareia: o preto some e o branco fica. Bom para luz, brilho e fumaça.'],
+    ['color-dodge', 'Desviar cores', 'Color Dodge. Clareia e aumenta o contraste, com brilho forte.'],
+    ['lighter', 'Adicionar', 'Add. Soma a luz com o que está atrás. Bom para faíscas e clarões.']]],
+  ['Contraste', [
+    ['overlay', 'Sobrepor', 'Overlay. Escurece os tons escuros de trás e clareia os claros. Bom para dar cor e textura.'],
+    ['soft-light', 'Luz suave', 'Soft Light. Contraste suave. Dá cor à foto sem estourar.'],
+    ['hard-light', 'Luz direta', 'Hard Light. Contraste forte, como uma luz dura por cima.']]],
+  ['Comparação', [
+    ['difference', 'Diferença', 'Difference. O claro inverte as cores de trás e o preto não muda.'],
+    ['exclusion', 'Exclusão', 'Exclusion. Como Diferença, com menos contraste.']]],
+  ['Cor e luz', [
+    ['hue', 'Matiz', 'Hue. Troca só a cor de trás, mantendo a luz e a saturação.'],
+    ['saturation', 'Saturação', 'Saturation. Usa só a saturação desta camada.'],
+    ['color', 'Cor', 'Color. Pinta o que está atrás com esta cor, mantendo a luz.'],
+    ['luminosity', 'Luminosidade', 'Luminosity. Usa só a claridade desta camada, mantendo a cor de trás.']]],
+];
+const BLENDS = Object.fromEntries(BLEND_GROUPS.flatMap(g => g[1]).map(([k, nome, dica]) => [k, { nome, dica }]));
+// modo escolhido na camada, ou null quando é normal (ou desconhecido)
+const blendOf = L => { const b = L.blend; return b && b !== 'normal' && BLENDS[b] ? b : null; };
+// mistura uma tela do tamanho do quadro (já pronta, em pixels) com o que está no quadro
+function blendOnto(tc, buf, bm) {
+  tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1; tc.filter = 'none'; tc.globalCompositeOperation = bm;
+  tc.drawImage(buf, 0, 0); tc.restore();
+}
+
+/* ------------ câmera: u = 0..1 ao longo da barra, tl = segundos desde o início. Devolve s (escala), dx, dy (px), r (rad) ------------ */
+const CAMS = {
+  push:     { label:'Aproximar devagar', fn:(u, tl, I) => ({ s:1 + (.05 + .13 * I) * sinIO(u) }) },
+  pull:     { label:'Afastar devagar', fn:(u, tl, I) => ({ s:1 + (.05 + .13 * I) * (1 - sinIO(u)) }) },
+  punch:    { label:'Zoom de impacto', fn:(u, tl, I, sp) => ({ s:1 + (.06 + .14 * I) * Ease.spring(clamp(tl * sp / .8), .4 + .5 * I) }) },
+  shake:    { label:'Tremor no impacto', fn:(u, tl, I, sp) => { const a = (8 + 30 * I) * Math.exp(-tl * sp * 4.5); return { dx:a * (Math.sin(tl * 71) + .5 * Math.sin(tl * 127 + 1)) / 1.5, dy:a * (Math.sin(tl * 83 + 2) + .5 * Math.sin(tl * 151)) / 1.5, r:a * .0008 * Math.sin(tl * 59) }; } },
+  hand:     { label:'Câmera na mão', fn:(u, tl, I, sp) => { const a = sinIO(tl * 1.5), f = .7 * sp, m = (3 + 9 * I) * a; return { dx:m * (Math.sin(tl * 1.3 * f) + .6 * Math.sin(tl * 2.9 * f + 1.7)), dy:m * (Math.sin(tl * 1.7 * f + .5) + .5 * Math.sin(tl * 3.3 * f)), r:.0035 * I * a * Math.sin(tl * 1.1 * f + .3), s:1 + .015 * a }; } },
+  drift:    { label:'Deriva lateral', fn:(u, tl, I) => ({ dx:-(30 + 90 * I) * sinIO(u), s:1 + .025 * sinIO(u) }) },
+  parallax: { label:'Paralaxe', par:1, fn:(u, tl, I) => ({ dx:-(40 + 110 * I) * sinIO(u), s:1 + (.02 + .05 * I) * sinIO(u) }) },
+  tilt:     { label:'Inclinar', fn:(u, tl, I) => ({ r:(.012 + .028 * I) * sinIO(u), s:1 + (.03 + .03 * I) * sinIO(u) }) },
+};
+/* ------------ transição: cobre a tela inteira no meio da barra (u = .5), onde o conteúdo troca. `cam` mexe no quadro ------------ */
+const FXS = {
+  wipe:   { label:'Cortina', dur:.8, draw:(c, L, u) => fxSweep(c, [L.c2, L.c1], u, 0) },
+  bars:   { label:'Faixas', dur:.9, draw:(c, L, u) => fxSweep(c, [L.c3, L.c2, L.c1], u, H() * .14) },
+  circle: { label:'Círculo', dur:.9, draw:(c, L, u) => fxCircle(c, [L.c2, L.c1], u) },
+  blinds: { label:'Persianas', dur:.9, draw:(c, L, u) => fxBlinds(c, L, u) },
+  flash:  { label:'Clarão', dur:.5, draw:(c, L, u) => { c.globalAlpha *= u < .5 ? Math.pow(u * 2, 2) : 1 - Ease.cubicOut((u - .5) * 2); c.fillStyle = L.c2; c.fillRect(0, 0, W(), H()); } },
+  zoom:   { label:'Zoom através', dur:.7,
+            cam:(u, I) => { const q = u < .5 ? u * 2 : 2 - u * 2; return { s:1 + (u < .5 ? 1.6 : 1.1) * q * q * q, blur:(8 + 30 * I) * q * q }; },
+            draw:(c, L, u) => { c.globalAlpha *= .55 * Math.exp(-Math.pow((u - .5) / .06, 2)); c.fillStyle = L.c2; c.fillRect(0, 0, W(), H()); } },
+  whip:   { label:'Chicote', dur:.6, cam:(u, I) => { const q = u < .5 ? u * 2 : 2 - u * 2; return { whip:(u < .5 ? -.5 : .5) * q * q * q, wblur:(.06 + .16 * I) * Math.pow(q, 1.5) }; } },
+};
+// faixas que entram pela esquerda, cobrem e saem pela direita (a primeira cor fica atrás: cobre antes e sai depois)
+function fxSweep(c, cols, u, sk) {
+  const w = W(), hh = H(), n = cols.length, ex = Math.abs(sk), span = w + ex * 2;
+  cols.forEach((col, i) => {
+    const d = (n - 1 - i) * .07, a = .46 - d;
+    const le = Ease.cubicInOut(clamp(u / a)), tr = Ease.cubicInOut(clamp((u - .54 - d) / a));
+    const x0 = -ex + span * tr, x1 = -ex + span * le; if (x1 <= x0) return;
+    c.fillStyle = col; c.beginPath();
+    c.moveTo(x0 + sk, 0); c.lineTo(x1 + sk, 0); c.lineTo(x1 - sk, hh); c.lineTo(x0 - sk, hh); c.closePath(); c.fill();
+  });
+}
+function fxCircle(c, cols, u) {
+  const w = W(), hh = H(), R = Math.hypot(w, hh) / 2 + 4, n = cols.length;
+  cols.forEach((col, i) => {
+    const d = (n - 1 - i) * .08, a = .46 - d;
+    const g = Ease.cubicInOut(clamp(u / a)), q = Ease.cubicInOut(clamp((u - .54 - d) / a));
+    if (g <= 0 || q >= 1) return;
+    c.fillStyle = col; c.beginPath(); c.arc(w / 2, hh / 2, R * g, 0, TAU);
+    if (q > 0) { c.moveTo(w / 2 + R * q, hh / 2); c.arc(w / 2, hh / 2, R * q, 0, TAU, true); }
+    c.fill();
+  });
+}
+function fxBlinds(c, L, u) {
+  const w = W(), hh = H(), n = 7, sh = hh / n, s = .035, a = .46 - (n - 1) * s;
+  for (let i = 0; i < n; i++) {
+    const g = Ease.cubicInOut(clamp((u - i * s) / a)), q = Ease.cubicInOut(clamp((u - .54 - i * s) / a));
+    if (g <= q) continue;
+    c.fillStyle = i % 2 ? L.c3 : L.c1;
+    c.fillRect(0, i * sh + sh * q - .5, w, sh * (g - q) + 1);
+  }
+}
+function camAt(t) {
+  const c = { s:1, dx:0, dy:0, r:0, par:0, blur:0, whip:0, wblur:0 };
+  for (const L of S.layers) {
+    if (!L.visible || !NOBOX(L)) continue;
+    const end = L.end ?? S.duration; if (t < L.start || t > end) continue;
+    const P = L.type === 'camera' ? CAMS[L.cam] : FXS[L.fx]; if (!P) continue;
+    const u = (t - L.start) / Math.max(.05, end - L.start), I = L.intensity ?? .6;
+    const st = L.type === 'camera' ? P.fn(u, t - L.start, I, L.speed || 1) : P.cam ? P.cam(u, I) : null; if (!st) continue;
+    c.s *= st.s ?? 1; c.dx += st.dx || 0; c.dy += st.dy || 0; c.r += st.r || 0;
+    c.blur += st.blur || 0; c.whip += st.whip || 0; c.wblur += st.wblur || 0;
+    if (P.par) c.par = Math.max(c.par, P.par);
+  }
+  return c;
+}
+// paralaxe: o fundo anda pouco, quem está mais na frente anda mais
+const layerDepth = (L, i, n) => L.type === 'bg' ? .3 : .55 + .9 * i / Math.max(1, n - 1);
+function applyCam(c, cam, L, depth) {
+  const k = cam.par ? lerp(1, depth, cam.par) : 1, dx = cam.dx * k, dy = cam.dy * k, r = cam.r;
+  let s = 1 + (cam.s - 1) * k;
+  // o fundo sempre cobre o quadro: cresce o bastante para as bordas não aparecerem
+  if (L.type === 'bg') s = Math.max(s, 1 + 2 * Math.max(Math.abs(dx) / W(), Math.abs(dy) / H()) + Math.abs(r) * 2.2);
+  if (s === 1 && !dx && !dy && !r) return;
+  const cx = W() / 2, cy = H() / 2;
+  c.translate(cx + dx, cy + dy); if (r) c.rotate(r); c.scale(s, s); c.translate(-cx, -cy);
+}
+function camComposite(ctx, buf, cam) {
+  const w = buf.width, hh = buf.height;
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (cam.whip) {
+    // chicote: média de cópias deslocadas (rastro de lado); a borda que abre mostra o próprio quadro de novo
+    const v = cam.whip * w, len = cam.wblur * w, n = 9;
+    for (let j = 0; j < n; j++) {
+      const o = v + (j / (n - 1) - .5) * len;
+      ctx.globalAlpha = 1 / (j + 1);
+      ctx.drawImage(buf, o, 0); ctx.drawImage(buf, o - (o >= 0 ? w : -w), 0);
+    }
+  } else {
+    const b = cam.blur * (w / W()), k = 1 + b * 3 / Math.min(w, hh);
+    ctx.filter = `blur(${b.toFixed(2)}px)`;
+    ctx.drawImage(buf, -(k - 1) * w / 2, -(k - 1) * hh / 2, w * k, hh * k);
+  }
+  ctx.restore();
+}
+function drawFx(ctx, L, t, R) {
+  const P = FXS[L.fx], end = L.end ?? S.duration; if (!P || !P.draw || t < L.start || t > end) return;
+  // com mesclagem, a transição é desenhada inteira à parte (as faixas se sobrepõem) e só então mistura com o quadro
+  const bm = blendOf(L), buf = bm ? frameBuf(ctx.canvas, 6) : null, c = buf ? buf.getContext('2d') : ctx;
+  if (buf) { c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, buf.width, buf.height); c.setTransform(R.rs, 0, 0, R.rs, 0, 0); }
+  c.save(); c.globalAlpha = L.opacity ?? 1;
+  try { P.draw(c, L, (t - L.start) / Math.max(.05, end - L.start)); } catch (e) { console.error(e); }
+  c.restore();
+  if (buf) blendOnto(ctx, buf, bm);
+}
+
+/* ------------ sombra: a camada é desenhada à parte e volta com a sombra (acompanha fade, máscaras e animações) ------------ */
+const SHADOWS = {
+  none:  { label:'Sem sombra' },
+  soft:  { label:'Suave', blur:26, y:10, a:.4 },
+  close: { label:'Rente', blur:8, y:4, a:.55 },
+  float: { label:'Flutuante', blur:64, y:36, a:.5 },
+  hard:  { label:'Dura', x:10, y:10, a:1, solid:true },
+  glow:  { label:'Luz', blur:44, a:.95, glow:true },
+  long:  { label:'Longa', long:true, a:.3 },
+};
+const shadowColor = (L, sh) => hexA(L.shColor || autoShadowHex(L, L.shadow), sh.a);
+// a sombra cresce com o elemento (texto pequeno, sombra curta)
+const shadowK = L => { const b = L._bounds; return b ? clamp(Math.sqrt(Math.min(b.w, b.h) / 180), .45, 1.6) : 1; };
+function drawShadowed(tc, src, L, sh, rs) {
+  const k = shadowK(L) * rs;
+  tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0);
+  if (sh.long) {
+    // silhueta tingida, empilhada na diagonal numa tela à parte e aplicada com transparência
+    const tint = frameBuf(src, 2), x = tint.getContext('2d'), ext = frameBuf(src, 3), y = ext.getContext('2d');
+    x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-over'; x.clearRect(0, 0, tint.width, tint.height); x.drawImage(src, 0, 0);
+    x.globalCompositeOperation = 'source-in'; x.fillStyle = L.shColor || '#000000'; x.fillRect(0, 0, tint.width, tint.height); x.globalCompositeOperation = 'source-over';
+    y.setTransform(1, 0, 0, 1, 0, 0); y.clearRect(0, 0, ext.width, ext.height);
+    const n = 28, step = Math.max(.75, 3.4 * k);
+    for (let i = n; i >= 1; i--) y.drawImage(tint, i * step, i * step);
+    tc.globalAlpha = sh.a; tc.drawImage(ext, 0, 0); tc.globalAlpha = 1;
+  } else {
+    tc.shadowColor = shadowColor(L, sh); tc.shadowBlur = (sh.blur || 0) * k; tc.shadowOffsetX = (sh.x || 0) * k; tc.shadowOffsetY = (sh.y || 0) * k;
+  }
+  tc.drawImage(src, 0, 0);
+  tc.restore();
+}
+function drawLayerFx(tc, L, t, R, cam, depth, one) {
+  const sh = L.type !== 'bg' && L.shadow && L.shadow !== 'none' ? SHADOWS[L.shadow] : null, bm = blendOf(L);
+  const back = L.type === 'image' && L.move && L.move !== 'none' ? imageMotion(L, t) : null;
+  try {
+    if (!sh && !bm) { tc.save(); applyCam(tc, cam, L, depth); one(tc, L); tc.restore(); return; }
+    if (!phase(L, t)) return;
+    // sombra e mesclagem pedem a camada inteira pronta, à parte
+    const src = frameBuf(tc.canvas, 1), lc = src.getContext('2d');
+    lc.setTransform(1, 0, 0, 1, 0, 0); lc.clearRect(0, 0, src.width, src.height);
+    lc.setTransform(R.rs, 0, 0, R.rs, 0, 0); applyCam(lc, cam, L, depth); one(lc, L);
+    if (!bm) { drawShadowed(tc, src, L, sh, R.rs); return; }
+    // a sombra mistura junto com a camada (como no CSS e no Figma): primeiro camada + sombra, depois o modo
+    let out = src;
+    if (sh) {
+      out = frameBuf(src, 5); const oc = out.getContext('2d');
+      oc.setTransform(1, 0, 0, 1, 0, 0); oc.clearRect(0, 0, out.width, out.height);
+      drawShadowed(oc, src, L, sh, R.rs);
+    }
+    blendOnto(tc, out, bm);
+  } finally { if (back) Object.assign(L, back); }
+}
+
+/* ------------ grupo com animação própria ------------
+   Os itens do grupo são desenhados juntos numa tela à parte (cada um com a própria animação, sombra e câmera) e essa imagem
+   do conjunto é animada pelo preset do grupo (mesmo motor dos blocos: drawState). O pivô é o centro da caixa do conjunto em repouso.
+   Itens com mesclagem misturam só com o resto do grupo, não com o que está atrás dele. */
+function groupBox(gid, mem) {
+  const key = `${RT.rev}|${RT.imgRev}|${RT.fontsOk.size}|${S.format}|${mem.map(l => l.id).join()}`, c = RT.gBox.get(gid);
+  if (c && c.S === S && c.key === key) return c.b;
+  ensureBounds(mem, true); // posição de repouso de todos (quem não está na tela agora também conta)
+  const bs = mem.map(l => l._bounds).filter(Boolean); if (!bs.length) return null;
+  const x0 = Math.min(...bs.map(b => b.x)), y0 = Math.min(...bs.map(b => b.y));
+  const b = { x:x0, y:y0, w:Math.max(...bs.map(q => q.x + q.w)) - x0, h:Math.max(...bs.map(q => q.y + q.h)) - y0 };
+  if (bs.length === mem.length) RT.gBox.set(gid, { S, key, b }); // sem cache enquanto faltar medir alguém (logo ou imagem carregando)
+  return b;
+}
+function drawGroup(tc, gid, gp, els, t, R, cam, one) {
+  const mem = els.filter(l => l.grp === gid), buf = frameBuf(tc.canvas, 7), bc = buf.getContext('2d');
+  bc.setTransform(1, 0, 0, 1, 0, 0); bc.globalAlpha = 1; bc.filter = 'none'; bc.globalCompositeOperation = 'source-over';
+  bc.clearRect(0, 0, buf.width, buf.height); bc.setTransform(R.rs, 0, 0, R.rs, 0, 0);
+  mem.forEach(L => drawLayerFx(bc, L, t, R, cam, layerDepth(L, els.indexOf(L), els.length), one));
+  const B = groupBox(gid, mem);
+  const blit = (c, x, y) => c.drawImage(buf, 0, 0, buf.width, buf.height, x, y, W(), H());
+  if (!B) { tc.save(); blit(tc, 0, 0); tc.restore(); return; }
+  const ph = phase(gp, t), w = B.w + 48, hh = B.h + 48, cx = B.x + B.w / 2, cy = B.y + B.h / 2;
+  const key = ph.mode === 'in' ? gp.in : ph.mode === 'out' ? gp.out : null, P = key && BP[key] && BP[key].fn ? BP[key] : null;
+  const I = intOf(gp, ph.mode === 'out' ? 'out' : 'in'), dir = ph.mode === 'out' ? -1 : 1, seed = Math.floor(t * 24);
+  const stAt = q => {
+    const e = ph.mode === 'in' ? easeIn(P.ease, q, I) : easeOutPhase(P.ease, q, I);
+    return P.fn({ e, p:ph.mode === 'in' ? q : 1 - q, I, w, h:hh, dir, W:W(), seed });
+  };
+  const st = P ? stAt(ph.p) : {}, idl = idleState(gp, t - gp.start, ph, false, hh / 2);
+  const content = (c, s) => {
+    if (s.clip === 'bounds') { const padX = w * .35, padY = hh * .06; c.beginPath(); c.rect(-w / 2 - padX, -hh / 2 - padY, w + padX * 2, hh + padY * 2); c.clip(); }
+    if (s.cdy) c.translate(0, s.cdy);
+    blit(c, -cx, -cy);
+  };
+  const o = { piv:P && P.pivot ? (P.pivot === 'top' ? -hh / 2 : hh / 2) : 0, pad:80, color:S.brand.colors[2] };
+  tc.save(); tc.translate(cx, cy);
+  if (P && P.trail && ph.mode !== 'hold') for (let j = P.trail.n; j >= 1; j--) {
+    const q = ph.p - j * P.trail.lag; if (q <= 0) continue;
+    const sj = stAt(q);
+    drawState(tc, mergeSt({ ...sj, a:(sj.a ?? 1) * (1 - j / (P.trail.n + 1)) * .45 * trailFade(ph) }, idl), w, hh, R, content, o);
+  }
+  drawState(tc, mergeSt(st, idl), w, hh, R, content, o);
+  tc.restore();
+  tc.filter = 'none'; tc.globalAlpha = 1; tc.globalCompositeOperation = 'source-over';
+}
+
+/* ------------ movimento dentro da imagem (ao longo da barra inteira): muda zoom/ix/iy só enquanto desenha ------------ */
+const MOVES = { none:'Parada', in:'Aproximar', out:'Afastar', left:'Para a esquerda', right:'Para a direita', up:'Para cima', down:'Para baixo', scroll:'Rolar a tela' };
+function imageMotion(L, t) {
+  const G = geomNow(L); if (!G || !G.img) return null;
+  const iw = G.img.naturalWidth, ih = G.img.naturalHeight; if (!iw || !ih) return null;
+  // parte do enquadramento do formato aberto; o resultado vai em L._pan (lido por panOf) só enquanto desenha
+  const pn = panOf(L), back = { _pan:L._pan }, z0 = pn.zoom, end = L.end ?? S.duration;
+  const u = clamp((t - L.start) / Math.max(.1, end - L.start)), e = sinIO(u), A = .14 + .12 * intOf(L, 'idle');
+  // folga para andar sem mostrar a borda da imagem (em frações da máscara)
+  const room = z => { const k = Math.max(G.w / iw, G.h / ih) * z; return { x:Math.max(0, (iw * k / G.w - 1) / 2), y:Math.max(0, (ih * k / G.h - 1) / 2) }; };
+  const m = L.move; let { ix, iy } = pn, z = z0;
+  if (m === 'in') z = z0 * (1 + A * e);
+  else if (m === 'out') z = z0 * (1 + A * (1 - e));
+  else if (m === 'left' || m === 'right') { z = z0 * (1 + A * .7); ix = (m === 'left' ? 1 : -1) * room(z).x * .92 * (1 - 2 * e); }
+  else if (m === 'up' || m === 'down') { z = z0 * (1 + A * .7); iy = (m === 'up' ? 1 : -1) * room(z).y * .92 * (1 - 2 * e); }
+  else if (m === 'scroll') iy = room(z0).y * (1 - 2 * sinIO(clamp((u - .12) / .76)));
+  L._pan = { ix, iy, zoom:z };
+  return back;
+}
+
+/* ------------ moldura (celular, navegador) em volta da máscara da imagem; G = tamanho da máscara. Acompanha as animações ------------ */
+const DEVICES = { none:'Nenhuma', phone:'Celular', browser:'Navegador' };
+function drawDevice(ctx, L, G) {
+  if (L.type !== 'image' || !L.device || L.device === 'none') return;
+  const w = G.w, hh = G.h;
+  ctx.save();
+  if (L.device === 'phone') {
+    const b = w * .034, r = Math.min(L.radius || 0, w / 2);
+    ctx.lineWidth = b; ctx.strokeStyle = '#0C0D10';
+    rrect(ctx, -w / 2 - b / 2, -hh / 2 - b / 2, w + b, hh + b, r + b / 2); ctx.stroke();
+    ctx.lineWidth = Math.max(1, b * .16); ctx.strokeStyle = 'rgba(255,255,255,.28)';
+    rrect(ctx, -w / 2 - b, -hh / 2 - b, w + b * 2, hh + b * 2, r + b); ctx.stroke();
+    const iw = w * .3, ih = w * .085;
+    ctx.fillStyle = '#0C0D10'; rrect(ctx, -iw / 2, -hh / 2 + w * .035, iw, ih, ih / 2); ctx.fill();
+    ctx.fillStyle = '#23252B';
+    ctx.fillRect(w / 2 + b * .95, -hh * .2, b * .45, hh * .1);
+    ctx.fillRect(-w / 2 - b * 1.4, -hh * .27, b * .45, hh * .06); ctx.fillRect(-w / 2 - b * 1.4, -hh * .18, b * .45, hh * .06);
+  } else if (L.device === 'browser') {
+    const bh = w * .068, r = Math.min(Math.max(L.radius || 0, 10), bh), top = -hh / 2 - bh;
+    ctx.fillStyle = '#ECEDF0'; ctx.beginPath();
+    ctx.moveTo(-w / 2, -hh / 2 + 1); ctx.lineTo(-w / 2, top + r); ctx.arcTo(-w / 2, top, -w / 2 + r, top, r);
+    ctx.lineTo(w / 2 - r, top); ctx.arcTo(w / 2, top, w / 2, top + r, r); ctx.lineTo(w / 2, -hh / 2 + 1); ctx.closePath(); ctx.fill();
+    const cy = top + bh / 2, dr = bh * .13;
+    ['#FF5F57', '#FEBC2E', '#28C840'].forEach((c, i) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(-w / 2 + bh * .5 + i * dr * 3.2, cy, dr, 0, TAU); ctx.fill(); });
+    ctx.fillStyle = '#FFFFFF'; rrect(ctx, -w * .26, cy - bh * .27, w * .52, bh * .54, bh * .27); ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* ------------ marcas à mão sobre o texto: se desenham logo depois da entrada e somem na saída ------------ */
+const MARKS = { none:'Nenhuma', underline:'Sublinhar', double:'Sublinhado duplo', strike:'Riscar', circle:'Circular', box:'Caixa', arrow:'Seta', cross:'Xis' };
+// traços em volta do texto, no espaço do bloco (centro em 0,0). O tremido é fixo por camada (nada de aleatório no render)
+function markPaths(L, lay) {
+  const size = lay.size, bw = lay.blockW, bh = lay.blockH, sd = hashId(L.id);
+  const ph = k => rand(sd, k) * TAU;
+  const wob = (u, k, a) => (Math.sin(u * 7.1 + ph(k)) * .6 + Math.sin(u * 15.3 + ph(k + 1)) * .4) * a;
+  const seg = (x0, y0, x1, y1, bow, k, n = 28) => { const P = []; for (let i = 0; i <= n; i++) { const u = i / n; P.push([lerp(x0, x1, u) + wob(u, k + 5, size * .012), lerp(y0, y1, u) + Math.sin(u * Math.PI) * bow + wob(u, k, size * .022)]); } return P; };
+  const lines = lay.lines.filter(l => l.width > 0), out = [], m = L.mark;
+  if (m === 'underline' || m === 'double') lines.forEach((l, i) => {
+    const y = l.baseline + size * .17, x0 = l.x0 - size * .06, x1 = l.x0 + l.width + size * .1;
+    out.push(seg(x0, y + size * .02, x1, y - size * .03, size * .04, i * 3));
+    if (m === 'double') out.push(seg(x0 + size * .12, y + size * .15, x1 - size * .08, y + size * .1, size * .03, i * 3 + 1));
+  });
+  if (m === 'strike') lines.forEach((l, i) => { const y = l.baseline - size * .3; out.push(seg(l.x0 - size * .08, y + size * .07, l.x0 + l.width + size * .08, y - size * .07, -size * .02, i * 3)); });
+  if (m === 'cross') { const x = bw / 2 + size * .08, y = bh / 2 + size * .02; out.push(seg(-x, -y, x, y, size * .05, 1), seg(x, -y, -x, y, -size * .05, 2)); }
+  if (m === 'circle') {
+    const rx = bw / 2 + size * .42, ry = bh / 2 + size * .3, a0 = -2.5 + rand(sd, 9) * .3, n = 72, P = [];
+    for (let i = 0; i <= n; i++) { const u = i / n, a = a0 + u * TAU * 1.07, k = 1 + wob(u, 3, .035) + u * .04; P.push([Math.cos(a) * rx * k, -size * .04 + Math.sin(a) * ry * k]); }
+    out.push(P);
+  }
+  if (m === 'box') {
+    const x = bw / 2 + size * .28, y = bh / 2 + size * .2, o = size * .12;
+    out.push(seg(-x - o, -y, x + o * .5, -y - size * .02, size * .02, 1), seg(x, -y - o, x + size * .02, y + o * .5, size * .02, 2),
+      seg(x + o, y, -x - o * .5, y + size * .02, size * .02, 3), seg(-x, y + o, -x - size * .02, -y - o * .6, size * .02, 4));
+  }
+  if (m === 'arrow') {
+    const tx = -bw / 2 - size * .22, ty = size * .05, sx = tx - size * 1.1, sy = bh / 2 + size * .85, cx = tx - size * 1.05, cy = ty + size * .1, P = [];
+    for (let i = 0; i <= 30; i++) { const u = i / 30, q = 1 - u; P.push([q * q * sx + 2 * q * u * cx + u * u * tx + wob(u, 5, size * .015), q * q * sy + 2 * q * u * cy + u * u * ty + wob(u, 6, size * .015)]); }
+    const a = Math.atan2(ty - cy, tx - cx), hl = size * .3;
+    out.push(P, [[tx + Math.cos(a + 2.6) * hl, ty + Math.sin(a + 2.6) * hl], [tx, ty], [tx + Math.cos(a - 2.6) * hl, ty + Math.sin(a - 2.6) * hl]]);
+  }
+  return out.map(P => { let len = 0; for (let i = 1; i < P.length; i++) len += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]); return { P, len }; });
+}
+const MARKC = new Map();
+// chamada no fim de drawText, no espaço do bloco de texto (acompanha posição, escala e movimento contínuo)
+function drawMark(ctx, L, lay, ph, t, R) {
+  if (!L.mark || L.mark === 'none' || !MARKS[L.mark]) return;
+  const big = L.mark === 'circle' || L.mark === 'box' || L.mark === 'arrow', sp = spdOf(L, 'in') || 1;
+  const t0 = L.start + ph.inD * .8, md = (big ? .8 : .55) / sp;
+  let pr = Ease.cubicOut(clamp((t - t0) / md)), a = 1;
+  if (ph.mode === 'out') { pr *= 1 - clamp(ph.p * 1.5); a = 1 - clamp(ph.p * 1.4 - .3); }
+  if (pr <= 0 || a <= 0) return;
+  const key = [L.id, L.mark, lay.blockW.toFixed(1), lay.blockH.toFixed(1), lay.size, lay.nLines].join('|');
+  let paths = MARKC.get(key); if (!paths) { if (MARKC.size > 200) MARKC.clear(); paths = markPaths(L, lay); MARKC.set(key, paths); }
+  let left = pr * paths.reduce((s, p) => s + p.len, 0);
+  ctx.save(); ctx.globalAlpha *= a; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = L.markColor || S.brand.colors[2]; ctx.lineWidth = Math.max(2.5, lay.size * (big ? .06 : .075));
+  for (const { P } of paths) {
+    if (left <= 0) break;
+    ctx.beginPath(); ctx.moveTo(P[0][0], P[0][1]);
+    for (let i = 1; i < P.length && left > 0; i++) {
+      const d = Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
+      if (d <= left) { ctx.lineTo(P[i][0], P[i][1]); left -= d; }
+      else { const f = left / d; ctx.lineTo(lerp(P[i - 1][0], P[i][0], f), lerp(P[i - 1][1], P[i][1], f)); left = 0; }
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 /* ============================================================
@@ -1760,22 +2845,68 @@ function renderFrame(ctx, t, rs, isExport) {
    ============================================================ */
 const cv = $('#cv'), pctx = cv.getContext('2d');
 let RS = .5;
+/* Zoom do palco: RT.zoom = 1 cabe no espaço; maior rola (barras, Shift + roda, botão do meio), menor afasta e deixa mesa em volta.
+   As alças e contornos ficam num canvas à parte (#ov, do tamanho da área visível), então aparecem e pegam mesmo fora do quadro. */
+const ZMIN = .25, ZMAX = 8, STAGE_PAD = 36;
 function fitStage() {
   if (!S) return;
-  const box = $('#stageBox'); const pad = 40;
-  const bw = Math.max(100, box.clientWidth - pad), bh = Math.max(100, box.clientHeight - pad);
-  const k = Math.min(bw / W(), bh / H());
-  const cw = Math.floor(W() * k), ch = Math.floor(H() * k);
+  const box = $('#stageBox'), z = RT.zoom || 1;
+  const bw = Math.max(100, box.clientWidth - STAGE_PAD * 2), bh = Math.max(100, box.clientHeight - STAGE_PAD * 2);
+  const k = Math.min(bw / W(), bh / H()) * z;
+  const cw = Math.max(40, Math.floor(W() * k)), ch = Math.max(40, Math.floor(H() * k));
   cv.style.width = cw + 'px'; cv.style.height = ch + 'px';
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  RS = Math.min(1, (cw * dpr) / W());
+  RS = Math.min(1.5, (cw * dpr) / W());
   cv.width = Math.round(W() * RS); cv.height = Math.round(H() * RS);
-  needs = true;
+  RT.fitK = Math.min(bw / W(), bh / H());
+  updZoomUI(); needs = true;
 }
 new ResizeObserver(fitStage).observe($('#stageBox'));
+// zoom mantendo o ponto sob o cursor (ou o centro da área visível) no mesmo lugar
+function setZoom(z, cx, cy) {
+  z = clamp(z, ZMIN, ZMAX); if (Math.abs(z - 1) < .02) z = 1;
+  const sc = $('#stageScroll'), r = cv.getBoundingClientRect(), b = sc.getBoundingClientRect();
+  if (cx == null) { cx = b.left + sc.clientWidth / 2; cy = b.top + sc.clientHeight / 2; }
+  const u = (cx - r.left) / (r.width || 1), v = (cy - r.top) / (r.height || 1);
+  RT.zoom = z; fitStage();
+  const r2 = cv.getBoundingClientRect();
+  sc.scrollLeft += r2.left + u * r2.width - cx; sc.scrollTop += r2.top + v * r2.height - cy;
+  needs = true;
+}
+const zoomPct = () => Math.round((RT.fitK || 1) * (RT.zoom || 1) * 100);
+function updZoomUI() { const el = $('#zVal'); if (el) el.textContent = zoomPct() + '%'; }
+function zoomFit() { RT.zoom = 1; fitStage(); const sc = $('#stageScroll'); sc.scrollLeft = 0; sc.scrollTop = 0; }
+function zoom100() { setZoom(1 / (RT.fitK || 1)); }
+$('#zIn').addEventListener('click', () => setZoom((RT.zoom || 1) * 1.25));
+$('#zOut').addEventListener('click', () => setZoom((RT.zoom || 1) / 1.25));
+$('#zVal').addEventListener('click', () => (RT.zoom || 1) === 1 ? zoom100() : zoomFit());
+// Ctrl + roda (ou pinça do trackpad) faz zoom no ponto do cursor; a roda sozinha rola
+$('#stageBox').addEventListener('wheel', ev => {
+  if (!(ev.ctrlKey || ev.metaKey)) return;
+  ev.preventDefault();
+  const d = ev.deltaMode === 1 ? ev.deltaY * 33 : ev.deltaY;
+  setZoom((RT.zoom || 1) * Math.exp(clamp(-d * .0025, -.6, .6)), ev.clientX, ev.clientY);
+}, { passive:false });
+$('#stageScroll').addEventListener('scroll', () => { needs = true; });
+// botão do meio arrasta o palco
+function panStage(ev) {
+  const sc = $('#stageScroll'), x0 = ev.clientX, y0 = ev.clientY, l0 = sc.scrollLeft, t0 = sc.scrollTop;
+  ev.preventDefault(); $('#stageBox').style.cursor = 'grabbing';
+  const mv = e => { sc.scrollLeft = l0 - (e.clientX - x0); sc.scrollTop = t0 - (e.clientY - y0); };
+  const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); $('#stageBox').style.cursor = ''; };
+  addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+}
+$('#stageBox').addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); }); // sem a rolagem automática do navegador
 
+const ov = $('#ov'), octx = ov.getContext('2d');
 function drawOverlays() {
-  const ctx = pctx; ctx.save(); ctx.setTransform(RS, 0, 0, RS, 0, 0);
+  const sc = $('#stageScroll'), dpr = Math.min(2, window.devicePixelRatio || 1), vw = sc.clientWidth, vh = sc.clientHeight;
+  if (ov.width !== Math.round(vw * dpr) || ov.height !== Math.round(vh * dpr)) { ov.width = Math.round(vw * dpr); ov.height = Math.round(vh * dpr); ov.style.width = vw + 'px'; ov.style.height = vh + 'px'; }
+  const ctx = octx; ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, ov.width, ov.height);
+  const r = cv.getBoundingClientRect(), o = ov.getBoundingClientRect(), OS = dpr * r.width / W(); // OS = pixels do overlay por unidade do vídeo
+  const xf = [OS, 0, 0, OS, dpr * (r.left - o.left), dpr * (r.top - o.top)];
+  ctx.save(); ctx.setTransform(...xf);
+  ctx.beginPath(); ctx.rect(0, 0, W(), H()); ctx.clip(); // área segura e margem ficam dentro do quadro; o resto (alças, contornos) passa da borda
   if ($('#safe').checked && S.format === '9x16') {
     const w = W(), hh = H();
     ctx.fillStyle = 'rgba(229,118,106,.16)';
@@ -1787,47 +2918,89 @@ function drawOverlays() {
   }
   const M = marginBox();
   if (M && !playing) {
-    ctx.setLineDash([12, 10]); ctx.lineWidth = 1.5 / RS; ctx.strokeStyle = 'rgba(111,211,166,.7)';
+    ctx.setLineDash([12, 10]); ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = 'rgba(111,211,166,.7)';
     ctx.strokeRect(M.x0, M.y0, M.x1 - M.x0, M.y1 - M.y0); ctx.setLineDash([]);
   }
+  ctx.restore(); ctx.save(); ctx.setTransform(...xf);
   const ub = selUnion();
   if (!playing) for (const o of S.layers) {
     if ((o.id === RT.selected && !ub) || o.type === 'bg' || !o._bounds || !o.visible || !RT.picks || !RT.picks.has(o.id) || !phase(o, T)) continue;
     const b = o._bounds, p = 14;
-    ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / RS; ctx.strokeStyle = 'rgba(242,182,50,.55)';
+    ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.55)';
     ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2); ctx.setLineDash([]);
   }
   const L = S.layers.find(l => l.id === RT.selected);
   const hdl = q => { const s = hRad() * .75; ctx.fillStyle = '#F2B632'; ctx.strokeStyle = '#101115'; ctx.lineWidth = hRad() / 11 * 1.5; ctx.fillRect(q.x - s, q.y - s, s * 2, s * 2); ctx.strokeRect(q.x - s, q.y - s, s * 2, s * 2); };
   if (!playing && ub) {
-    const p = 14; ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / RS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
+    const p = 14; ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
     ctx.strokeRect(ub.x - p, ub.y - p, ub.w + p * 2, ub.h + p * 2); ctx.setLineDash([]);
     handlesOf(L).forEach(hdl);
   } else if (!playing && L && L.type !== 'bg' && L._bounds && L.visible) {
     const ph = phase(L, T);
     if (ph) {
       const b = L._bounds, p = 14;
-      ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / RS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
+      ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
       ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
       ctx.setLineDash([]); const s = hRad() * .75;
       handlesOf(L).forEach(q => { ctx.fillStyle = '#F2B632'; ctx.strokeStyle = '#101115'; ctx.lineWidth = hRad() / 11 * 1.5; ctx.fillRect(q.x - s, q.y - s, s * 2, s * 2); ctx.strokeRect(q.x - s, q.y - s, s * 2, s * 2); });
     }
   }
   if (RT.guide) {
-    ctx.setLineDash([]); ctx.lineWidth = 2 / RS;
+    ctx.setLineDash([]); ctx.lineWidth = 2 / OS;
     for (const g of RT.guide) { ctx.strokeStyle = g.c; ctx.beginPath(); ctx.moveTo(g.x0, g.y0); ctx.lineTo(g.x1, g.y1); ctx.stroke(); }
   }
+  // largura máx. do texto enquanto arrasta a alça lateral: onde as linhas quebram
+  if (RT.drag && RT.drag.mode === 'rs' && RT.drag.how === 'tw' && RT.drag.L._bounds) {
+    const D = RT.drag, b = D.L._bounds, cx = b.x + b.w / 2, hw = D.L.maxW * W() * D.k / 2;
+    ctx.setLineDash([8, 8]); ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = 'rgba(143,176,255,.9)';
+    ctx.beginPath(); ctx.moveTo(cx - hw, 0); ctx.lineTo(cx - hw, H()); ctx.moveTo(cx + hw, 0); ctx.lineTo(cx + hw, H()); ctx.stroke(); ctx.setLineDash([]);
+  }
+  const px = W() / (cv.getBoundingClientRect().width || 1); // 1 px da tela em unidades do vídeo
+  // passar o mouse (no palco, na lista ou na timeline): contorno fino e o nome, para saber quem vai ser clicado
+  const hv = !playing && !RT.drag && RT.hover && !isPicked(RT.hover) ? S.layers.find(l => l.id === RT.hover) : null;
+  if (hv && hv.type !== 'bg' && hv.visible && hv._bounds && phase(hv, T)) {
+    const b = hv._bounds, p = 6 * px;
+    ctx.setLineDash([]); ctx.lineWidth = 1.5 * px; ctx.strokeStyle = 'rgba(242,182,50,.85)';
+    ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
+    ctx.font = `600 ${11 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(hv.name).width, th = 18 * px, ty = b.y - p - th - 3 * px < 0 ? b.y + b.h + p + 3 * px : b.y - p - th - 3 * px;
+    ctx.fillStyle = '#F2B632'; rrect(ctx, b.x - p, ty, tw + 12 * px, th, 4 * px); ctx.fill();
+    ctx.fillStyle = '#1B1403'; ctx.fillText(hv.name, b.x - p + 6 * px, ty + th / 2);
+  }
+  // seleção por área: retângulo e quem vai entrar nela
+  if (RT.marq) {
+    const r = RT.marq;
+    for (const o of marqHits(r)) { const b = o._bounds; ctx.setLineDash([]); ctx.lineWidth = 1.5 * px; ctx.strokeStyle = 'rgba(242,182,50,.85)'; ctx.strokeRect(b.x, b.y, b.w, b.h); }
+    ctx.fillStyle = 'rgba(242,182,50,.08)'; ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.setLineDash([]); ctx.lineWidth = 1 * px; ctx.strokeStyle = 'rgba(242,182,50,.9)'; ctx.strokeRect(r.x, r.y, r.w, r.h);
+  }
   ctx.restore();
+}
+// aviso no palco: a camada selecionada não aparece neste momento (ou está oculta), com o atalho para resolver
+function updStageHint() {
+  const el = $('#stageHint'), L = selL(), els = S.layers.filter(l => l.type !== 'bg');
+  let msg = null, act = null;
+  if (!playing && !RT.exporting) {
+    if (!els.length) { msg = 'Arquivo vazio. Arraste uma imagem para cá ou'; act = ['Adicionar título', () => addLayer(ADD_KINDS[0].mk(S.brand, S.brand.fonts))]; }
+    else if (L && L.type !== 'bg' && !L.visible) { msg = `Camada oculta: ${L.name}`; act = ['Mostrar', () => { pushUndo(); L.visible = true; changed({ layers:true }); }]; }
+    else if (L && L.type !== 'bg' && !phase(L, T)) { msg = T < L.start ? `${L.name} ainda não apareceu neste momento (entra em ${fmtSec(L.start)})` : `${L.name} já saiu neste momento (sai em ${fmtSec(L.end ?? S.duration)})`; act = ['Ver no palco', () => seekLayer(L)]; }
+  }
+  const key = msg ? (L && L.id) + msg : '';
+  if (el._k === key) return; el._k = key;
+  el.hidden = !msg; el.innerHTML = '';
+  if (msg) el.append(h('span', { text:msg }), h('button', { type:'button', text:act[0], onclick:act[1] }));
 }
 let lastNow = performance.now();
 function tick(now) {
   const dt = Math.min(.1, (now - lastNow) / 1000); lastNow = now;
   if (playing && !RT.exporting) {
     T += dt;
-    if (T >= S.duration) { if (S.loop) T = T % S.duration; else { T = S.duration; playing = false; updPlay(); } }
+    if (RT.stopAt != null && T >= RT.stopAt) { T = RT.stopAt; pause(); } // "Ver entrada/saída": toca só o trecho
+    else if (T >= S.duration) { if (S.loop) T = T % S.duration; else { T = S.duration; playing = false; updPlay(); } }
     needs = true;
   }
-  if (needs && !RT.exporting) { renderFrame(pctx, T, RS, false); drawOverlays(); updTime(); needs = false; }
+  syncMedia(); // vídeos e trilha acompanham a agulha
+  if (needs && !RT.exporting) { renderFrame(pctx, T, RS, false); drawOverlays(); updTime(); updStageHint(); needs = false; }
   requestAnimationFrame(tick);
 }
 const fmtT = s => { s = Math.max(0, s); const m = Math.floor(s / 60), ss = Math.floor(s % 60), f = Math.floor((s % 1) * fps()); return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}<span>:${String(f).padStart(2, '0')}</span>`; };
@@ -1839,18 +3012,33 @@ function updTime() {
 const ICON_PLAY = '<svg viewBox="0 0 14 14" fill="currentColor"><path d="M3 1.5v11l9.5-5.5z"/></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 14 14" fill="currentColor"><rect x="2.5" y="1.5" width="3.2" height="11" rx=".6"/><rect x="8.3" y="1.5" width="3.2" height="11" rx=".6"/></svg>';
 function updPlay() { const b = $('#play'); b.innerHTML = playing ? ICON_PAUSE : ICON_PLAY; b.setAttribute('aria-label', playing ? 'Pausar' : 'Tocar'); }
-function play(from) { if (from != null) T = from; if (T >= S.duration - .01) T = 0; playing = true; updPlay(); needs = true; }
-function pause() { playing = false; updPlay(); needs = true; }
+function play(from, until) { if (from != null) T = from; if (T >= S.duration - .01) T = 0; RT.stopAt = until ?? null; playing = true; updPlay(); needs = true; }
+function pause() { playing = false; RT.stopAt = null; updPlay(); needs = true; }
 // nada toca sozinho: só a barra de espaço e o botão ▶. As ações só levam a agulha (pausada) a um quadro útil.
 function restTime(L) {
   const ph = phase(L, L.start) || { inD:0, outD:0 }, end = L.end ?? S.duration;
-  return clamp(Math.min(L.start + ph.inD + .05, end - ph.outD - .02), L.start, Math.max(L.start, end - .02));
+  let r = clamp(Math.min(L.start + ph.inD + .05, end - ph.outD - .02), L.start, Math.max(L.start, end - .02));
+  // item de grupo animado: só assenta depois da entrada do grupo (e o grupo, depois de todos os itens)
+  const gp = L.grp && gAnimOn(L.grp) && gpseudo(L.grp);
+  if (gp) { const g = phase(gp, gp.start) || { inD:0, outD:0 }; r = Math.min(Math.max(r, Math.min(gp.start + g.inD + .05, gp.end - g.outD - .02)), Math.max(L.start, end - .02)); }
+  if (L.__g) { const mem = S.layers.filter(l => l.grp === L.__g && l.visible); if (mem.length) r = clamp(Math.max(r, ...mem.map(restTime)), L.start, S.duration - .02); }
+  return r;
 }
 function seekLayer(L) { pause(); T = clamp(restTime(L), 0, S.duration); needs = true; }
 function seekOut(L) { pause(); const ph = phase(L, L.start) || { outD:0 }, end = L.end ?? S.duration; T = clamp(end - ph.outD * .5, 0, S.duration); needs = true; }
+// "Ver entrada" / "Ver saída": toca só o trecho da camada uma vez e para (pedido explícito, com botão)
+function previewIn(L) { play(Math.max(0, L.start - .25), Math.min(L.end ?? S.duration, restTime(L) + .45)); }
+function previewOut(L) {
+  const ph = phase(L, L.start) || { outD:0 }, end = L.end ?? S.duration;
+  play(clamp(end - ph.outD - .6, L.start, S.duration), Math.min(S.duration - .001, end + .35));
+}
+// quadro a quadro (vírgula/ponto, setas com o fundo selecionado); Shift anda 1 s
+function stepFrames(n) { pause(); const f = fps(); T = clamp((Math.round(T * f) + n) / f, 0, S.duration); RT.userSeek = true; needs = true; }
+const lastFrame = () => Math.max(0, (Math.round(S.duration * fps()) - 1) / fps());
+const fmtSec = v => v.toFixed(1).replace('.', ',') + 's';
 // quadro em que tudo que está na tela já entrou
 function heroTime() {
-  const els = S.layers.filter(l => l.type !== 'bg' && l.visible);
+  const els = S.layers.filter(l => l.type !== 'bg' && l.visible && !NOBOX(l)); // câmera e transição não contam
   if (!els.length) return 0;
   const t = Math.max(...els.map(restTime));
   return clamp(t, 0, S.duration - .02);
@@ -1860,68 +3048,114 @@ function heroTime() {
 function stagePt(ev) { const r = cv.getBoundingClientRect(); return { x:(ev.clientX - r.left) / r.width * W(), y:(ev.clientY - r.top) / r.height * H() }; }
 function hitTest(pt) {
   for (let i = S.layers.length - 1; i >= 0; i--) {
-    const L = S.layers[i]; if (!L.visible || L.type === 'bg' || !L._bounds) continue;
+    const L = S.layers[i]; if (!L.visible || L.locked || L.type === 'bg' || !L._bounds) continue;
     if (!phase(L, T)) continue;
     const b = L._bounds, p = 16;
     if (pt.x >= b.x - p && pt.x <= b.x + b.w + p && pt.y >= b.y - p && pt.y <= b.y + b.h + p) return L;
   }
   return null;
 }
-// alças: canto = escala tudo; lateral/baixo = largura/altura da máscara da imagem
+// alças: canto = escala tudo; lateral/baixo = largura/altura da máscara da imagem; lateral do texto = largura máx. (quebra de linha)
 const hRad = () => 11 * W() / (cv.getBoundingClientRect().width || 1);
 const masked = L => L.type === 'image' && (L.mask === 'rect' || L.mask === 'circle');
 const resizable = L => masked(L) || L.type === 'shape' && L.kind !== 'custom' && L.kind !== 'line';
 // caixa que envolve toda a seleção (grupo ou vários), só das camadas que estão na tela agora
 function selUnion() {
-  const ls = pickedLayers().filter(o => o._bounds && o.visible && phase(o, T)); if (!ls.length || pickedLayers().length < 2) return null;
+  const ls = freePicked().filter(o => o._bounds && o.visible && phase(o, T)); if (!ls.length || pickedLayers().length < 2) return null;
   const x0 = Math.min(...ls.map(o => o._bounds.x)), y0 = Math.min(...ls.map(o => o._bounds.y));
   return { x:x0, y:y0, w:Math.max(...ls.map(o => o._bounds.x + o._bounds.w)) - x0, h:Math.max(...ls.map(o => o._bounds.y + o._bounds.h)) - y0, ls };
 }
+// Oito alças em todo elemento (e na seleção de vários): canto = escala tudo de uma vez a partir do canto oposto; lado = depende do tipo
+// (imagem com máscara e forma: só largura ou só altura; texto: largura de quebra nas laterais; linha: comprimento e espessura; o resto escala).
+// Alt ao arrastar escala a partir do centro. [hx, hy] = para que lado a alça puxa.
+const HDIR = { nw:[-1, -1], n:[0, -1], ne:[1, -1], e:[1, 0], se:[1, 1], s:[0, 1], sw:[-1, 1], w:[-1, 0] };
+const HCUR = { nw:'nwse-resize', se:'nwse-resize', ne:'nesw-resize', sw:'nesw-resize', n:'ns-resize', s:'ns-resize', e:'ew-resize', w:'ew-resize' };
 function handlesOf(L) {
-  const ub = playing ? null : selUnion(); if (ub) return [{ k:'corner', grp:true, x:ub.x + ub.w + 14, y:ub.y + ub.h + 14 }];
-  if (!L || L.type === 'bg' || !L._bounds || !L.visible || playing || !phase(L, T)) return [];
-  const b = L._bounds, p = 14, x1 = b.x + b.w + p, y1 = b.y + b.h + p;
-  const hs = [{ k:'corner', x:x1, y:y1 }];
-  if (resizable(L)) hs.push({ k:'w', x:x1, y:b.y + b.h / 2 }, { k:'h', x:b.x + b.w / 2, y:y1 });
-  return hs;
+  const ub = playing ? null : selUnion(), p = 14;
+  if (!ub && (!L || L.type === 'bg' || L.locked || !L._bounds || !L.visible || playing || !phase(L, T))) return [];
+  const b = ub || L._bounds, x0 = b.x - p, y0 = b.y - p, x1 = b.x + b.w + p, y1 = b.y + b.h + p, mx = b.x + b.w / 2, my = b.y + b.h / 2;
+  const at = { nw:[x0, y0], n:[mx, y0], ne:[x1, y0], e:[x1, my], se:[x1, y1], s:[mx, y1], sw:[x0, y1], w:[x0, my] };
+  const min = hRad() * 1.9; // alça de lado que encostaria nas de canto some (elemento pequeno no zoom baixo)
+  return Object.keys(HDIR).filter(k => !(HDIR[k][0] === 0 && b.w / 2 + p < min) && !(HDIR[k][1] === 0 && b.h / 2 + p < min))
+    .map(k => ({ k, hx:HDIR[k][0], hy:HDIR[k][1], x:at[k][0], y:at[k][1], grp:!!ub }));
 }
-function handleAt(pt) { const r = hRad() * 1.3; return handlesOf(selL()).find(q => Math.abs(pt.x - q.x) <= r && Math.abs(pt.y - q.y) <= r) || null; }
+function handleAt(pt) {
+  const r = hRad() * 1.3, d = q => Math.hypot(pt.x - q.x, pt.y - q.y);
+  return handlesOf(selL()).filter(q => Math.abs(pt.x - q.x) <= r && Math.abs(pt.y - q.y) <= r).sort((a, b) => d(a) - d(b))[0] || null;
+}
+// devolve a escala que valeu de fato (os limites e o arredondamento do tamanho podem segurar um pouco)
 function scaleLayer(L, s0, f) {
-  if (L.type === 'text') { L.size = Math.round(clamp(s0.size * f, 12, 600)); RT.layout.clear(); }
-  else if (L.type === 'cta') { L.size = Math.round(clamp(s0.size * f, 12, 200)); L.padX = Math.round(s0.padX * f); L.padY = Math.round(s0.padY * f); }
-  else { L.size = clamp(s0.size * f, .03, 1.6); if (s0.mh != null) L.mh = clamp(s0.mh * f, .03, 2.6); }
+  if (L.type === 'text') { L.size = Math.round(clamp(s0.size * f, 6, 600)); RT.layout.clear(); return L.size / s0.size; }
+  if (L.type === 'cta') { L.size = Math.round(clamp(s0.size * f, 8, 200)); L.padX = Math.round(s0.padX * f); L.padY = Math.round(s0.padY * f); return L.size / s0.size; }
+  L.size = clamp(s0.size * f, .03, 1.6); if (s0.mh != null) L.mh = clamp(s0.mh * f, .03, 2.6);
+  return L.size / s0.size;
+}
+// começa a puxar uma alça (vale no quadro e na mesa em volta dele)
+function startResize(ev, pt, hd) {
+  const grp = hd.grp, L = selL(), b = grp ? selUnion() : L._bounds; if (!b) return;
+  pushUndo();
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2, { hx, hy } = hd;
+  let how = 'uni'; // uni = escala tudo; wid/hei = só largura/altura; tw = largura de quebra do texto; thick = espessura da linha
+  if (!grp) {
+    if (resizable(L)) how = hy === 0 ? 'wid' : hx === 0 ? 'hei' : 'uni';
+    else if (L.type === 'shape' && L.kind === 'line') how = hy === 0 ? 'wid' : hx === 0 ? 'thick' : 'uni';
+    else if (L.type === 'text' && hy === 0) how = 'tw';
+    if (resizable(L) && L.mh == null) L.mh = (S.format === baseFmt() ? b.h : blockGeom(L).h) / W(); // fora do principal a altura na tela pode estar esticada
+  }
+  const items = (grp ? freePicked().filter(o => o._bounds) : [L]).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y, ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2, s0:{ ...size0(o), strokeW:o.strokeW } }; });
+  RT.drag = { L, mode:'rs', how, hx, hy, pt0:pt, items, off:{ x:pt.x - hd.x, y:pt.y - hd.y }, b0:{ w:b.w, h:b.h }, C:{ x:cx, y:cy }, g0:grp ? null : geomNow(L),
+    A:{ x:cx - hx * b.w / 2, y:cy - hy * b.h / 2 }, H0:{ x:cx + hx * b.w / 2, y:cy + hy * b.h / 2 }, s0:items[0].s0, k:b.k || 1, bw:b.w / (b.k || 1) };
+  cv.setPointerCapture(ev.pointerId);
+}
+// puxa a alça: o lado oposto fica parado (Alt: o centro fica parado)
+function resizeTo(D, pt, ev) {
+  const p = 14, { hx, hy, L } = D, alt = ev.altKey, q0 = D.items[0], span = alt ? 2 : 1;
+  const ex = pt.x - D.off.x - hx * p, ey = pt.y - D.off.y - hy * p; // onde a borda puxada está agora
+  const A = alt ? D.C : D.A;
+  if (D.how === 'tw') { L.maxW = +clamp((D.bw + 2 * hx * (pt.x - D.pt0.x) / D.k + 1) / W(), .1, 1).toFixed(4); return; }
+  if (D.how === 'wid' || D.how === 'hei' || D.how === 'thick') {
+    const dist = hx ? (ex - A.x) * hx : (ey - A.y) * hy;
+    // fora do formato principal a máscara muda só neste formato (fpos ww/hh, px do bloco antes da escala)
+    if (D.how === 'wid') {
+      let aw; // largura que valeu de fato
+      if (fmtOwn()) { aw = clamp(span * dist, 8, W() * 3); setFmt(L, { ww:+(D.g0.w * aw / D.b0.w).toFixed(2) }); }
+      else { L.size = clamp(D.s0.size * Math.max(8, span * dist) / D.b0.w, .03, 1.6); aw = D.b0.w * L.size / D.s0.size; }
+      setPos(L, +(q0.x0 + ((alt ? 0 : A.x + hx * aw / 2 - D.C.x)) / W()).toFixed(4), null);
+    } else {
+      let ah;
+      if (D.how === 'hei' && fmtOwn()) { ah = clamp(span * dist, 8, W() * 3); setFmt(L, { hh:+(D.g0.h * ah / D.b0.h).toFixed(2) }); }
+      else if (D.how === 'hei') { L.mh = clamp(D.s0.mh * Math.max(8, span * dist) / D.b0.h, .03, 2.6); ah = D.b0.h * L.mh / D.s0.mh; }
+      else { const s = Math.max(4, D.s0.strokeW || 8); L.strokeW = clamp(Math.round(s * Math.max(2, span * dist) / D.b0.h), 1, 80); ah = D.b0.h * Math.max(4, L.strokeW) / s; }
+      setPos(L, null, +(q0.y0 + ((alt ? 0 : A.y + hy * ah / 2 - D.C.y)) / H()).toFixed(4));
+    }
+    return;
+  }
+  const vx = D.H0.x - A.x, vy = D.H0.y - A.y;
+  const f = Math.max(.05, hx && hy ? ((ex - A.x) * vx + (ey - A.y) * vy) / (vx * vx + vy * vy) : hx ? (ex - A.x) / vx : (ey - A.y) / vy);
+  for (const q of D.items) {
+    const a = scaleAny(q.o, q.s0, f);
+    setPos(q.o, +(q.x0 + (A.x + (q.ox - A.x) * a - q.ox) / W()).toFixed(4), +(q.y0 + (A.y + (q.oy - A.y) * a - q.oy) / H()).toFixed(4));
+  }
 }
 cv.addEventListener('pointerdown', ev => {
+  if (ev.button === 1) { panStage(ev); return; }
   if (ev.button === 2) return; // botão direito abre o menu (contextmenu)
   const pt = stagePt(ev), hd = handleAt(pt);
-  if (hd && hd.grp) {
-    const ub = selUnion(); pushUndo();
-    const cx = ub.x + ub.w / 2, cy = ub.y + ub.h / 2;
-    RT.drag = { L:selL(), mode:'gcorner', cx, cy, d0:Math.max(1, Math.hypot(pt.x - cx, pt.y - cy)),
-      items:pickedLayers().filter(o => o._bounds).map(o => ({ o, s0:{ size:o.size, mh:o.mh, padX:o.padX, padY:o.padY }, ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2 })) };
-    cv.setPointerCapture(ev.pointerId); return;
-  }
-  if (hd) {
-    const L = selL(), b = L._bounds; pushUndo();
-    if (resizable(L) && L.mh == null) L.mh = b.h / W();
-    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-    RT.drag = { L, mode:hd.k, pt0:pt, cx, cy, d0:Math.max(1, Math.hypot(pt.x - cx, pt.y - cy)), s0:{ size:L.size, mh:L.mh, padX:L.padX, padY:L.padY } };
-    cv.setPointerCapture(ev.pointerId); return;
-  }
+  if (hd) { startResize(ev, pt, hd); return; }
   const L = hitTest(pt);
-  if (!L) { if (ev.shiftKey) return; const bg = S.layers.find(l => l.type === 'bg'); if (bg) select(bg.id); return; } // Shift errando o clique não solta a seleção
+  if (!L) { marquee(ev); return; } // no vazio: arrastar seleciona por área; só um clique solta a seleção (com Shift, não)
   if (ev.shiftKey) { toggleSel(L); return; }
   const only = ev.ctrlKey || ev.metaKey, grp = isPicked(L.id) && pickedLayers().length > 1 && !only;
   if (only) select(L.id, true);
   else if (grp) { RT.selected = L.id; renderLayers(); renderProps(); needs = true; } else select(L.id);
   pushUndo();
-  if (ev.altKey && L.type === 'image') RT.drag = { L, mode:'pan', pt0:pt, ix0:L.ix || 0, iy0:L.iy || 0, bw:L._bounds.w, bh:L._bounds.h };
-  else RT.drag = { L, mode:'move', tap:grp, pxy:[ev.clientX, ev.clientY], ox:pt.x - L.x * W(), oy:pt.y - L.y * H(), others:pickedLayers().filter(o => o !== L).map(o => ({ o, x0:o.x, y0:o.y })), x0:L.x, y0:L.y, ...snapSetup() };
+  if (ev.altKey && L.type === 'image') { const pn = panOf(L); RT.drag = { L, mode:'pan', pt0:pt, ix0:pn.ix, iy0:pn.iy, bw:L._bounds.w, bh:L._bounds.h }; }
+  else { const p = posOf(L); RT.drag = { L, mode:'move', tap:grp, pxy:[ev.clientX, ev.clientY], ox:pt.x - p.x * W(), oy:pt.y - p.y * H(), others:freePicked().filter(o => o !== L).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y }; }), x0:p.x, y0:p.y, ...snapSetup() }; }
   cv.setPointerCapture(ev.pointerId);
 });
 // Guias ao arrastar: bordas e centro da seleção contra os elementos fora dela, o quadro e a margem (Ctrl desliga; Shift trava num eixo)
 function snapSetup() {
-  const mv = pickedLayers().filter(o => o._bounds && o.visible);
+  const mv = freePicked().filter(o => o._bounds && o.visible);
   if (!mv.length) return {};
   const x0 = Math.min(...mv.map(o => o._bounds.x)), y0 = Math.min(...mv.map(o => o._bounds.y));
   const b0 = { x:x0, y:y0, w:Math.max(...mv.map(o => o._bounds.x + o._bounds.w)) - x0, h:Math.max(...mv.map(o => o._bounds.y + o._bounds.h)) - y0 };
@@ -1948,19 +3182,16 @@ function snapMove(D, dx, dy) {
 cv.addEventListener('pointermove', ev => {
   const pt = stagePt(ev);
   if (!RT.drag) {
-    const hd = handleAt(pt);
-    cv.style.cursor = hd ? { corner:'nwse-resize', w:'ew-resize', h:'ns-resize' }[hd.k] : hitTest(pt) ? (ev.altKey && hitTest(pt).type === 'image' ? 'all-scroll' : 'move') : '';
+    if (RT.marq) return;
+    const hd = handleAt(pt), ht = hitTest(pt);
+    cv.style.cursor = hd ? HCUR[hd.k] : ht ? (ev.altKey && ht.type === 'image' ? 'all-scroll' : 'move') : '';
+    setHover(hd ? null : ht && ht.id);
     return;
   }
   const D = RT.drag, L = D.L;
   if (D.tap && Math.hypot(ev.clientX - D.pxy[0], ev.clientY - D.pxy[1]) > 3) D.tap = false;
-  if (D.mode === 'gcorner') {
-    const f = Math.max(.05, Math.hypot(pt.x - D.cx, pt.y - D.cy) / D.d0);
-    for (const q of D.items) { scaleLayer(q.o, q.s0, f); q.o.x = +((D.cx + (q.ox - D.cx) * f) / W()).toFixed(4); q.o.y = +((D.cy + (q.oy - D.cy) * f) / H()).toFixed(4); }
-  } else if (D.mode === 'corner') scaleLayer(L, D.s0, Math.max(.05, Math.hypot(pt.x - D.cx, pt.y - D.cy) / D.d0));
-  else if (D.mode === 'w') L.size = clamp(D.s0.size + 2 * (pt.x - D.pt0.x) / W(), .03, 1.6);
-  else if (D.mode === 'h') L.mh = clamp(D.s0.mh + 2 * (pt.y - D.pt0.y) / W(), .03, 2.6);
-  else if (D.mode === 'pan') { L.ix = clamp(D.ix0 + (pt.x - D.pt0.x) / D.bw, -2, 2); L.iy = clamp(D.iy0 + (pt.y - D.pt0.y) / D.bh, -2, 2); }
+  if (D.mode === 'rs') resizeTo(D, pt, ev); // largura de quebra do texto ('tw'): parte da largura real do bloco (não da máx.), senão o começo do arrasto não faz nada; +1 px para não quebrar no empate
+  else if (D.mode === 'pan') setPan(L, clamp(D.ix0 + (pt.x - D.pt0.x) / D.bw, -2, 2), clamp(D.iy0 + (pt.y - D.pt0.y) / D.bh, -2, 2));
   else {
     let x = (pt.x - D.ox) / W(), y = (pt.y - D.oy) / H();
     RT.guide = null;
@@ -1974,7 +3205,7 @@ cv.addEventListener('pointermove', ev => {
     const its = [{ o:L, x0:D.x0, y0:D.y0 }, ...(D.others || [])];
     const ddx = clamp(x - D.x0, Math.max(...its.map(q => -.2 - q.x0)), Math.min(...its.map(q => 1.2 - q.x0)));
     const ddy = clamp(y - D.y0, Math.max(...its.map(q => -.2 - q.y0)), Math.min(...its.map(q => 1.2 - q.y0)));
-    for (const q of its) { q.o.x = +(q.x0 + ddx).toFixed(4); q.o.y = +(q.y0 + ddy).toFixed(4); }
+    for (const q of its) setPos(q.o, +(q.x0 + ddx).toFixed(4), +(q.y0 + ddy).toFixed(4));
     syncPosFields(L);
   }
   needs = true;
@@ -1982,11 +3213,12 @@ cv.addEventListener('pointermove', ev => {
 // roda do mouse sobre a imagem selecionada: zoom da imagem dentro da máscara
 let wheelT = null;
 cv.addEventListener('wheel', ev => {
-  const L = selL(); if (!L || L.type !== 'image' || !L._bounds) return;
+  if (ev.ctrlKey || ev.metaKey) return; // Ctrl + roda é o zoom do palco (#stageBox)
+  const L = selL(); if (!L || L.type !== 'image' || L.locked || !L._bounds) return;
   const pt = stagePt(ev), b = L._bounds; if (pt.x < b.x || pt.x > b.x + b.w || pt.y < b.y || pt.y > b.y + b.h) return;
   ev.preventDefault();
   if (!wheelT) pushUndo();
-  L.zoom = clamp((L.zoom ?? 1) * (ev.deltaY < 0 ? 1.06 : 1 / 1.06), .2, 5); needs = true;
+  setFrame(L, { zoom:clamp(panOf(L).zoom * (ev.deltaY < 0 ? 1.06 : 1 / 1.06), .2, 5) }); needs = true; // fora do principal, só neste formato
   clearTimeout(wheelT); wheelT = setTimeout(() => { wheelT = null; changed({ props:true }); }, 350);
 }, { passive:false });
 const endDrag = () => {
@@ -1996,13 +3228,70 @@ const endDrag = () => {
   if (tap) select(tap.id);
   changed({ props:!mv });
 };
-cv.addEventListener('dblclick', ev => { const L = hitTest(stagePt(ev)); if (L && L.grp) select(L.id, true); });
-cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', endDrag);
-// toque na área cinza em volta do palco: tira a seleção (fica o fundo)
-$('.stage').addEventListener('pointerdown', e => {
-  if (e.target.closest('#cv') || e.button === 2) return;
-  const bg = S.layers.find(l => l.type === 'bg'); if (bg) select(bg.id);
+// clique duplo: dentro de um grupo escolhe só o item; num texto ou botão, vai direto editar o texto
+cv.addEventListener('dblclick', ev => {
+  const L = hitTest(stagePt(ev)); if (!L) return;
+  if (L.grp && pickedLayers().length > 1) { select(L.id, true); return; }
+  editText(L);
 });
+cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', endDrag);
+cv.addEventListener('pointerleave', () => setHover(null));
+// área cinza em volta do palco: arrastar seleciona por área, um clique tira a seleção (fica o fundo)
+// (as alças da seleção também pegam aqui: elas passam da borda do quadro)
+const onScrollbar = e => { const sc = $('#stageScroll'); if (e.target !== sc) return false; const r = sc.getBoundingClientRect(); return e.clientX - r.left >= sc.clientWidth || e.clientY - r.top >= sc.clientHeight; };
+$('#stageBox').addEventListener('pointerdown', e => {
+  if (e.target.closest('#cv') || e.target.closest('#stageHint')) return;
+  if (e.button === 1) { panStage(e); return; }
+  if (e.button !== 0 || onScrollbar(e)) return;
+  const pt = stagePt(e), hd = handleAt(pt);
+  if (hd) { startResize(e, pt, hd); return; }
+  marquee(e);
+});
+$('#stageBox').addEventListener('pointermove', e => {
+  if (RT.drag || RT.marq || e.target.closest('#cv') || e.target.closest('#stageHint')) return;
+  const hd = handleAt(stagePt(e)); $('#stageBox').style.cursor = hd ? HCUR[hd.k] : '';
+});
+function selectBg() { const bg = S.layers.find(l => l.type === 'bg'); if (bg) select(bg.id); }
+function setHover(id) { id = id || null; if (RT.hover !== id) { RT.hover = id; needs = true; } }
+// camadas na tela que encostam no retângulo (um grupo entra inteiro)
+function marqHits(r) {
+  return S.layers.filter(o => o.type !== 'bg' && o.visible && !o.locked && o._bounds && phase(o, T) &&
+    o._bounds.x < r.x + r.w && o._bounds.x + o._bounds.w > r.x && o._bounds.y < r.y + r.h && o._bounds.y + o._bounds.h > r.y);
+}
+function marquee(ev) {
+  const p0 = stagePt(ev), add = ev.shiftKey, x0 = ev.clientX, y0 = ev.clientY;
+  let moved = false;
+  const mv = e => {
+    if (!moved && Math.hypot(e.clientX - x0, e.clientY - y0) < 4) return;
+    moved = true; const p = stagePt(e);
+    RT.marq = { x:Math.min(p0.x, p.x), y:Math.min(p0.y, p.y), w:Math.abs(p.x - p0.x), h:Math.abs(p.y - p0.y) }; needs = true;
+  };
+  const up = () => {
+    removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+    const r = RT.marq; RT.marq = null; needs = true;
+    if (!moved || !r) { if (!add) selectBg(); return; } // Shift errando o clique não solta a seleção
+    const hits = marqHits(r);
+    if (!hits.length) { if (!add) selectBg(); return; }
+    const ids = new Set(add ? [...(RT.picks || [])].filter(id => S.layers.some(l => l.id === id && l.type !== 'bg')) : []);
+    if (add && selL() && selL().type !== 'bg') ids.add(RT.selected);
+    hits.forEach(o => groupOf(o).forEach(m => ids.add(m.id)));
+    RT.picks = ids; RT.selected = hits[hits.length - 1].id;
+    renderLayers(); renderProps(); needs = true;
+  };
+  addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+}
+// abre a edição do texto (clique duplo no palco ou Enter): aba de conteúdo, texto todo selecionado
+function editText(L) {
+  if (!L || L.type === 'bg') return;
+  if (lockedNote(L)) return;
+  if (propTab !== 'style') { propTab = 'style'; renderProps(); }
+  if (L.type !== 'text' && L.type !== 'cta') return;
+  const ph = phase(L, T); if (!ph || ph.mode !== 'hold') seekLayer(L); // com o texto inteiro na tela
+  const el = document.getElementById(fid(L, 'text')); if (!el) return;
+  el.focus();
+  if (el.isContentEditable) { const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+  else el.select();
+}
 
 /* ============================================================
    Desfazer, salvar automático, projetos
@@ -2078,7 +3367,7 @@ async function flushSave() {
   if (!$('#files').hidden) renderFiles();
 }
 function changed(opts = {}) {
-  needs = true; autosave();
+  RT.rev++; needs = true; autosave();
   refreshBars();
   if (opts.layers) renderLayers();
   if (opts.props) renderProps();
@@ -2251,16 +3540,25 @@ async function pickConfig(w, hh) {
   return null;
 }
 let cancelExport = false;
-async function encodeWebCodecs(canvas, ctx, w, hh, N, prog) {
+async function encodeWebCodecs(canvas, ctx, w, hh, N, prog, mix) {
   if (!window.Mp4Muxer) return null;
   const pick = await pickConfig(w, hh); if (!pick) return null;
-  const muxer = new Mp4Muxer.Muxer({ target:new Mp4Muxer.ArrayBufferTarget(), video:{ codec:pick.mux, width:w, height:hh, frameRate:fps() }, fastStart:'in-memory' });
+  // trilha: codifica antes (AAC, senão Opus); se falhar, o vídeo sai sem som em vez de não sair
+  const apick = mix ? await pickAudio(mix.sampleRate) : null;
+  let achunks = null;
+  if (apick) try { achunks = await encodeAudio(mix, apick); } catch (e) { console.warn('áudio falhou', e); achunks = null; }
+  const opt = { target:new Mp4Muxer.ArrayBufferTarget(), video:{ codec:pick.mux, width:w, height:hh, frameRate:fps() }, fastStart:'in-memory', firstTimestampBehavior:'offset' };
+  if (achunks) opt.audio = { codec:apick.mux, sampleRate:mix.sampleRate, numberOfChannels:2 };
+  const muxer = new Mp4Muxer.Muxer(opt);
+  if (achunks) for (const [c, m] of achunks) muxer.addAudioChunk(c, m);
   let err = null;
   const enc = new VideoEncoder({ output:(chunk, meta) => muxer.addVideoChunk(chunk, meta), error:e => { err = e; } });
   enc.configure(pick.cfg);
   for (let i = 0; i < N; i++) {
     if (cancelExport) { try { enc.close(); } catch (e) {} return 'cancel'; }
-    renderFrame(ctx, i / fps(), 1, true);
+    const t = i / fps();
+    await seekVideos(t);
+    renderExportFrame(ctx, t);
     const vf = new VideoFrame(canvas, { timestamp:Math.round(i * 1e6 / fps()), duration:Math.round(1e6 / fps()) });
     enc.encode(vf, { keyFrame:i % (fps() * 2) === 0 }); vf.close();
     while (enc.encodeQueueSize > 6) await sleep(1);
@@ -2269,7 +3567,8 @@ async function encodeWebCodecs(canvas, ctx, w, hh, N, prog) {
   }
   await enc.flush(); if (err) throw err;
   muxer.finalize(); enc.close();
-  return { blob:new Blob([muxer.target.buffer], { type:'video/mp4' }), ext:'mp4', codec:(pick.cfg.codec.startsWith('avc1.64') ? 'H.264 High' : pick.cfg.codec.startsWith('avc') ? 'H.264' : 'VP9') + ` · ${(pick.cfg.bitrate / 1e6).toFixed(1)} Mbps` };
+  return { blob:new Blob([muxer.target.buffer], { type:'video/mp4' }), ext:'mp4', audio:!!achunks,
+    codec:(pick.cfg.codec.startsWith('avc1.64') ? 'H.264 High' : pick.cfg.codec.startsWith('avc') ? 'H.264' : 'VP9') + ` · ${(pick.cfg.bitrate / 1e6).toFixed(1)} Mbps` + (achunks ? ` · ${apick.mux === 'aac' ? 'AAC' : 'Opus'}` : mix ? ' · sem som (o navegador não codificou o áudio)' : '') };
 }
 async function encodeRecorder(canvas, ctx, prog) {
   if (!canvas.captureStream || !window.MediaRecorder) return null;
@@ -2285,36 +3584,457 @@ async function encodeRecorder(canvas, ctx, prog) {
   const ext = mime.includes('mp4') ? 'mp4' : 'webm';
   return { blob:new Blob(chunks, { type:mime.split(';')[0] }), ext, codec:ext === 'mp4' ? 'H.264 (tempo real)' : 'WebM (tempo real)' };
 }
-async function exportVideo() {
-  pause(); RT.exporting = true; cancelExport = false;
+// um vídeo do jeito que S está agora (formato e variação já aplicados)
+async function renderVideo(prog) {
   const w = W(), hh = H(), N = Math.round(S.duration * fps());
-  const m = $('#modal'); m.hidden = false; $('#mTitle').textContent = 'Exportando vídeo';
-  $('#mVideo').hidden = true; $('#mSave').hidden = true; $('#mBar').style.width = '0%';
-  $('#mMeta').textContent = `${w}×${hh} · ${fps()} fps · ${S.duration}s`;
-  $('#mClose').textContent = 'Cancelar';
-  await document.fonts.ready;
+  await document.fonts.ready; await videosReady();
   const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = hh;
   const ctx = canvas.getContext('2d');
-  const prog = p => { $('#mBar').style.width = (p * 100).toFixed(1) + '%'; };
+  let mix = null;
+  if (hasAudio()) try { mix = await buildMix(48000); } catch (e) { console.warn('trilha falhou', e); }
   let res = null;
-  try { res = await encodeWebCodecs(canvas, ctx, w, hh, N, prog); } catch (e) { console.warn('WebCodecs falhou', e); res = null; }
-  if (res === 'cancel') { RT.exporting = false; m.hidden = true; needs = true; return; }
-  if (!res) { $('#mMeta').textContent += ' · gravando em tempo real'; try { res = await encodeRecorder(canvas, ctx, prog); } catch (e) { res = null; } }
-  RT.exporting = false; needs = true; $('#mClose').textContent = 'Fechar';
-  if (cancelExport) { m.hidden = true; return; }
-  if (!res) { $('#mTitle').textContent = 'Este navegador não exporta vídeo'; $('#mMeta').textContent = 'Use o Chrome ou o Edge atualizados.'; return; }
+  try { res = await encodeWebCodecs(canvas, ctx, w, hh, N, prog, mix); } catch (e) { console.warn('WebCodecs falhou', e); res = null; }
+  if (res === 'cancel' || cancelExport) return 'cancel';
+  if (!res) { $('#mMeta').textContent += ' · gravando em tempo real, sem som'; try { res = await encodeRecorder(canvas, ctx, prog); } catch (e) { res = null; } }
+  return res;
+}
+const fileSafe = s => String(s || '').replace(/[\\/:*?"<>|]+/g, '-').trim().slice(0, 40) || 'versao';
+// vários vídeos: numa pasta escolhida (Chrome/Edge) ou um download para cada
+async function saveOut(dir, blob, fname) {
+  if (dir) { try { const fh = await dir.getFileHandle(fname, { create:true }), wr = await fh.createWritable(); await wr.write(blob); await wr.close(); return; } catch (e) { console.warn(e); } }
+  await saveFile(blob, fname); await sleep(400);
+}
+// fmts = formatos; vars = [null (o arquivo como está), ...linhas de variação]
+async function runExport(fmts, vars) {
+  const jobs = []; for (const v of vars) for (const f of fmts) jobs.push({ f, v });
+  if (!jobs.length) return;
+  const many = jobs.length > 1;
+  let dir = null;
+  if (many && window.showDirectoryPicker) {
+    try { dir = await window.showDirectoryPicker({ id:'mola-export', mode:'readwrite' }); }
+    catch (e) { if (e && e.name === 'AbortError') return; dir = null; }
+  }
+  if (saveT) await flushSave();
+  pause(); RT.exporting = true; cancelExport = false;
+  const fmt0 = S.format, m = $('#modal');
+  if (!FORMATS[S.base] && hasContent()) S.base = fmt0; // os outros formatos se reorganizam a partir do aberto
+  m.hidden = false; $('#mTitle').textContent = many ? `Exportando ${jobs.length} vídeos` : 'Exportando vídeo';
+  $('#mVideo').hidden = true; $('#mSave').hidden = true; $('#mBar').style.width = '0%'; $('#mClose').textContent = 'Cancelar';
+  const prog = p => { $('#mBar').style.width = (clamp(p) * 100).toFixed(1) + '%'; };
+  const done = []; let fail = false, last = null;
+  try {
+    for (let j = 0; j < jobs.length && !cancelExport; j++) {
+      const { f, v } = jobs[j]; S.format = f; RT.layout.clear();
+      $('#mMeta').textContent = `${many ? `${j + 1} de ${jobs.length} · ` : ''}${v ? v.name + ' · ' : ''}${W()}×${H()} · ${fps()} fps · ${S.duration}s${(MBLUR[S.mblur] || MBLUR.off).n > 1 ? ' · desfoque de movimento' : ''}`;
+      const res = await withVariant(v, () => renderVideo(p => prog((j + p) / jobs.length)));
+      if (res === 'cancel' || cancelExport) break;
+      if (!res) { fail = true; break; }
+      const nm = outName(), fname = `${v ? nm.replace(/-(\d+x\d+)$/, `-${fileSafe(v.name)}-$1`) : nm}.${res.ext}`;
+      last = { ...res, fname, w:W(), hh:H() };
+      if (many) { await saveOut(dir, res.blob, fname); done.push(fname); }
+    }
+  } finally { S.format = fmt0; RT.layout.clear(); RT.exporting = false; needs = true; fitStage(); }
+  $('#mClose').textContent = 'Fechar';
+  if (cancelExport) { m.hidden = true; if (done.length) toast(`${done.length} vídeo${done.length > 1 ? 's' : ''} salvo${done.length > 1 ? 's' : ''} antes de cancelar`); return; }
+  if (fail || !last) { $('#mTitle').textContent = 'Este navegador não exporta vídeo'; $('#mMeta').textContent = 'Use o Chrome ou o Edge atualizados.'; return; }
   prog(1);
+  if (many) { $('#mTitle').textContent = `${done.length} vídeos prontos`; $('#mMeta').textContent = dir ? `Salvos na pasta "${dir.name}".` : 'Cada vídeo foi baixado separado.'; return; }
   if (lastExport?.url) URL.revokeObjectURL(lastExport.url);
-  const fname = `mola-${(S.template || 'anuncio')}-${FORMATS[S.format].label.replace(':', 'x')}.${res.ext}`;
-  lastExport = { ...res, url:URL.createObjectURL(res.blob), fname };
+  lastExport = { ...last, url:URL.createObjectURL(last.blob) };
   $('#mTitle').textContent = 'Vídeo pronto';
-  $('#mMeta').textContent = `${w}×${hh} · ${fps()} fps · ${res.codec} · ${(res.blob.size / 1048576).toFixed(1)} MB`;
-  const v = $('#mVideo'); v.src = lastExport.url; v.hidden = false;
-  $('#mSave').hidden = false; $('#mSave').textContent = `Salvar ${res.ext.toUpperCase()}`;
+  $('#mMeta').textContent = `${last.w}×${last.hh} · ${fps()} fps · ${last.codec} · ${(last.blob.size / 1048576).toFixed(1)} MB`;
+  const vid = $('#mVideo'); vid.src = lastExport.url; vid.hidden = false;
+  $('#mSave').hidden = false; $('#mSave').textContent = `Salvar ${last.ext.toUpperCase()}`;
+}
+// Exportar: escolhe formatos, variações e desfoque de movimento (lembra a última escolha do arquivo)
+function exportVideo() {
+  if (RT.exporting || document.querySelector('.xsheet')) return;
+  pause();
+  const ex = S.export || {}, rows = varRows();
+  const fm = new Set((ex.fmts || [S.format]).filter(f => FORMATS[f])); if (!fm.size) fm.add(S.format);
+  let all = !!ex.vars && rows.length > 0, mb = MBLUR[S.mblur] ? S.mblur : 'off';
+  const close = () => ov.remove();
+  const count = () => fm.size * (all ? rows.length + 1 : 1);
+  const summary = h('p', { class:'hint xsum' });
+  const go = h('button', { class:'btn primary', onclick:() => {
+    S.export = { fmts:[...fm], vars:all }; S.mblur = mb; autosave(); close();
+    runExport(Object.keys(FORMATS).filter(f => fm.has(f)), all ? [null, ...rows] : [null]);
+  } });
+  const upd = () => {
+    const n = count();
+    summary.textContent = `${n} vídeo${n > 1 ? 's' : ''}, ${hasAudio() ? 'com som' : 'sem som'}.${n > 1 ? (window.showDirectoryPicker ? ' Você escolhe a pasta onde salvar.' : ' Cada um baixa separado.') : ''}`;
+    go.textContent = n > 1 ? `Exportar ${n} vídeos` : 'Exportar MP4';
+  };
+  const chips = (opts, isOn, onPick) => {
+    const w = h('div', { class:'chips' });
+    const draw = () => { w.innerHTML = ''; opts.forEach(([k, t]) => w.append(h('button', { class:'chip', 'aria-pressed':String(isOn(k)), onclick:() => { onPick(k); draw(); upd(); } }, [h('span', { text:t })]))); };
+    draw(); return w;
+  };
+  const card = h('div', { class:'files-card xcard', role:'dialog', 'aria-modal':'true', 'aria-label':'Exportar' }, [
+    h('div', { class:'files-head' }, [h('h2', { text:'Exportar' }), h('div', { class:'spacer' }), h('button', { class:'btn small ghost', text:'Fechar', onclick:close })]),
+    h('h3', { text:'Formatos' }),
+    chips(Object.entries(FORMATS).map(([k, f]) => [k, f.label]), k => fm.has(k), k => { if (fm.has(k)) { if (fm.size > 1) fm.delete(k); } else fm.add(k); }),
+    h('p', { class:'hint', text:`Cada formato se reorganiza a partir do ${fmtLabel(baseFmt())} (o principal): os blocos ficam juntos, o que encosta na margem continua nela e a foto muda de recorte para ocupar o espaço. O que você ajustou num formato fica só nele.` }),
+    h('h3', { text:'Variações de texto' }),
+    rows.length ? chips([['one', 'Só a atual'], ['all', `Todas (${rows.length + 1})`]], k => (k === 'all') === all, k => { all = k === 'all'; })
+      : h('p', { class:'hint', text:'Nenhuma variação ainda. Crie em "Variações", no topo, para exportar várias versões de uma vez.' }),
+    h('h3', { text:'Desfoque de movimento' }),
+    chips(Object.entries(MBLUR).map(([k, v]) => [k, v.label]), k => k === mb, k => { mb = k; }),
+    h('p', { class:'hint', text:'Dá rastro de câmera de cinema às molas, deslizes e zooms. A exportação fica mais lenta.' }),
+    summary,
+    h('div', { class:'row', style:'justify-content:flex-end' }, [h('button', { class:'btn', text:'Cancelar', onclick:close }), go]),
+  ]);
+  const ov = h('div', { class:'files xsheet', onpointerdown:e => { if (e.target === ov) close(); }, onkeydown:e => { e.stopPropagation(); if (e.key === 'Escape') close(); } }, [card]);
+  document.body.append(ov); upd(); go.focus();
 }
 $('#export').onclick = exportVideo;
+// nome dos arquivos exportados: nome do arquivo + formato (ex.: "Promo junho-4x5")
+const outName = () => `${(FILES.name || 'mola').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'mola'}-${FORMATS[S.format].label.replace(':', 'x')}`;
+// quadro da agulha em PNG, na resolução do vídeo (capa, miniatura, post estático)
+async function saveFramePng() {
+  pause(); await document.fonts.ready; await seekVideos(T);
+  const c = document.createElement('canvas'); c.width = W(); c.height = H();
+  renderFrame(c.getContext('2d'), T, 1, true); needs = true;
+  const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+  if (!blob) { toast('Não consegui gerar a imagem'); return; }
+  saveFile(blob, `${outName()}-${T.toFixed(1).replace('.', ',')}s.png`);
+}
+$('#pngBtn').onclick = saveFramePng;
 $('#mClose').onclick = () => { if (RT.exporting) { cancelExport = true; return; } $('#modal').hidden = true; const v = $('#mVideo'); v.pause(); };
 $('#mSave').onclick = () => lastExport && saveFile(lastExport.blob, lastExport.fname);
+
+/* ------------ desfoque de movimento (só na exportação): média de quadros dentro do obturador ------------
+   Só para a frente a partir do quadro, então o granulado (que muda por quadro) não borra. A média progressiva
+   (cada subquadro com alfa 1/(k+1)) mantém exatamente igual o que está parado. */
+const MBLUR = { off:{ label:'Nenhum', n:1 }, soft:{ label:'Suave', n:6, sh:.35 }, cine:{ label:'Cinema', n:12, sh:.5 } };
+function renderExportFrame(ctx, t) {
+  const mb = MBLUR[S.mblur] || MBLUR.off;
+  renderFrame(ctx, t, 1, true);
+  if (mb.n < 2) return;
+  const sub = frameBuf(ctx.canvas, 4), sc = sub.getContext('2d'), dt = mb.sh / fps() / mb.n;
+  for (let k = 1; k < mb.n; k++) {
+    renderFrame(sc, t + k * dt, 1, true);
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1 / (k + 1); ctx.drawImage(sub, 0, 0); ctx.restore();
+  }
+}
+
+/* ============================================================
+   Mídia pesada: música e vídeo ficam no IndexedDB ('media:<id>'), fora do JSON do projeto
+   (o desfazer e o autosave não copiam megabytes a cada mudança). O .json exportado não leva esses arquivos.
+   ============================================================ */
+const MEDIA = new Map(); // id → objectURL
+async function putMedia(file) {
+  const id = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  if (!(await DB.set('media:' + id, file))) throw new Error('Não sobrou espaço no navegador para guardar esse arquivo');
+  MEDIA.set(id, URL.createObjectURL(file));
+  return id;
+}
+async function mediaUrl(id) {
+  if (MEDIA.has(id)) return MEDIA.get(id);
+  const b = await DB.get('media:' + id); if (!b) return null;
+  const u = URL.createObjectURL(b); MEDIA.set(id, u); return u;
+}
+
+/* ------------ vídeo dentro da camada de imagem: L.video = id da mídia, L.src = pôster (1º quadro).
+   Mudo, repete se for mais curto que a camada. Um elemento <video> por camada ------------ */
+const VIDS = new Map(); // id da camada → { el, ok, media }
+function videoEl(L) {
+  let v = VIDS.get(L.id);
+  if (v && v.media !== L.video) { v.el.removeAttribute('src'); v.el.load(); VIDS.delete(L.id); v = null; }
+  if (!v) {
+    const el = document.createElement('video');
+    el.muted = true; el.playsInline = true; el.preload = 'auto';
+    Object.defineProperty(el, 'naturalWidth', { get:() => el.videoWidth });
+    Object.defineProperty(el, 'naturalHeight', { get:() => el.videoHeight });
+    v = { el, ok:false, media:L.video }; VIDS.set(L.id, v);
+    el.addEventListener('loadeddata', () => { v.ok = true; needs = true; });
+    el.addEventListener('seeked', () => { needs = true; });
+    mediaUrl(L.video).then(u => { if (u) el.src = u; else v.missing = true; });
+  }
+  return v.ok ? v.el : null;
+}
+function vidTime(L, t, el) {
+  const d = el.duration || L.vdur || 1, vt = Math.max(0, t - L.start);
+  return vt < d - .02 ? vt : vt % d;
+}
+// prévia: toca junto quando o palco toca; pausado, fica no quadro da agulha
+function syncVideos() {
+  for (const [id, v] of VIDS) {
+    const L = S.layers.find(l => l.id === id);
+    if (!L || L.video !== v.media) { v.el.pause(); v.el.removeAttribute('src'); v.el.load(); VIDS.delete(id); continue; }
+    const el = v.el; if (!v.ok) continue;
+    if (!L.visible || !phase(L, T) || RT.exporting) { if (!el.paused) el.pause(); continue; }
+    const vt = vidTime(L, T, el);
+    if (playing) {
+      if (el.paused) el.play().catch(() => {});
+      if (Math.abs(el.currentTime - vt) > .25) el.currentTime = vt;
+    } else {
+      if (!el.paused) el.pause();
+      if (Math.abs(el.currentTime - vt) > .02 && !el.seeking) el.currentTime = vt;
+    }
+  }
+}
+// exportação e PNG: cada vídeo exatamente no quadro t
+async function seekVideos(t) {
+  const jobs = [];
+  for (const L of S.layers) {
+    if (!L.video || L.type !== 'image' || !L.visible || !phase(L, t)) continue;
+    const v = VIDS.get(L.id); if (!v || !v.ok) continue;
+    const el = v.el; if (!el.paused) el.pause();
+    const vt = vidTime(L, t, el); if (Math.abs(el.currentTime - vt) < .0005 && !el.seeking) continue;
+    jobs.push(new Promise(res => { let ok = false; const fin = () => { if (ok) return; ok = true; el.removeEventListener('seeked', fin); res(); }; el.addEventListener('seeked', fin); el.currentTime = vt; setTimeout(fin, 2500); }));
+  }
+  await Promise.all(jobs);
+}
+async function videosReady() {
+  const ls = S.layers.filter(L => L.video && L.type === 'image' && L.visible); ls.forEach(L => videoEl(L));
+  const t0 = performance.now();
+  while (ls.some(L => { const v = VIDS.get(L.id); return v && !v.ok && !v.missing; }) && performance.now() - t0 < 8000) await sleep(50);
+}
+function videoPoster(url) {
+  return new Promise((res, rej) => {
+    const el = document.createElement('video'); el.muted = true; el.preload = 'auto';
+    el.onerror = () => rej(new Error('Não consegui abrir esse vídeo. Tente MP4 (H.264) ou WebM.'));
+    el.onloadeddata = () => { el.currentTime = Math.min(.1, (el.duration || 1) / 2); };
+    el.onseeked = () => {
+      const k = Math.min(1, 720 / el.videoWidth), c = document.createElement('canvas');
+      c.width = Math.round(el.videoWidth * k); c.height = Math.round(el.videoHeight * k);
+      c.getContext('2d').drawImage(el, 0, 0, c.width, c.height);
+      res({ src:c.toDataURL('image/jpeg', .82), w:el.videoWidth, h:el.videoHeight, dur:el.duration });
+    };
+    el.src = url;
+  });
+}
+const isVid = f => f && /^video\//.test(f.type);
+const isAud = f => f && (/^audio\//.test(f.type) || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(f.name || ''));
+async function addVideoFile(f, pos) {
+  if (!f) return;
+  toast('Abrindo o vídeo…');
+  try {
+    const id = await putMedia(f), p = await videoPoster(await mediaUrl(id)), size = .8;
+    const L = mkImage({ name:f.name ? f.name.replace(/\.[^.]+$/, '') : 'Vídeo', video:id, src:p.src, vdur:p.dur, mask:'rect', radius:24, size, mh:+(size * p.h / p.w).toFixed(4), in:'fade', inDur:BP.fade.dur, y:.5 });
+    await getImage(L.src);
+    addLayer(L, pos || {});
+    toast(p.dur < (L.end ?? S.duration) - L.start - .05 ? `Vídeo adicionado. Ele tem ${fmtSec(p.dur)} e repete até a camada sair` : 'Vídeo adicionado');
+  } catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
+}
+
+/* ============================================================
+   Trilha: música (batidas detectadas) e efeitos sonoros automáticos nas entradas
+   S.audio = { id, name, dur, vol, from:'zero'|'beat'|'peak', bpm, beats:[s na música], peaks:[0..1 a cada 0,1 s], firstLoud, peakAt }
+   S.sfx = 'off' | 'soft' | 'punchy'. A mistura é feita num OfflineAudioContext: igual na prévia e no MP4.
+   ============================================================ */
+const MUSIC = new Map(); // id da mídia → AudioBuffer
+async function musicBuffer(id) {
+  if (MUSIC.has(id)) return MUSIC.get(id);
+  const u = await mediaUrl(id); if (!u) return null;
+  const buf = await new OfflineAudioContext(2, 1, 48000).decodeAudioData(await (await fetch(u)).arrayBuffer());
+  MUSIC.set(id, buf); return buf;
+}
+// batidas: força de ataque (subidas de energia, graves pesam mais) → andamento por autocorrelação → fase da grade
+async function analyzeMusic(buf) {
+  const sr = buf.sampleRate, n = buf.length, hop = Math.round(sr / 100), F = Math.floor(n / hop);
+  const off = new OfflineAudioContext(1, n, sr), src = off.createBufferSource(), lp = off.createBiquadFilter();
+  src.buffer = buf; lp.type = 'lowpass'; lp.frequency.value = 160; src.connect(lp); lp.connect(off.destination); src.start();
+  const low = (await off.startRendering()).getChannelData(0), chs = [];
+  for (let c = 0; c < buf.numberOfChannels; c++) chs.push(buf.getChannelData(c));
+  const eF = new Float32Array(F), eL = new Float32Array(F);
+  for (let f = 0; f < F; f++) {
+    let a = 0, b = 0;
+    for (let i = f * hop, e = i + hop; i < e; i++) { let s = 0; for (const c of chs) s += c[i]; s /= chs.length; a += s * s; b += low[i] * low[i]; }
+    eF[f] = a / hop; eL[f] = b / hop;
+  }
+  const lg = v => Math.log(1e-7 + v), on = new Float32Array(F), on2 = new Float32Array(F);
+  for (let f = 1; f < F; f++) on[f] = Math.max(0, lg(eL[f]) - lg(eL[f - 1])) + .6 * Math.max(0, lg(eF[f]) - lg(eF[f - 1]));
+  let acc = 0; const WN = 30;
+  for (let f = 0; f < F; f++) { acc += on[f]; if (f >= WN) acc -= on[f - WN]; on2[f] = Math.max(0, on[f] - acc / Math.min(f + 1, WN)); }
+  const lo = Math.round(6000 / 180), hi = Math.round(6000 / 70), ac = new Float32Array(hi + 2);
+  for (let L = lo - 1; L <= hi + 1; L++) { let s = 0; for (let f = 0; f + L < F; f++) s += on2[f] * on2[f + L]; ac[L] = s; }
+  let best = -1, bl = 50;
+  for (let L = lo; L <= hi; L++) { const bpm = 6000 / L, w = Math.exp(-.5 * Math.pow(Math.log2(bpm / 120) / .8, 2)), v = ac[L] * w; if (v > best) { best = v; bl = L; } }
+  const y0 = ac[bl - 1], y1 = ac[bl], y2 = ac[bl + 1], dd = y0 - 2 * y1 + y2, per = bl + (dd ? clamp(.5 * (y0 - y2) / dd, -.5, .5) : 0);
+  let bp = 0, bs = -1;
+  for (let p = 0; p < Math.ceil(per); p++) { let s = 0; for (let x = p; x < F; x += per) { const i = Math.round(x); s += (on2[i] || 0) + .5 * ((on2[i - 1] || 0) + (on2[i + 1] || 0)); } if (s > bs) { bs = s; bp = p; } }
+  const beats = []; for (let x = bp; x < F; x += per) beats.push(Math.round(x * hop / sr * 1000) / 1000);
+  // energia a cada 0,1 s (desenho da onda na timeline e escolha do começo)
+  const bins = Math.ceil(F / 10), rms = new Float32Array(bins); let mx = 1e-9;
+  for (let b = 0; b < bins; b++) { let s = 0, k = 0; for (let f = b * 10; f < Math.min(F, b * 10 + 10); f++) { s += eF[f]; k++; } rms[b] = Math.sqrt(s / Math.max(1, k)); mx = Math.max(mx, rms[b]); }
+  const peaks = [...rms].map(v => Math.round(v / mx * 100) / 100);
+  const firstLoud = beats.find(b => (peaks[Math.floor(b * 10)] || 0) > .3) ?? 0;
+  let peakAt = 0, pv = -1;
+  for (let b = 0; b + 40 <= bins; b++) { let s = 0; for (let k = b; k < b + 40; k++) s += peaks[k]; if (s > pv) { pv = s; peakAt = b / 10; } }
+  const before = beats.filter(b => b <= peakAt + .05);
+  return { bpm:Math.round(6000 / per), beats, peaks, firstLoud, peakAt:before.length ? before[before.length - 1] : 0 };
+}
+async function setMusicFile(f) {
+  if (!f) return;
+  toast('Analisando a música…', 10000);
+  try {
+    const id = await putMedia(f), buf = await musicBuffer(id), an = await analyzeMusic(buf);
+    pushUndo();
+    S.audio = { id, name:(f.name || 'Música').replace(/\.[^.]+$/, ''), dur:+buf.duration.toFixed(3), vol:.8, from:'beat', bpm:an.bpm, beats:an.beats, peaks:an.peaks, firstLoud:an.firstLoud, peakAt:an.peakAt };
+    changed(); renderAudio(); renderTimeline();
+    toast(`${S.audio.name}: ${an.bpm} bpm. A timeline agora gruda nas batidas.`, 4000);
+  } catch (e) { console.warn(e); toast('Não consegui ler esse áudio. Tente MP3, WAV ou M4A.'); }
+}
+// onde a música começa: do início, na primeira batida com som ou na parte mais forte
+const audioSkip = () => { const A = S.audio; return !A ? 0 : A.from === 'beat' ? A.firstLoud || 0 : A.from === 'peak' ? A.peakAt || 0 : 0; };
+// batidas no tempo do vídeo (a música repete se for mais curta)
+function beatTimes() {
+  const A = S.audio; if (!A || !A.beats || !A.beats.length) return [];
+  const sk = audioSkip(), len = A.dur - sk, d = S.duration, out = [];
+  for (let loop = 0; loop < 30 && len > .5; loop++) for (const b of A.beats) { if (b < sk) continue; const t = loop * len + b - sk; if (t > d) return out; out.push(+t.toFixed(3)); }
+  return out;
+}
+// ímã extra da timeline: batidas e o meio das transições (onde a tela está coberta)
+const extraSnaps = ex => [...beatTimes(), ...S.layers.filter(l => l.type === 'fx' && l.visible && l !== ex).map(l => (l.start + (l.end ?? S.duration)) / 2)];
+// Encaixar na batida: cada elemento entra na batida mais próxima (transição: o meio dela). Quem começa com o vídeo fica.
+function snapToBeats() {
+  const bt = beatTimes(); if (bt.length < 2) { toast('Envie uma música primeiro'); return; }
+  pushUndo();
+  const near = v => bt.reduce((a, b) => Math.abs(b - v) < Math.abs(a - v) ? b : a);
+  let n = 0;
+  for (const L of S.layers) {
+    if (L.type === 'bg' || L.start < .05) continue;
+    const end = L.end ?? S.duration, anchor = L.type === 'fx' ? (L.start + end) / 2 : L.start, d = near(anchor) - anchor;
+    if (Math.abs(d) < .005) continue;
+    const toEnd = end >= S.duration - .01;
+    L.start = +clamp(L.start + d, 0, S.duration - .3).toFixed(3);
+    if (!toEnd) L.end = +clamp(end + d, L.start + .2, S.duration).toFixed(3);
+    n++;
+  }
+  changed({ layers:true, props:true }); renderTimeline();
+  toast(n ? `${n} elemento${n > 1 ? 's' : ''} no ritmo da música` : 'Tudo já estava na batida', 4000, UNDO_ACT);
+}
+/* efeitos: o som vem do preset de entrada (deslizes = sopro, molas = pop, digitação = cliques, desenho = brilho) */
+const SFX = { off:'Nenhum', soft:'Sutis', punchy:'Marcantes' };
+function sfxKind(L) {
+  if (L.type === 'fx') return L.fx === 'flash' ? 'shine' : 'whoosh';
+  if (L.type === 'camera') return L.cam === 'punch' || L.cam === 'shake' ? 'boom' : null;
+  const k = L.in || ''; if (!k || k === 'cut' || k === 'fade') return null;
+  if (/^(pop|spring|stamp|elastic|flip|spin|drop|bounce)/.test(k)) return 'pop';
+  if (/^(type|counter|scramble|glitch)/.test(k)) return 'tick';
+  if (/^(handwrite|draw|assemble|line)/.test(k)) return 'shine';
+  return 'whoosh';
+}
+function sfxEvents() {
+  const ev = [];
+  for (const L of S.layers) {
+    if (!L.visible || L.type === 'bg') continue;
+    const kind = sfxKind(L); if (!kind) continue;
+    const ph = phase(L, L.start) || { inD:.5 }, span = (L.end ?? S.duration) - L.start;
+    if (kind === 'tick') { const n = clamp(Math.round(((L.text || '').length || 8) * .6), 3, 18); for (let i = 0; i < n; i++) ev.push({ t:L.start + Math.max(.3, ph.inD) * .9 * i / n, kind, i }); }
+    else ev.push({ t:L.start, kind, d:L.type === 'fx' ? span : Math.max(.3, ph.inD), mid:L.type === 'fx', i:0 });
+  }
+  ev.sort((a, b) => a.t - b.t);
+  // o mesmo som ao mesmo tempo (grupo entrando junto) toca uma vez só
+  return ev.filter((e, i) => e.kind === 'tick' || !ev.slice(Math.max(0, i - 6), i).some(o => o.kind === e.kind && Math.abs(o.t - e.t) < .06));
+}
+function sfxNoise(ctx) {
+  const n = ctx.sampleRate, b = ctx.createBuffer(1, n, n), d = b.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = rand(i, 17) * 2 - 1;
+  return b;
+}
+function playSfx(ctx, out, noise, e) {
+  const t = Math.max(0, e.t), g = ctx.createGain(); g.connect(out);
+  const env = (a, peak, dec) => { g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(.0001, t + a + dec); };
+  if (e.kind === 'whoosh') {
+    const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), d = clamp(e.d || .5, .3, 1.2);
+    const a = e.mid ? d * .5 : .07, dec = e.mid ? d * .5 : d * .8;
+    s.buffer = noise; s.loop = true; f.type = 'bandpass'; f.Q.value = 1.2;
+    f.frequency.setValueAtTime(350, t); f.frequency.exponentialRampToValueAtTime(2600, t + a); f.frequency.exponentialRampToValueAtTime(700, t + a + dec);
+    s.connect(f); f.connect(g); env(a, .6, dec); s.start(t); s.stop(t + a + dec + .05);
+  } else if (e.kind === 'pop') {
+    const o = ctx.createOscillator(); o.frequency.setValueAtTime(620, t); o.frequency.exponentialRampToValueAtTime(170, t + .1);
+    o.connect(g); env(.004, .7, .16); o.start(t); o.stop(t + .25);
+  } else if (e.kind === 'tick') {
+    const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(); s.buffer = noise; f.type = 'highpass'; f.frequency.value = 2500 + (e.i % 3) * 400;
+    s.connect(f); f.connect(g); env(.001, .35, .035); s.start(t, rand(e.i, 5) * .5); s.stop(t + .06);
+  } else if (e.kind === 'boom') {
+    const o = ctx.createOscillator(); o.frequency.setValueAtTime(95, t); o.frequency.exponentialRampToValueAtTime(38, t + .45);
+    o.connect(g); env(.006, 1, .55); o.start(t); o.stop(t + .7);
+  } else if (e.kind === 'shine') {
+    [1320, 1980, 2640].forEach((fr, i) => { const o = ctx.createOscillator(), og = ctx.createGain(); o.frequency.value = fr; og.gain.value = [.5, .3, .15][i]; o.connect(og); og.connect(g); o.start(t + i * .04); o.stop(t + 1.3); });
+    env(.02, .28, 1.1);
+  }
+}
+const hasAudio = () => !!(S.audio && S.audio.id) || (!!S.sfx && S.sfx !== 'off');
+async function buildMix(sr = 48000) {
+  const d = S.duration, off = new OfflineAudioContext(2, Math.ceil(d * sr), sr), A = S.audio;
+  if (A && A.id) {
+    const buf = await musicBuffer(A.id);
+    if (buf) {
+      const sk = clamp(audioSkip(), 0, Math.max(0, buf.duration - .5)), s = off.createBufferSource(), g = off.createGain(), v = A.vol ?? .8, fo = Math.min(1.2, d * .2);
+      s.buffer = buf; if (buf.duration - sk < d) { s.loop = true; s.loopStart = sk; s.loopEnd = buf.duration; }
+      // entra sem estalo e sai em fade no fim do vídeo
+      g.gain.setValueAtTime(0, 0); g.gain.linearRampToValueAtTime(v, .04); g.gain.setValueAtTime(v, Math.max(.05, d - fo)); g.gain.linearRampToValueAtTime(0, d);
+      s.connect(g); g.connect(off.destination); s.start(0, sk);
+    }
+  }
+  if (S.sfx && S.sfx !== 'off') {
+    const out = off.createGain(), comp = off.createDynamicsCompressor(), noise = sfxNoise(off);
+    out.gain.value = S.sfx === 'punchy' ? .9 : .4; out.connect(comp); comp.connect(off.destination);
+    for (const e of sfxEvents()) if (e.t < d) playSfx(off, out, noise, e);
+  }
+  return off.startRendering();
+}
+async function pickAudio(sr) {
+  if (!('AudioEncoder' in window)) return null;
+  for (const [codec, mux] of [['mp4a.40.2', 'aac'], ['opus', 'opus']]) {
+    const cfg = { codec, sampleRate:sr, numberOfChannels:2, bitrate:192000 };
+    try { const r = await AudioEncoder.isConfigSupported(cfg); if (r.supported) return { cfg, mux }; } catch (e) {}
+  }
+  return null;
+}
+async function encodeAudio(buf, pick) {
+  const chunks = []; let err = null;
+  const enc = new AudioEncoder({ output:(c, m) => chunks.push([c, m]), error:e => { err = e; } });
+  enc.configure(pick.cfg);
+  const sr = buf.sampleRate, n = buf.length, step = 4800, L0 = buf.getChannelData(0), R0 = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L0;
+  for (let i = 0; i < n; i += step) {
+    const m = Math.min(step, n - i), data = new Float32Array(m * 2);
+    data.set(L0.subarray(i, i + m), 0); data.set(R0.subarray(i, i + m), m);
+    const ad = new AudioData({ format:'f32-planar', sampleRate:sr, numberOfFrames:m, numberOfChannels:2, timestamp:Math.round(i * 1e6 / sr), data });
+    enc.encode(ad); ad.close();
+    if (err) throw err;
+    if (enc.encodeQueueSize > 20) await sleep(0);
+  }
+  await enc.flush(); enc.close(); if (err) throw err;
+  return chunks;
+}
+/* prévia: a mistura toca junto com o palco e a agulha segue o relógio do áudio (sem deriva entre som e imagem) */
+const AUD = { ctx:null, src:null, buf:null, sig:'', chk:0, building:false, c0:0, t0:0 };
+function audioSig() {
+  const A = S.audio, fx = S.sfx && S.sfx !== 'off';
+  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from] : 0, S.sfx || 'off', fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
+}
+async function rebuildMix(sig) {
+  AUD.building = true;
+  try { AUD.buf = await buildMix(48000); } catch (e) { console.warn('trilha', e); AUD.buf = null; }
+  AUD.sig = sig; AUD.building = false; stopAudio();
+}
+function stopAudio() { if (!AUD.src) return; try { AUD.src.stop(); } catch (e) {} try { AUD.src.disconnect(); } catch (e) {} AUD.src = null; }
+function startAudioAt(t) {
+  stopAudio();
+  const s = AUD.ctx.createBufferSource(); s.buffer = AUD.buf; s.connect(AUD.ctx.destination);
+  const off = clamp(t, 0, Math.max(0, AUD.buf.duration - .01));
+  s.start(0, off); AUD.src = s; AUD.c0 = AUD.ctx.currentTime; AUD.t0 = off;
+}
+function syncAudio() {
+  if (!playing || RT.exporting || !hasAudio()) { stopAudio(); return; }
+  const now = performance.now();
+  if (now - AUD.chk > 300) { AUD.chk = now; const sig = audioSig(); if (sig !== AUD.sig && !AUD.building) rebuildMix(sig); }
+  if (!AUD.buf) return;
+  if (!AUD.ctx) AUD.ctx = new AudioContext();
+  if (AUD.ctx.state !== 'running') { if (!AUD.resuming) { AUD.resuming = true; AUD.ctx.resume().catch(() => {}).finally(() => { AUD.resuming = false; }); } return; }
+  const pos = AUD.src ? AUD.t0 + AUD.ctx.currentTime - AUD.c0 : null;
+  if (pos == null || Math.abs(pos - T) > .15) { startAudioAt(T); return; }
+  if (pos < S.duration) T = pos;
+}
+function syncMedia() { syncVideos(); syncAudio(); }
+// o navegador só libera o som depois de um clique ou tecla
+const unlockAudio = () => { if (!hasAudio()) return; if (!AUD.ctx) AUD.ctx = new AudioContext(); if (AUD.ctx.state !== 'running') AUD.ctx.resume().catch(() => {}); };
+addEventListener('pointerdown', unlockAudio, true); addEventListener('keydown', unlockAudio, true);
 
 /* ============================================================
    Interface
@@ -2322,6 +4042,8 @@ $('#mSave').onclick = () => lastExport && saveFile(lastExport.blob, lastExport.f
 const ICONS = {
   eye:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>',
   eyeOff:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 2l12 12M6.5 4Q7.2 3.5 8 3.5c4.1 0 6.5 4.5 6.5 4.5a11 11 0 0 1-1.8 2.3M10.4 11.7Q9.3 12.5 8 12.5C3.9 12.5 1.5 8 1.5 8a11 11 0 0 1 2.5-3"/></svg>',
+  lock:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3.5" y="7" width="9" height="6.5" rx="1.4"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7"/></svg>',
+  unlock:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3.5" y="7" width="9" height="6.5" rx="1.4"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 4.8-.9"/></svg>',
   up:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 10l4-4 4 4"/></svg>',
   down:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4"/></svg>',
   trash:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/></svg>',
@@ -2330,6 +4052,18 @@ const ICONS = {
 // RT.picks = todas as camadas selecionadas (Shift + clique soma ou tira); RT.selected = a principal (painel de propriedades)
 // Grupo: as camadas com o mesmo `grp` se selecionam juntas. Ctrl + clique (`only`) escolhe uma só de dentro do grupo.
 const groupOf = L => L && L.grp ? S.layers.filter(l => l.grp === L.grp) : [L];
+// id do grupo quando a seleção é o grupo inteiro (e só ele); um item escolhido sozinho (timeline, Ctrl + clique) não conta
+function wholeGroup() {
+  const L = selL(); if (!L || !L.grp) return null;
+  const mem = groupOf(L); if (mem.length < 2 || !mem.every(m => isPicked(m.id))) return null;
+  return pickedLayers().every(p => p.grp === L.grp) ? L.grp : null;
+}
+// o grupo com cara de camada para os controles do painel (id próprio, tempo do conjunto); o que se escreve vai para S.groups[gid]
+function gview(gid) {
+  const g = gmeta(gid, true);
+  g.in ??= 'cut'; g.out ??= 'cut'; g.idle ??= 'none'; g.inDur ??= .8; g.outDur ??= .5;
+  return new Proxy(g, { get:(t, k) => k === 'id' ? 'g-' + gid : k === '__g' ? gid : k === 'start' ? (gwin(gid) || {}).start : k === 'end' ? (gwin(gid) || {}).end : t[k] });
+}
 function select(id, only) {
   RT.selected = id; const L = S.layers.find(l => l.id === id);
   RT.picks = new Set(!only && L && L.grp ? groupOf(L).map(l => l.id) : [id]);
@@ -2340,6 +4074,15 @@ function isPicked(id) { return id === RT.selected || !!(RT.picks && RT.picks.has
 function pickedLayers() {
   const out = S.layers.filter(l => l.type !== 'bg' && isPicked(l.id));
   return out.length ? out : [selL()].filter(l => l && l.type !== 'bg');
+}
+// bloqueada (L.locked): não se move, escala nem muda de tempo com o mouse ou o teclado, e o palco a ignora (clique, área, mouse por cima). Os campos do painel continuam valendo
+const freePicked = () => pickedLayers().filter(l => !l.locked);
+function setLock(ls, on) { ls = ls.filter(l => l.type !== 'bg'); if (!ls.length) return; pushUndo(); ls.forEach(l => { l.locked = on || undefined; }); changed({ layers:true }); }
+function toggleLock() { const ls = pickedLayers(); if (ls.length) setLock(ls, !ls.every(l => l.locked)); }
+function lockedNote(ls) {
+  ls = (Array.isArray(ls) ? ls : [ls]).filter(l => l.locked); if (!ls.length) return false;
+  toast(ls.length > 1 ? `${ls.length} camadas bloqueadas` : `${ls[0].name} está bloqueada`, 4000, { label:'Desbloquear', fn:() => setLock(ls, false) });
+  return true;
 }
 function toggleSel(L) {
   if (L.type === 'bg') return select(L.id);
@@ -2354,12 +4097,14 @@ function toggleSel(L) {
 
 /* ------------ alinhar e agrupar ------------ */
 // recalcula a posição de repouso de cada camada (o _bounds só existe para quem está na tela no quadro atual)
-function ensureBounds(ls) {
+// quiet: sem pedir novo quadro (usado no meio do desenho, para a caixa dos grupos)
+function ensureBounds(ls, quiet) {
   const miss = ls.filter(l => l.visible);
   if (!miss.length) return;
   const cx = document.createElement('canvas').getContext('2d'); cx.canvas.width = cx.canvas.height = 8;
-  for (const L of miss) renderFrame(cx, restTime(L), 8 / W(), false);
-  needs = true;
+  const was = RT.noGrp; RT.noGrp = true; // a posição de repouso não depende da animação do grupo
+  try { for (const L of miss) renderFrame(cx, restTime(L), 8 / W(), false); } finally { RT.noGrp = was; }
+  if (!quiet) needs = true;
 }
 // um grupo conta como um bloco só
 function selUnits(ls) {
@@ -2371,7 +4116,9 @@ function selUnits(ls) {
 }
 // mode: l | ch | r | t | cv | b | dh | dv. Um bloco só alinha ao quadro; vários alinham entre si.
 function alignLayers(mode) {
-  const ls = pickedLayers(); ensureBounds(ls);
+  const all = pickedLayers(), ls = all.filter(l => !l.locked);
+  if (!ls.length) { lockedNote(all); return; }
+  ensureBounds(ls);
   const U = selUnits(ls); if (!U.length) return;
   const ref = U.length > 1 ? { x0:Math.min(...U.map(u => u.x0)), y0:Math.min(...U.map(u => u.y0)), x1:Math.max(...U.map(u => u.x1)), y1:Math.max(...U.map(u => u.y1)) } : (() => { const M = marginBox(); return M ? { x0:M.x0, y0:M.y0, x1:M.x1, y1:M.y1 } : { x0:0, y0:0, x1:W(), y1:H() }; })();
   const d = new Map();
@@ -2387,8 +4134,8 @@ function alignLayers(mode) {
   pushUndo();
   for (const u of U) { const v = d.get(u); for (const L of u.m) {
     const b = L._bounds;
-    if (horiz) { L.x = +clamp((b.x + b.w / 2 + v) / W(), -.2, 1.2).toFixed(4); b.x += v; }
-    else { L.y = +clamp((b.y + b.h / 2 + v) / H(), -.2, 1.2).toFixed(4); b.y += v; }
+    if (horiz) { setPos(L, +clamp((b.x + b.w / 2 + v) / W(), -.2, 1.2).toFixed(4), null); b.x += v; }
+    else { setPos(L, null, +clamp((b.y + b.h / 2 + v) / H(), -.2, 1.2).toFixed(4)); b.y += v; }
   } }
   changed({ props:true });
 }
@@ -2416,12 +4163,13 @@ Object.assign(ICONS, {
 });
 // escala a seleção toda (proporcional, em torno do centro do conjunto); devolve apply(f) sobre o tamanho de agora
 function beginScaleSel() {
-  const ls = pickedLayers(); ensureBounds(ls);
+  const ls = freePicked(); if (!ls.length) { lockedNote(pickedLayers()); return null; }
+  ensureBounds(ls);
   const its = ls.filter(o => o._bounds); if (!its.length) return null;
   const x0 = Math.min(...its.map(o => o._bounds.x)), y0 = Math.min(...its.map(o => o._bounds.y));
   const cx = (x0 + Math.max(...its.map(o => o._bounds.x + o._bounds.w))) / 2, cy = (y0 + Math.max(...its.map(o => o._bounds.y + o._bounds.h))) / 2;
-  const items = its.map(o => ({ o, s0:{ size:o.size, mh:o.mh, padX:o.padX, padY:o.padY }, ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2 }));
-  return f => { for (const q of items) { scaleLayer(q.o, q.s0, f); q.o.x = +((cx + (q.ox - cx) * f) / W()).toFixed(4); q.o.y = +((cy + (q.oy - cy) * f) / H()).toFixed(4); } needs = true; };
+  const items = its.map(o => ({ o, s0:size0(o), ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2 }));
+  return f => { for (const q of items) { scaleAny(q.o, q.s0, f); setPos(q.o, +((cx + (q.ox - cx) * f) / W()).toFixed(4), +((cy + (q.oy - cy) * f) / H()).toFixed(4)); } needs = true; };
 }
 function scaleBar() {
   const rng = h('input', { type:'range', min:25, max:300, step:1, value:100, 'aria-label':'Escala da seleção' }), out = h('output', { text:'100%' });
@@ -2451,9 +4199,18 @@ function alignBar() {
   ]);
 }
 
+// arquivo vazio: o formato escolhido vira o principal. Com conteúdo, o principal fica onde estava e este se reorganiza a partir dele
+function setFormat(k) {
+  if (k === S.format) return;
+  if (!hasContent()) S.base = k; else if (!FORMATS[S.base]) S.base = S.format;
+  S.format = k; RT.layout.clear(); renderFormats(); fitStage(); changed({ props:true });
+  if (k !== S.base && !RT.fmtTip) { RT.fmtTip = true; toast(`O ${fmtLabel(k)} se reorganiza sozinho a partir do ${fmtLabel(S.base)}. O que você mover aqui fica só nele.`, 6000); }
+}
 function renderFormats() {
   const box = $('#fmt'); box.innerHTML = '';
-  for (const [k, f] of Object.entries(FORMATS)) box.append(h('button', { 'aria-pressed':String(S.format === k), text:f.label, onclick:() => { S.format = k; RT.layout.clear(); renderFormats(); fitStage(); changed(); } }));
+  const bf = baseFmt(), any = hasContent();
+  for (const [k, f] of Object.entries(FORMATS)) box.append(h('button', { 'aria-pressed':String(S.format === k), class:any && k === bf ? 'base' : null, text:f.label, onclick:() => setFormat(k),
+    title:!any ? null : k === bf ? 'Formato principal: os outros se reorganizam a partir dele' : `Reorganizado a partir do ${fmtLabel(bf)}. O que você mover aqui fica só neste formato` }));
   $('#dur').value = S.duration;
   const fs = $('#fps'); if (!fs.options.length) FPS_OPTS.forEach(f => fs.append(h('option', { value:f, text:f }))); fs.value = fps();
   { const m = marginSides(); $('#mOn').checked = m.on; [['mT', 'top'], ['mR', 'right'], ['mB', 'bottom'], ['mL', 'left']].forEach(([id, k]) => { $('#' + id).value = m[k]; $('#' + id).disabled = !m.on; });
@@ -2485,7 +4242,7 @@ function renderPalette() {
     return i;
   };
   const chip = (c, label, onInput, onDel, nameEl) => {
-    const sw = colorButton(c, `Cor ${label}`, { cls:'sw', onStart:pushUndo, onInput:x => { onInput(x); needs = true; autosave(); } });
+    const sw = colorButton(c, `Cor ${label}`, { cls:'sw', alpha:false, onStart:pushUndo, onInput:x => { onInput(x); needs = true; autosave(); } });
     return h('div', { class:'swcol' }, [h('div', { class:'swwrap' }, [sw, onDel ? h('button', { class:'sw-del', title:'Remover cor', 'aria-label':'Remover cor', text:'×', onclick:() => { pushUndo(); onDel(); redo(); } }) : null]), nameEl]);
   };
   const group = (title, titleEl, chips, onAdd, onDelGroup) => h('div', { class:'pgroup' }, [
@@ -2523,31 +4280,70 @@ function renderBrand() {
   const fl = $('#fontList'); fl.innerHTML = '';
   B.loaded.forEach(f => fl.append(h('span', { class:'ftag' + (RT.fontsBad.has(f.family) ? ' err' : ''), text:f.family + (f.src === 'file' ? ' · arquivo' : ''), title:RT.fontsBad.has(f.family) ? 'Não carregou' : '' })));
 }
+/* ------------ célula de camada e de grupo ------------
+   Um componente só, usado na lista de Camadas (where = 'list') e na coluna de nomes da timeline (where = 'tl'):
+   mesmas ações (subir, descer, bloquear, ocultar, desagrupar), mesmo clique, renomear e arrastar. Ação nova entra aqui, não em cada lugar. */
+function setVisible(ls, on) { if (!ls.length) return; pushUndo(); ls.forEach(l => { l.visible = on; }); changed({ layers:true }); }
+function actBtn(title, icon, fn, o = {}) {
+  return h('button', { class:'icon-btn' + (o.on ? ' on' : ''), title, 'aria-label':title, 'aria-pressed':o.pressed == null ? null : String(o.pressed), html:icon, onclick:e => { e.stopPropagation(); fn(); } });
+}
+// bloquear e ocultar de um conjunto (uma camada ou os itens de um grupo)
+function lockVisAct(ls) {
+  const lk = ls.every(l => l.locked), vs = ls.every(l => l.visible), one = ls.length === 1, g = one ? '' : ' o grupo';
+  return [
+    actBtn((lk ? 'Desbloquear' : 'Bloquear') + g, lk ? ICONS.lock : ICONS.unlock, () => setLock(ls, !lk), { on:lk, pressed:lk }),
+    actBtn((vs ? 'Ocultar' : 'Mostrar') + g, vs ? ICONS.eye : ICONS.eyeOff, () => setVisible(ls, !vs), { on:!vs }),
+  ];
+}
+function layerCell(L, where) {
+  const list = where === 'list', bg = L.type === 'bg', i = S.layers.indexOf(L);
+  const el = h('div', { class:(list ? 'layer' : 'tl-nm') + ' lcell' + (list ? (L.visible ? '' : ' off') + (L.locked ? ' locked' : '') + (L.grp ? ' ingrp' : '') : ''),
+    title:list ? null : 'Clique duas vezes para renomear. Arraste para reordenar', onclick:e => clickOrRename(L, where, e) }, [
+    h('span', { class:'dot', style:`background:${TYPE_COLOR[L.type]}` }),
+    h('span', { class:'lnm', title:list ? 'Clique duas vezes para renomear. Arraste para reordenar' : null }, [L.name, bg ? null : h('small', { text:`${L.start.toFixed(1)}s` })]),
+    h('div', { class:'acts' }, [
+      bg ? null : actBtn('Subir', ICONS.up, () => move(i, 1)),
+      bg ? null : actBtn('Descer', ICONS.down, () => move(i, -1)),
+      ...(bg ? [actBtn(L.visible ? 'Ocultar' : 'Mostrar', L.visible ? ICONS.eye : ICONS.eyeOff, () => setVisible([L], !L.visible), { on:!L.visible })] : lockVisAct([L])),
+    ])]);
+  if (list) {
+    el.setAttribute('role', 'button'); el.tabIndex = 0; el.setAttribute('aria-selected', String(isPicked(L.id)));
+    el.oncontextmenu = e => openMenu(e, L); el.onkeydown = e => { if (e.key === 'Enter') select(L.id); };
+    el.onmouseenter = () => setHover(L.id); el.onmouseleave = () => setHover(null);
+    el.dataset.id = L.id;
+  }
+  dragReorder(el, L);
+  return el;
+}
+function groupCell(gid, where) {
+  const list = where === 'list', g = gmeta(gid, true), mem = S.layers.filter(l => l.grp === gid), top = mem[mem.length - 1];
+  const flip = () => { g.open = g.open === false; renderLayers(); autosave(); };
+  const chev = h('button', { class:'tl-chev', title:g.open === false ? 'Mostrar os itens do grupo' : 'Recolher o grupo', 'aria-label':'Recolher ou expandir o grupo', 'aria-expanded':String(g.open !== false), text:'▾',
+    onpointerdown:e => { e.stopPropagation(); if (e.button) return; e.preventDefault(); flip(); },
+    onclick:e => { e.stopPropagation(); if (e.detail === 0) flip(); } });
+  chev.style.transform = g.open === false ? 'rotate(-90deg)' : '';
+  const el = h('div', { class:(list ? 'lgroup' : 'tl-nm') + ' lcell', title:'Clique para selecionar o grupo. Clique duas vezes para renomear. Ctrl + clique num item escolhe só ele', onclick:e => {
+    if (e.detail > 1) { const n = prompt('Nome do grupo', groupName(gid)); if (n && n.trim()) { pushUndo(); g.name = n.trim(); changed({ layers:true, props:true }); } return; }
+    select(top.id);
+  } }, [chev, h('span', { class:'lnm', text:groupName(gid) }), h('small', { class:'tl-n', text:String(mem.length) }),
+    h('div', { class:'acts' }, [...lockVisAct(mem), actBtn('Desagrupar', '<span class="x">×</span>', () => { select(top.id); ungroupSel(); })])]);
+  if (list) {
+    el.setAttribute('role', 'button'); el.tabIndex = 0; el.setAttribute('aria-selected', String(mem.every(m => isPicked(m.id))));
+    el.onkeydown = e => { if (e.key === 'Enter') select(top.id); };
+  }
+  groupDrop(el, gid);
+  el.draggable = true;
+  el.addEventListener('dragstart', e => { dragGroupId = gid; dragLayerId = mem[0].id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', gid); });
+  el.addEventListener('dragend', () => { dragGroupId = null; dragLayerId = null; document.querySelectorAll('.drop-before,.drop-after,.drop-in').forEach(n => n.classList.remove('drop-before', 'drop-after', 'drop-in')); });
+  return el;
+}
 function renderLayers() {
   const box = $('#layers'); box.innerHTML = '';
-  const arr = S.layers.map((L, i) => ({ L, i })).reverse(), seen = new Set(), gn = {};
-  S.layers.forEach(l => { if (l.grp && !(l.grp in gn)) gn[l.grp] = Object.keys(gn).length + 1; });
-  for (const { L, i } of arr) {
-    if (L.grp && !seen.has(L.grp)) {
-      seen.add(L.grp);
-      const mem = groupOf(L), on = mem.every(m => isPicked(m.id));
-      box.append(h('div', { class:'lgroup', 'aria-selected':String(on), role:'button', tabindex:'0', title:'Clique para selecionar o grupo. Ctrl + clique num item escolhe só ele',
-        onclick:() => select(L.id), onkeydown:e => { if (e.key === 'Enter') select(L.id); } }, [
-        h('span', { text:`Grupo ${gn[L.grp]}` }), h('small', { text:`${mem.length} itens` }),
-        h('button', { class:'icon-btn', title:'Desagrupar', 'aria-label':'Desagrupar', text:'×', onclick:e => { e.stopPropagation(); select(L.id); ungroupSel(); } })]));
-    }
-    const row = h('div', { class:'layer' + (L.visible ? '' : ' off') + (L.grp ? ' ingrp' : ''), 'aria-selected':String(isPicked(L.id)), role:'button', tabindex:'0',
-      onclick:e => clickOrRename(L, 'list', e), oncontextmenu:e => openMenu(e, L), onkeydown:e => { if (e.key === 'Enter') select(L.id); } }, [
-      h('span', { class:'dot', style:`background:${TYPE_COLOR[L.type]}` }),
-      h('span', { class:'nm', title:'Clique duas vezes para renomear. Arraste para reordenar' }, [L.name, L.type !== 'bg' ? h('small', { text:`${L.start.toFixed(1)}s` }) : null]),
-      h('span', { class:'acts' }, [
-        L.type !== 'bg' ? h('button', { class:'icon-btn', title:'Subir', html:ICONS.up, onclick:e => { e.stopPropagation(); move(i, 1); } }) : null,
-        L.type !== 'bg' ? h('button', { class:'icon-btn', title:'Descer', html:ICONS.down, onclick:e => { e.stopPropagation(); move(i, -1); } }) : null,
-        h('button', { class:'icon-btn', title:L.visible ? 'Ocultar' : 'Mostrar', html:L.visible ? ICONS.eye : ICONS.eyeOff, onclick:e => { e.stopPropagation(); L.visible = !L.visible; changed({ layers:true }); } }),
-      ]),
-    ]);
-    row.dataset.id = L.id; dragReorder(row, L);
-    box.append(row);
+  const seen = new Set();
+  for (const L of [...S.layers].reverse()) {
+    if (L.grp && !seen.has(L.grp)) { seen.add(L.grp); box.append(groupCell(L.grp, 'list')); }
+    if (L.grp && gmeta(L.grp).open === false) continue;
+    box.append(layerCell(L, 'list'));
   }
   renderMarks();
 }
@@ -2568,7 +4364,7 @@ function renameInline(L, span) {
   ['click', 'dblclick', 'pointerdown'].forEach(n => inp.addEventListener(n, e => e.stopPropagation()));
 }
 function renameLayer(L, where) {
-  const s = document.querySelector(where === 'tl' ? `#tl .tl-row[data-id="${L.id}"] .tl-nm span:last-child` : `#layers .layer[data-id="${L.id}"] .nm`);
+  const s = document.querySelector(where === 'tl' ? `#tl .tl-row[data-id="${L.id}"] .lnm` : `#layers .layer[data-id="${L.id}"] .lnm`);
   renameInline(L, s);
 }
 // o primeiro clique re-renderiza a lista, então o dblclick nativo se perde: conta o segundo clique na mão
@@ -2656,6 +4452,7 @@ function duplicateLayer(L) {
   pushUndo(); let last = null;
   for (const o of src) {
     const c = JSON.parse(JSON.stringify(o)); c.id = uid(); c.name = o.name + ' (cópia)'; c.y = Math.min(1, o.y + .06);
+    for (const f in c.fpos || {}) c.fpos[f].y = Math.min(1, c.fpos[f].y + .06); // ajustes de outros formatos descem junto
     if (o.grp) {
       if (!gm[o.grp]) { gm[o.grp] = 'g' + Math.random().toString(36).slice(2, 7); const gmt = gmeta(o.grp); if (gmt) (S.groups ||= {})[gm[o.grp]] = JSON.parse(JSON.stringify(gmt)); }
       c.grp = gm[o.grp];
@@ -2664,14 +4461,62 @@ function duplicateLayer(L) {
   }
   select(last.id); changed({ layers:true });
 }
-function deleteLayer(L) {
+function deleteLayer(L, msg) {
   if (!L || L.type === 'bg') return;
   const grp = isPicked(L.id) ? pickedLayers() : [L];
+  if (grp.some(g => g.locked)) { lockedNote(grp); return; }
   pushUndo(); const i = S.layers.indexOf(L);
   grp.forEach(g => S.layers.splice(S.layers.indexOf(g), 1));
-  RT.selected = (S.layers[Math.min(i, S.layers.length - 1)] || S.layers[0])?.id; RT.picks = new Set([RT.selected]);
-  changed({ layers:true, props:true }); toast(grp.length > 1 ? `${grp.length} camadas apagadas. Ctrl+Z desfaz` : `"${L.name}" apagada. Ctrl+Z desfaz`);
+  RT.selected = (S.layers[Math.min(i, S.layers.length - 1)] || S.layers[0])?.id; RT.picks = new Set([RT.selected]); RT.hover = null;
+  changed({ layers:true, props:true }); toast(msg || (grp.length > 1 ? `${grp.length} camadas apagadas` : `"${L.name}" apagada`), 5000, UNDO_ACT);
 }
+/* ------------ copiar e colar camadas (Ctrl+C / Ctrl+X / Ctrl+V), também de um arquivo para outro ------------
+   Vai pela área de transferência do sistema como texto com o prefixo CLIP_TAG. Leva junto as fontes usadas e o nome dos grupos. */
+const CLIP_TAG = 'mola-camadas:';
+function clipPayload() {
+  const ls = pickedLayers(); if (!ls.length) return null;
+  const fams = new Set(ls.map(l => l.font).filter(Boolean)), groups = {};
+  ls.forEach(l => { if (l.grp && S.groups && S.groups[l.grp]) groups[l.grp] = S.groups[l.grp]; });
+  return { v:1, dur:S.duration, layers:ls.map(l => { const c = JSON.parse(JSON.stringify(l)); delete c._bounds; return c; }), fonts:S.brand.loaded.filter(f => fams.has(f.family)), groups };
+}
+function pasteLayers(p) {
+  const src = (p && Array.isArray(p.layers) ? p.layers : []).filter(o => o && o.type && o.type !== 'bg');
+  if (!src.length) return;
+  pushUndo();
+  let fontsAdded = false;
+  for (const f of p.fonts || []) if (f && f.family && !S.brand.loaded.some(x => x.family === f.family)) {
+    S.brand.loaded.push(f); fontsAdded = true;
+    (f.src === 'file' ? loadFileFont(f) : loadGoogleFont(f.family)).then(() => renderBrand());
+  }
+  const gm = {}, out = [];
+  for (const o of src) {
+    const c = JSON.parse(JSON.stringify(o)); c.id = uid();
+    if (c.grp) {
+      if (!gm[c.grp]) { gm[c.grp] = 'g' + Math.random().toString(36).slice(2, 7); if (p.groups && p.groups[c.grp]) (S.groups ||= {})[gm[c.grp]] = { ...p.groups[c.grp] }; }
+      c.grp = gm[c.grp];
+    }
+    // o que ia até o fim do vídeo de origem vai até o fim deste; o resto fica dentro da duração
+    const toEnd = c.end == null || (p.dur && c.end >= p.dur - .01);
+    c.start = clamp(+c.start || 0, 0, Math.max(0, S.duration - .3));
+    c.end = toEnd ? S.duration : clamp(c.end, c.start + .3, S.duration);
+    if (c.src) getImage(c.src);
+    S.layers.push(c); out.push(c);
+  }
+  RT.picks = new Set(out.map(l => l.id)); RT.selected = out[out.length - 1].id;
+  if (fontsAdded) renderBrand();
+  renderLayers(); renderProps(); changed();
+  toast(out.length > 1 ? `${out.length} elementos colados` : `"${out[0].name}" colado`);
+}
+const typingIn = t => { const tag = (t && t.tagName || '').toLowerCase(); return tag === 'input' && !['range', 'checkbox', 'color', 'button'].includes(t.type) || tag === 'textarea' || tag === 'select' || !!(t && t.isContentEditable); };
+const overlayOpen = () => !$('#files').hidden || !$('#modal').hidden || !$('#keys').hidden;
+['copy', 'cut'].forEach(kind => document.addEventListener(kind, e => {
+  if (typingIn(e.target) || overlayOpen() || String(getSelection() || '').length) return; // texto selecionado copia o texto
+  const L = selL(), p = clipPayload(); if (!p) return;
+  e.preventDefault(); e.clipboardData.setData('text/plain', CLIP_TAG + JSON.stringify(p));
+  const what = p.layers.length > 1 ? `${p.layers.length} elementos` : `"${p.layers[0].name}"`;
+  if (kind === 'cut') deleteLayer(L, `${what} recortado${p.layers.length > 1 ? 's' : ''}. Ctrl+V cola`);
+  else toast(`${what} copiado${p.layers.length > 1 ? 's' : ''}. Ctrl+V cola aqui ou em outro arquivo`);
+}));
 /* ------------ menu do botão direito ------------ */
 function closeMenu() { document.querySelector('.ctx')?.remove(); }
 function openMenu(ev, L) {
@@ -2682,14 +4527,22 @@ function openMenu(ev, L) {
   const item = (text, fn, o = {}) => h('button', { class:o.danger ? 'danger' : null, disabled:o.off || null, onclick:() => { closeMenu(); fn(); } }, [h('span', { text }), o.kbd ? h('kbd', { text:o.kbd }) : null]);
   const m = h('div', { class:'ctx', role:'menu' }, [
     item('Ir para este elemento', () => seekLayer(L), { off:isBg }),
+    item('Ver a entrada', () => previewIn(L), { off:isBg }),
+    item('Entrar na agulha', () => markAt('start'), { off:isBg, kbd:'I' }),
+    item('Sair na agulha', () => markAt('end'), { off:isBg, kbd:'O' }),
     h('hr'),
     item('Renomear', () => renameLayer(L), { off:isBg }),
-    item('Duplicar', () => duplicateLayer(L), { off:isBg }),
+    item('Copiar', () => document.execCommand('copy'), { off:isBg, kbd:'Ctrl+C' }),
+    item('Duplicar', () => duplicateLayer(L), { off:isBg, kbd:'Ctrl+D' }),
+    item('Salvar em Meus elementos', saveElement, { off:isBg }),
     item('Agrupar', groupSel, { off:isBg || pickedLayers().length < 2, kbd:'Ctrl+G' }),
     item('Desagrupar', ungroupSel, { off:!L.grp, kbd:'Ctrl+Shift+G' }),
-    item(L.visible ? 'Ocultar' : 'Mostrar', () => { L.visible = !L.visible; changed({ layers:true }); }),
-    item('Trazer para frente', () => move(i, 1), { off:isBg || i >= S.layers.length - 1 }),
-    item('Enviar para trás', () => move(i, -1), { off:isBg || i <= 1 }),
+    item(L.locked ? 'Desbloquear' : 'Bloquear', toggleLock, { off:isBg, kbd:'Ctrl+Shift+L' }),
+    item(L.visible ? 'Ocultar' : 'Mostrar', () => { if (isBg) { pushUndo(); L.visible = !L.visible; changed({ layers:true }); } else toggleVisible(); }, { kbd:'Ctrl+Shift+H' }),
+    item('Trazer para frente', () => move(i, 1), { off:isBg || i >= S.layers.length - 1, kbd:'Ctrl+]' }),
+    item('Enviar para trás', () => move(i, -1), { off:isBg || i <= 1, kbd:'Ctrl+[' }),
+    h('hr'),
+    item('Salvar este quadro (PNG)', saveFramePng),
     h('hr'),
     item('Apagar', () => deleteLayer(L), { danger:true, off:isBg, kbd:'Del' }),
   ]);
@@ -2704,7 +4557,11 @@ addEventListener('wheel', e => { if (!e.target.closest('.ctx')) closeMenu(); }, 
 cv.addEventListener('contextmenu', ev => { const L = hitTest(stagePt(ev)) || S.layers.find(l => l.type === 'bg'); RT.drag = null; openMenu(ev, L); });
 /* ------------ timeline ------------ */
 // mostra as camadas como barras (entra..sai); arrastar muda só início e fim, sem keyframes
-const tlLabel = L => { const m = L.type === 'text' ? TP : BP; return (m[L.in] || {}).label || ''; };
+const tlLabel = L => {
+  if (L.type === 'camera') return (CAMS[L.cam] || {}).label || '';
+  if (L.type === 'fx') return (FXS[L.fx] || {}).label || '';
+  const m = L.type === 'text' ? TP : BP; return (m[L.in] || {}).label || '';
+};
 function tlGeom() { const tl = $('#tl'), lane = tl.querySelector('.tl-scale'); if (!lane) return null; const r = lane.getBoundingClientRect(); return { x0:r.left, w:r.width, tl }; }
 function placeHead() {
   const g = tlGeom(); if (!g) return;
@@ -2737,36 +4594,30 @@ function renderTimeline() {
   const endH = h('div', { class:'tl-end', title:`Duração do vídeo: ${d.toFixed(1)}s. Arraste para mudar` });
   endH.addEventListener('pointerdown', tlDuration);
   scale.append(endH);
+  for (const b of beatTimes()) scale.append(h('u', { class:'tl-beat', style:`left:${(b / d * 100).toFixed(3)}%` })); // batidas da música
   ruler.append(scale); tl.append(ruler);
+  if (S.audio) tl.append(audioRow());
   const els = S.layers.filter(L => L.type !== 'bg').reverse();
   if (!els.length) tl.append(h('div', { class:'tl-empty', text:'Nenhum elemento ainda. Use Adicionar, na coluna da esquerda.' }));
   const doneG = new Set();
   const groupRow = gid => {
     const g = gmeta(gid, true), mem = S.layers.filter(l => l.grp === gid), on = mem.every(m => isPicked(m.id));
     const bar = h('div', { class:'tl-bar grp', style:`--c:var(--accent)` }, [h('div', { class:'seg in' }), h('div', { class:'seg out' }), h('div', { class:'h l' }), h('div', { class:'h r' })]);
-    const tip = () => { const w = gwin(gid); bar.title = `${groupName(gid)}: ${w.start.toFixed(1)}s a ${w.end.toFixed(1)}s. Arraste para mover o grupo todo`; };
+    const tip = () => { const w = gwin(gid); bar.title = `${groupName(gid)}: ${w.start.toFixed(1)}s a ${w.end.toFixed(1)}s. Arraste para os lados para mover o grupo todo, para cima ou para baixo para mudar a ordem`; };
     placeBar(bar, gpseudo(gid)); tip();
     const lane = h('div', { class:'tl-lane' }, [bar]);
-    lane.addEventListener('pointerdown', e => { if (e.button) return; const m = tlHit(bar, e.clientX); if (m) tlDragGroup(e, gid, bar, m); else tlScrub(e); });
+    lane.addEventListener('pointerdown', e => {
+      if (e.button) return; const m = tlHit(bar, e.clientX);
+      if (m && mem.some(l => l.locked)) { e.stopPropagation(); select(mem[mem.length - 1].id); lockedNote(mem); return; } // grupo com item bloqueado não se move
+      if (m) tlDragGroup(e, gid, bar, m); else tlScrub(e);
+    });
     lane.addEventListener('pointermove', e => {
       if (bar.classList.contains('drag')) return;
       const m = tlHit(bar, e.clientX), c = m === 'l' || m === 'r' ? 'ew-resize' : '';
       lane.style.cursor = c; bar.style.cursor = c; bar.classList.toggle('hl', m === 'l'); bar.classList.toggle('hr', m === 'r');
     });
     lane.addEventListener('pointerleave', () => { if (!bar.classList.contains('drag')) bar.classList.remove('hl', 'hr'); });
-    const chev = h('button', { class:'tl-chev', title:g.open === false ? 'Mostrar os itens do grupo' : 'Recolher o grupo', 'aria-label':'Recolher ou expandir o grupo', 'aria-expanded':String(g.open !== false), text:'▾',
-      onpointerdown:e => { e.stopPropagation(); if (e.button) return; e.preventDefault(); g.open = g.open === false; renderTimeline(); autosave(); },
-      onclick:e => { e.stopPropagation(); if (e.detail === 0) { g.open = g.open === false; renderTimeline(); autosave(); } } });
-    chev.style.transform = g.open === false ? 'rotate(-90deg)' : '';
-    const nm = h('div', { class:'tl-nm', title:'Clique para selecionar o grupo. Clique duas vezes para renomear', onclick:e => {
-      if (e.detail > 1) { const n = prompt('Nome do grupo', groupName(gid)); if (n && n.trim()) { pushUndo(); g.name = n.trim(); changed({ layers:true, props:true }); } return; }
-      select(mem[mem.length - 1].id);
-    } }, [chev, h('span', { text:groupName(gid) }), h('small', { class:'tl-n', text:String(mem.length) })]);
-    groupDrop(nm, gid);
-    nm.draggable = true;
-    nm.addEventListener('dragstart', e => { dragGroupId = gid; dragLayerId = mem[0].id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', gid); });
-    nm.addEventListener('dragend', () => { dragGroupId = null; dragLayerId = null; document.querySelectorAll('.drop-before,.drop-after,.drop-in').forEach(n => n.classList.remove('drop-before', 'drop-after', 'drop-in')); });
-    const row = h('div', { class:'tl-row grp' + (on ? ' sel' : '') }, [nm, lane]);
+    const row = h('div', { class:'tl-row grp' + (on ? ' sel' : '') }, [groupCell(gid, 'tl'), lane]);
     row.dataset.gid = gid;
     tl.append(row);
     return g;
@@ -2776,7 +4627,7 @@ function renderTimeline() {
       if (!doneG.has(L.grp)) { doneG.add(L.grp); groupRow(L.grp); }
       if (gmeta(L.grp).open === false) continue;
     }
-    const bar = h('div', { class:'tl-bar', style:`--c:${TYPE_COLOR[L.type]}`, title:`${L.name}: entra em ${L.start.toFixed(1)}s, sai em ${(L.end ?? d).toFixed(1)}s` }, [
+    const bar = h('div', { class:'tl-bar', style:`--c:${TYPE_COLOR[L.type]}`, title:`${L.name}: entra em ${L.start.toFixed(1)}s, sai em ${(L.end ?? d).toFixed(1)}s. Arraste para cima ou para baixo para mudar a ordem. Clique duplo leva a agulha até ele. I e O marcam entrada e saída na agulha` }, [
       h('div', { class:'seg in' }), h('div', { class:'seg out' }), h('em', { text:tlLabel(L) }), h('div', { class:'h l' }), h('div', { class:'h r' })]);
     placeBar(bar, L);
     const lane = h('div', { class:'tl-lane' }, [bar]);
@@ -2785,18 +4636,18 @@ function renderTimeline() {
       if (e.button) return;
       const m = tlHit(bar, e.clientX);
       if (e.shiftKey && m) { e.preventDefault(); e.stopPropagation(); toggleSel(L); return; } // sem stopPropagation o .stage solta a seleção
+      if (m && L.locked) { e.stopPropagation(); if (!isPicked(L.id)) select(L.id, true); tlScrub(e); return; } // bloqueada: a barra só seleciona
       if (m) tlDrag(e, L, bar, m); else tlScrub(e);
     });
     lane.addEventListener('pointermove', e => {
       if (bar.classList.contains('drag')) return;
-      const m = tlHit(bar, e.clientX), c = m === 'l' || m === 'r' ? 'ew-resize' : '';
+      const m = L.locked ? null : tlHit(bar, e.clientX), c = m === 'l' || m === 'r' ? 'ew-resize' : '';
       lane.style.cursor = c; bar.style.cursor = c;
       bar.classList.toggle('hl', m === 'l'); bar.classList.toggle('hr', m === 'r');
     });
     lane.addEventListener('pointerleave', () => { if (!bar.classList.contains('drag')) bar.classList.remove('hl', 'hr'); });
-    const nm = h('div', { class:'tl-nm', title:'Clique duas vezes para renomear. Arraste para reordenar', onclick:e => clickOrRename(L, 'tl', e) }, [h('span', { class:'dot', style:`background:${TYPE_COLOR[L.type]}` }), h('span', { text:L.name })]);
-    dragReorder(nm, L);
-    const row = h('div', { class:'tl-row' + (L.grp ? ' ingrp' : '') + (isPicked(L.id) ? ' sel' : '') + (L.visible ? '' : ' off'), oncontextmenu:e => openMenu(e, L) }, [nm, lane]);
+    const row = h('div', { class:'tl-row' + (L.grp ? ' ingrp' : '') + (isPicked(L.id) ? ' sel' : '') + (L.visible ? '' : ' off') + (L.locked ? ' locked' : ''), oncontextmenu:e => openMenu(e, L),
+      onmouseenter:() => setHover(L.id), onmouseleave:() => setHover(null) }, [layerCell(L, 'tl'), lane]);
     row.dataset.id = L.id;
     tl.append(row);
   }
@@ -2833,6 +4684,78 @@ function tlHit(bar, cx) {
   if (dr >= -out && dr <= inn) return 'r';
   return dl > 0 && dr > 0 ? 'm' : null;
 }
+// arrastar uma barra para cima ou para baixo muda a ordem (topo = mais à frente), como arrastar o nome.
+// Metade de cima/baixo da linha sob o ponteiro decide; item de grupo leva para dentro do grupo dele; grupo inteiro nunca entra em outro.
+function tlStack(tl, bar, moving, y0) {
+  const set = new Set(moving), g0 = moving[0].grp;
+  const whole = !!g0 && moving.every(m => m.grp === g0) && S.layers.filter(l => l.grp === g0).every(m => set.has(m));
+  const byId = id => S.layers.find(l => l.id === id), grpOf = r => r.dataset.gid || (byId(r.dataset.id) || {}).grp;
+  const own = r => r.dataset.gid ? (whole && r.dataset.gid === g0) || !S.layers.some(l => l.grp === r.dataset.gid && !set.has(l)) : set.has(byId(r.dataset.id));
+  const all = [...tl.querySelectorAll('.tl-row')], rows = all.filter(r => !own(r));
+  all.forEach(r => r.classList.toggle('moving', own(r)));
+  const line = h('div', { class:'tl-drop', hidden:true }, [h('span')]); tl.append(line);
+  tl.classList.add('stacking'); bar.classList.add('lift');
+  // a barra acompanha o ponteiro sem sair das linhas (senão ela mesma aumenta a área e a rolagem não para)
+  const sc0 = tl.scrollTop, maxS = tl.scrollHeight - tl.clientHeight, ruler = tl.querySelector('.tl-ruler');
+  const row0 = bar.closest('.tl-row'), minT = all[0].offsetTop - row0.offsetTop, maxT = all[all.length - 1].offsetTop - row0.offsetTop;
+  let to = null, y = y0, raf = 0;
+  // nova ordem de S.layers e o grupo de quem se move
+  const result = to => {
+    const rest = S.layers.filter(l => !set.has(l)), block = S.layers.filter(l => set.has(l));
+    const topOf = gid => Math.max(...rest.map((l, i) => l.grp === gid ? i : -1)) + 1;
+    let j = to.ref ? rest.indexOf(to.ref) + (to.up ? 1 : 0) : to.gtop ? topOf(to.gtop) : rest.findIndex(l => l.grp === to.gbot);
+    j = Math.max(1, j);
+    return { order:[...rest.slice(0, j), ...block, ...rest.slice(j)], ng:whole ? g0 : to.ng };
+  };
+  const same = r => r.order.every((l, i) => l === S.layers[i]) && moving.every(l => (l.grp || null) === (r.ng || null));
+  const place = () => {
+    bar.style.transform = `translateY(${clamp(y - y0 + tl.scrollTop - sc0, minT, maxT)}px)`;
+    to = null; line.hidden = true;
+    if (!rows.length) return;
+    const r = rows.find(q => y < q.getBoundingClientRect().bottom) || rows[rows.length - 1], rr = r.getBoundingClientRect(), rg = grpOf(r);
+    let top = rr.top, bot = rr.bottom, up = y < (top + bot) / 2, inside = false;
+    if (whole && rg) {
+      const span = rows.filter(q => grpOf(q) === rg);
+      top = span[0].getBoundingClientRect().top; bot = span[span.length - 1].getBoundingClientRect().bottom; up = y < (top + bot) / 2;
+      to = up ? { gtop:rg } : { gbot:rg };
+    } else if (r.dataset.gid) {
+      // cabeçalho: metade de cima = acima do grupo; de baixo = no topo do grupo (recolhido: abaixo dele)
+      const open = gmeta(rg)?.open !== false;
+      to = up ? { gtop:rg } : open ? { gtop:rg, ng:rg } : { gbot:rg }; inside = !up && open;
+    } else { const T = byId(r.dataset.id); to = { ref:T, up, ng:T.grp }; inside = !!T.grp; }
+    const res = result(to);
+    if (same(res)) { to = null; return; }
+    line.hidden = false; line.classList.toggle('in', inside);
+    line.style.top = ((up ? top : bot) - tl.getBoundingClientRect().top + tl.scrollTop) + 'px';
+    line.firstChild.textContent = whole ? '' : res.ng && moving.some(l => l.grp !== res.ng) ? `Entra em ${groupName(res.ng)}` : !res.ng && moving.some(l => l.grp) ? 'Sai do grupo' : '';
+  };
+  // perto da borda de cima/baixo a timeline rola sozinha
+  const tick = () => {
+    raf = 0;
+    const tr = tl.getBoundingClientRect(), top = tr.top + (ruler ? ruler.offsetHeight : 0), edge = 24;
+    const v = y < top + edge ? y - top - edge : y > tr.bottom - edge ? y - tr.bottom + edge : 0;
+    if (!v) return;
+    const s = tl.scrollTop; tl.scrollTop = clamp(s + clamp(v / 2, -14, 14), 0, maxS);
+    if (tl.scrollTop !== s) { place(); raf = requestAnimationFrame(tick); }
+  };
+  place();
+  return {
+    move(cy) { y = cy; place(); if (!raf) raf = requestAnimationFrame(tick); },
+    end() {
+      if (raf) cancelAnimationFrame(raf);
+      line.remove(); tl.classList.remove('stacking'); bar.classList.remove('lift'); bar.style.transform = '';
+      all.forEach(r => r.classList.remove('moving'));
+    },
+    drop() {
+      if (!to) return false;
+      const r = result(to);
+      S.layers = r.order;
+      if (!whole) moving.forEach(l => { if (r.ng) l.grp = r.ng; else delete l.grp; });
+      if (S.groups) for (const k of Object.keys(S.groups)) if (!S.layers.some(l => l.grp === k)) delete S.groups[k];
+      changed({ layers:true }); return true;
+    },
+  };
+}
 // arrastar a barra do grupo: mover leva todos os membros; as bordas esticam ou encolhem o conjunto na mesma proporção
 function tlDragGroup(e, gid, bar, mode) {
   e.preventDefault(); e.stopPropagation();
@@ -2844,14 +4767,14 @@ function tlDragGroup(e, gid, bar, mode) {
   }
   pushUndo(); pause();
   const d = S.duration, o = mem.map(l => ({ l, s:l.start, e:l.end })), s0 = Math.min(...o.map(x => x.s)), e0 = Math.max(...o.map(x => x.e ?? d));
-  const x0 = e.clientX, grid = v => Math.round(v * 10) / 10, r3 = v => Math.round(v * 1000) / 1000, MIN = .3;
-  const pts = [0, d, T]; for (const q of S.layers) if (q.grp !== gid && q.type !== 'bg') pts.push(q.start, q.end ?? d);
+  const x0 = e.clientX, y0 = e.clientY, grid = v => Math.round(v * 10) / 10, r3 = v => Math.round(v * 1000) / 1000, MIN = .3;
+  const pts = [0, d, T, ...extraSnaps()]; for (const q of S.layers) if (q.grp !== gid && q.type !== 'bg') pts.push(q.start, q.end ?? d);
   const tol = 7 / g.w * d;
   const near = v => { let b = null; for (const p of pts) if (Math.abs(p - v) <= tol && (b === null || Math.abs(p - v) < Math.abs(b - v))) b = p; return b; };
   const lane = bar.parentElement, tip = h('div', { class:'tl-tip' }), guide = h('div', { class:'tl-snap', hidden:true });
   lane.append(tip); g.tl.append(guide);
   const fmtS = v => v.toFixed(1).replace('.', ',') + 's';
-  let moved = false;
+  let moved = false, axis = null, stk = null;
   const apply = (s, en) => {
     const k = (en - s) / (e0 - s0);
     for (const x of o) {
@@ -2860,8 +4783,14 @@ function tlDragGroup(e, gid, bar, mode) {
     }
   };
   const mv = ev => {
-    const dt = (ev.clientX - x0) / g.w * d; if (Math.abs(ev.clientX - x0) > 2) moved = true;
-    if (!moved) return;
+    if (!axis) {
+      const ax = Math.abs(ev.clientX - x0), ay = Math.abs(ev.clientY - y0); if (Math.max(ax, ay) <= 3) return;
+      // para os lados muda o tempo; para cima ou para baixo muda a ordem
+      axis = mode === 'm' && ay > ax ? 'y' : 'x';
+      if (axis === 'y') { tip.remove(); stk = tlStack(g.tl, bar, mem, y0); }
+    }
+    if (stk) { stk.move(ev.clientY); return; }
+    const dt = (ev.clientX - x0) / g.w * d; moved = true;
     const free = ev.shiftKey, fit = v => { const p = free ? null : near(v); return p !== null ? { v:p, hit:p } : { v:grid(v), hit:null }; };
     let s = s0, en = e0, hit = null;
     if (mode === 'm') {
@@ -2882,9 +4811,9 @@ function tlDragGroup(e, gid, bar, mode) {
   };
   const done = () => {
     removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); removeEventListener('keydown', key, true);
-    bar.classList.remove('drag', 'hl', 'hr'); tip.remove(); guide.remove();
+    bar.classList.remove('drag', 'hl', 'hr'); tip.remove(); guide.remove(); if (stk) stk.end();
   };
-  const up = () => { done(); if (moved) changed({ layers:true, props:true }); };
+  const up = () => { done(); if (stk) stk.drop(); else if (moved) changed({ layers:true, props:true }); };
   const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); o.forEach(x => { x.l.start = x.s; x.l.end = x.e; }); placeBar(bar, gpseudo(gid)); done(); needs = true; };
   bar.classList.add('drag'); if (mode !== 'm') bar.classList.add('h' + mode);
   addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up); addEventListener('keydown', key, true);
@@ -2900,10 +4829,10 @@ function tlDrag(e, L, bar, mode) {
     bar = g.tl.querySelector(`.tl-row[data-id="${L.id}"] .tl-bar`) || bar;
   }
   pushUndo(); pause();
-  const grp = isPicked(L.id) ? pickedLayers().filter(o => o !== L).map(o => ({ o, s:o.start, e:o.end })) : [];
-  const d = S.duration, s0 = L.start, e0 = L.end ?? d, end0 = L.end, x0 = e.clientX, grid = v => Math.round(v * 10) / 10, MIN = .3;
+  const grp = isPicked(L.id) ? freePicked().filter(o => o !== L).map(o => ({ o, s:o.start, e:o.end })) : [];
+  const d = S.duration, s0 = L.start, e0 = L.end ?? d, end0 = L.end, x0 = e.clientX, y0 = e.clientY, grid = v => Math.round(v * 10) / 10, MIN = .3;
   // ímã: início, fim, agulha e as bordas das outras camadas (Shift desliga)
-  const pts = [0, d, T];
+  const pts = [0, d, T, ...extraSnaps(L)]; // + batidas da música e o meio das transições
   for (const o of S.layers) if (o !== L && o.type !== 'bg' && !grp.some(q => q.o === o)) pts.push(o.start, o.end ?? d);
   // limites do deslocamento para a seleção toda andar junta (ninguém sai do vídeo, ninguém fica para trás)
   const ext = (s, en) => en != null && en < d - .01 ? en : s + MIN;
@@ -2913,7 +4842,7 @@ function tlDrag(e, L, bar, mode) {
   const lane = bar.parentElement, tip = h('div', { class:'tl-tip' }), guide = h('div', { class:'tl-snap', hidden:true });
   lane.append(tip); g.tl.append(guide);
   const fmtS = v => v.toFixed(1).replace('.', ',') + 's';
-  let moved = false;
+  let moved = false, axis = null, stk = null;
   const show = (hit) => {
     placeBar(bar, L);
     const end = L.end ?? d;
@@ -2927,8 +4856,13 @@ function tlDrag(e, L, bar, mode) {
     if (hit !== null) guide.style.left = (g.x0 - g.tl.getBoundingClientRect().left + hit / d * g.w) + 'px';
   };
   const mv = ev => {
-    const dt = (ev.clientX - x0) / g.w * d; if (Math.abs(ev.clientX - x0) > 2) moved = true;
-    if (!moved) return;
+    if (!axis) {
+      const ax = Math.abs(ev.clientX - x0), ay = Math.abs(ev.clientY - y0); if (Math.max(ax, ay) <= 3) return;
+      axis = mode === 'm' && ay > ax ? 'y' : 'x';
+      if (axis === 'y') { tip.remove(); stk = tlStack(g.tl, bar, [L, ...grp.map(q => q.o)], y0); }
+    }
+    if (stk) { stk.move(ev.clientY); return; }
+    const dt = (ev.clientX - x0) / g.w * d; moved = true;
     const free = ev.shiftKey;
     // ajusta um valor: ímã primeiro, senão grade de 0,1s
     const fit = v => { const p = free ? null : near(v); return p !== null ? { v:p, hit:p } : { v:grid(v), hit:null }; };
@@ -2956,9 +4890,9 @@ function tlDrag(e, L, bar, mode) {
   };
   const done = () => {
     removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); removeEventListener('keydown', key, true);
-    bar.classList.remove('drag', 'hl', 'hr'); tip.remove(); guide.remove();
+    bar.classList.remove('drag', 'hl', 'hr'); tip.remove(); guide.remove(); if (stk) stk.end();
   };
-  const up = () => { done(); if (moved) changed({ layers:true, props:true }); };
+  const up = () => { done(); if (stk) stk.drop(); else if (moved) changed({ layers:true, props:true }); };
   // Esc devolve a barra para onde estava
   const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); L.start = s0; L.end = end0; grp.forEach(q => { q.o.start = q.s; q.o.end = q.e; }); placeBar(bar, L); done(); needs = true; };
   bar.classList.add('drag'); if (mode === 'l' || mode === 'r') bar.classList.add('h' + mode);
@@ -2980,6 +4914,12 @@ function tlDrag(e, L, bar, mode) {
   });
   b.onclick = () => { on = !on; try { localStorage.setItem('mola-tl', on ? '1' : '0'); } catch (e) {} apply(); };
   apply();
+  // clique duplo numa barra: a agulha vai até o elemento já na tela (no grupo, até o primeiro que entra)
+  tl.addEventListener('dblclick', e => {
+    const row = e.target.closest('.tl-bar') && e.target.closest('.tl-row'); if (!row) return;
+    const L = row.dataset.gid ? S.layers.filter(l => l.grp === row.dataset.gid).sort((a, c) => a.start - c.start)[0] : S.layers.find(l => l.id === row.dataset.id);
+    if (L) seekLayer(L);
+  });
 }
 function renderMarks() {
   renderTimeline();
@@ -2997,54 +4937,61 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
   let ref = max; if (!isFinite(num(ref))) ref = (min + max) / 2; if (!ref || !isFinite(num(ref))) ref = min + step;
   const scale = 10 ** Math.round(Math.log10(Math.abs(num(ref) / ref) || 1));
   const unit = (String(fmt(ref)).match(/[^\d.,\s-]+$/) || [''])[0];
-  const out = h('input', { type:'text', class:'num', inputmode:'decimal', 'aria-label':`${label} (valor)`, value:fmt(L[k]) });
-  const inp = h('input', { type:'range', id, min, max, step, value:L[k] });
+  // posição: a do formato aberto (fora do principal, o ajuste vale só nele)
+  const isPos = k === 'x' || k === 'y', val = () => isPos ? posOf(L)[k] : L[k];
+  const out = h('input', { type:'text', class:'num', inputmode:'decimal', 'aria-label':`${label} (valor)`, value:fmt(val()) });
+  const inp = h('input', { type:'range', id, min, max, step, value:val() });
   // tamanho, opacidade, ritmo etc. valem para todas as camadas do mesmo tipo selecionadas; posição e tempo ficam só na principal
   const set = v => {
     // posição: a seleção toda se move junto (mesmo deslocamento)
-    if (k === 'x' || k === 'y') { const d = v - L[k]; for (const o of peersAny(L)) o[k] = o === L ? v : +clamp(o[k] + d, -.2, 1.2).toFixed(4); if (opts.onInput) opts.onInput(); changed(); return; }
-    for (const o of (['start', 'end'].includes(k) ? [L] : ['speed', 'intensity', 'opacity'].includes(k) ? peersAny(L) : peersOf(L))) o[k] = v; if (opts.layout) RT.layout.clear(); if (opts.onInput) opts.onInput(); changed(); };
+    if (isPos) {
+      const d = v - val();
+      for (const o of peersAny(L)) { const n = o === L ? v : +clamp(posOf(o)[k] + d, -.2, 1.2).toFixed(4); setPos(o, k === 'x' ? n : null, k === 'y' ? n : null); }
+      if (opts.onInput) opts.onInput(); changed(); return;
+    }
+    for (const o of (['start', 'end'].includes(k) ? [L] : ['inSpeed', 'inInt', 'outSpeed', 'outInt', 'idleSpeed', 'idleInt', 'opacity'].includes(k) ? peersAny(L) : peersOf(L))) o[k] = v; if (opts.layout) RT.layout.clear(); if (opts.onInput) opts.onInput(); changed(); };
   inp.addEventListener('pointerdown', pushUndo);
-  inp.addEventListener('input', () => { set(parseFloat(inp.value)); out.value = fmt(L[k]); });
+  inp.addEventListener('input', () => { set(parseFloat(inp.value)); out.value = fmt(val()); });
   if (opts.after) inp.addEventListener('change', opts.after);
-  const shown = () => { const v = L[k] ?? max; return +(v * scale).toFixed(Math.max(0, -Math.floor(Math.log10(step * scale)) + 1)); };
+  const shown = () => { const v = val() ?? max; return +(v * scale).toFixed(Math.max(0, -Math.floor(Math.log10(step * scale)) + 1)); };
   out.addEventListener('focus', () => { out.value = String(shown()).replace('.', ','); out.select(); });
   const apply = () => {
     const raw = parseFloat(out.value.replace(',', '.').replace(/[^\d.-]/g, ''));
     if (isFinite(raw)) {
       let v = clamp(raw / scale, min, max); if (step >= 1) v = Math.round(v);
-      if (v !== L[k]) { pushUndo(); set(v); inp.value = v; if (opts.after) opts.after(); }
+      if (v !== val()) { pushUndo(); set(v); inp.value = v; if (opts.after) opts.after(); }
     }
-    out.value = fmt(L[k]);
+    out.value = fmt(val());
   };
   out.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); out.blur(); }
-    else if (e.key === 'Escape') { out.value = fmt(L[k]); out.dataset.skip = '1'; out.blur(); }
+    else if (e.key === 'Escape') { out.value = fmt(val()); out.dataset.skip = '1'; out.blur(); }
     else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault();
       const cur = parseFloat(out.value.replace(',', '.')); if (!isFinite(cur)) return;
       const d = step * scale * (e.shiftKey ? 10 : 1) * (e.key === 'ArrowUp' ? 1 : -1);
       out.value = String(+(clamp((cur + d) / scale, min, max) * scale).toFixed(4)).replace('.', ',');
-      const v = clamp((cur + d) / scale, min, max); if (v !== L[k]) { pushUndo(); set(v); inp.value = v; }
+      const v = clamp((cur + d) / scale, min, max); if (v !== val()) { pushUndo(); set(v); inp.value = v; }
     }
   });
-  out.addEventListener('blur', () => { if (out.dataset.skip) { delete out.dataset.skip; out.value = fmt(L[k]); return; } apply(); });
+  out.addEventListener('blur', () => { if (out.dataset.skip) { delete out.dataset.skip; out.value = fmt(val()); return; } apply(); });
   out.title = `Digite o valor${unit && unit !== 'pílula' ? ' em ' + unit : ''}. Setas ↑↓ ajustam, Shift vai de 10 em 10.`;
   return field(label, h('div', { class:'rng' }, [inp, out]), id);
 }
-// aceita "#1a2b3c", "1a2b3c", "abc", "#ABC", "rgb(1, 42, 28)"; devolve "#rrggbb" ou null
+// aceita "#1a2b3c", "1a2b3c", "abc", "#ABC", "#1a2b3c80", "rgb(1, 42, 28)", "rgba(1, 42, 28, .5)";
+// devolve "#rrggbb" (ou "#rrggbbaa" se vier com opacidade) ou null
 function parseHex(s) {
   s = String(s || '').trim();
-  const m = s.match(/^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i);
-  if (m) return '#' + [m[1], m[2], m[3]].map(n => clamp(+n, 0, 255).toString(16).padStart(2, '0')).join('');
+  const m = s.match(/^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)(?:[\s,/]+([\d.]+)(%?))?/i);
+  if (m) return withA('#' + [m[1], m[2], m[3]].map(n => clamp(+n, 0, 255).toString(16).padStart(2, '0')).join(''), m[4] == null ? 1 : m[5] ? m[4] / 100 : +m[4]);
   s = s.replace(/[^0-9a-f]/gi, '');
   if (s.length === 3) s = s.replace(/./g, '$&$&');
-  else if (s.length === 8) s = s.slice(0, 6);
-  return s.length === 6 ? '#' + s.toLowerCase() : null;
+  if (s.length !== 6 && s.length !== 8) return null;
+  return withA('#' + s.slice(0, 6).toLowerCase(), s.length === 8 ? parseInt(s.slice(6), 16) / 255 : 1);
 }
 // Seletor de cor próprio: o do navegador abre em RGB; aqui o hex é sempre o primeiro campo.
 function hexToHsv(c) {
-  const n = parseInt(c.slice(1), 16), r = (n >> 16 & 255) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255;
+  const n = parseInt(c.slice(1, 7), 16), r = (n >> 16 & 255) / 255, g = (n >> 8 & 255) / 255, b = (n & 255) / 255;
   const mx = Math.max(r, g, b), d = mx - Math.min(r, g, b);
   let hh = 0;
   if (d) hh = mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
@@ -3058,29 +5005,42 @@ let openPicker = null;
 function closePicker() { if (openPicker) { openPicker.remove(); openPicker = null; document.removeEventListener('pointerdown', pickerOutside, true); } }
 function pickerOutside(e) { if (openPicker && !openPicker.contains(e.target) && !e.target.closest?.('.cpick')) closePicker(); }
 // devolve o botão-amostra; .setColor(c) atualiza por fora
-function colorButton(value, label, { onStart, onInput, cls = '' }) {
+function colorButton(value, label, { onStart, onInput, cls = '', alpha = true }) {
   let cur = value;
-  const btn = h('button', { type:'button', class:'cpick ' + cls, 'aria-label':label, title:label, style:`background:${cur}` });
-  btn.setColor = c => { cur = c; btn.style.background = c; };
+  const btn = h('button', { type:'button', class:'cpick ' + cls, 'aria-label':label, title:label, style:`--c:${cur}` });
+  btn.setColor = c => { cur = c; btn.style.setProperty('--c', c); };
   btn.addEventListener('click', () => {
     if (openPicker && openPicker._btn === btn) { closePicker(); return; }
     closePicker();
-    let [hh, sat, v] = hexToHsv(cur);
+    let [hh, sat, v] = hexToHsv(cur), al = alpha ? colA(cur) : 1;
     const sv = h('div', { class:'cp-sv' }, [h('i', { class:'cp-knob' })]);
     const hue = h('div', { class:'cp-hue' }, [h('i', { class:'cp-knob' })]);
+    const alp = alpha ? h('div', { class:'cp-alpha' }, [h('i', { class:'cp-knob' })]) : null;
+    const pct = alpha ? h('input', { type:'number', class:'cp-pct', min:0, max:100, step:1, inputmode:'numeric', 'aria-label':'Opacidade (%)', title:'Opacidade em %. Setas ↑↓ ajustam.' }) : null;
     const hexIn = h('input', { type:'text', class:'cp-hex', maxlength:32, spellcheck:'false', 'aria-label':'Hex', title:'Cole ou digite o hex, com ou sem #' });
+    // conta-gotas (Chrome/Edge): pega a cor de qualquer ponto da tela, inclusive de uma foto no palco
+    const eye = 'EyeDropper' in window ? h('button', { type:'button', class:'icon-btn cp-eye', title:'Conta-gotas: pegar uma cor da tela', 'aria-label':'Conta-gotas',
+      html:'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 2.5l3 3-1.6 1.6-3-3zM8.9 4.1l-5.6 5.6-.8 3.3 3.3-.8 5.6-5.6"/></svg>',
+      onclick:async () => {
+        try {
+          const r = await new EyeDropper().open(), c = parseHex(r.sRGBHex); if (!c) return;
+          if (onStart) onStart(); [hh, sat, v] = hexToHsv(c); emit();
+        } catch (e) {} // Esc cancela
+      } }) : null;
     const pop = h('div', { class:'cp-pop', role:'dialog', 'aria-label':label }, [
-      h('div', { class:'cp-row' }, [h('span', { class:'cp-lbl', text:'HEX' }), h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hexIn])]),
-      sv, hue
+      h('div', { class:'cp-row' }, [h('span', { class:'cp-lbl', text:'HEX' }), h('span', { class:'cp-rr' }, [h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hexIn]), eye])]),
+      sv, hue,
+      alpha ? h('div', { class:'cp-row' }, [h('span', { class:'cp-lbl', text:'OPAC.' }), alp, h('span', { class:'hexwrap pctwrap' }, [pct, h('i', { text:'%' })])]) : null
     ]);
     pop._btn = btn;
     const paint = () => {
-      const c = hsvToHex(hh, sat, v);
+      const base = hsvToHex(hh, sat, v);
       sv.style.background = `linear-gradient(to top,#000,transparent),linear-gradient(to right,#fff,${hsvToHex(hh, 1, 1)})`;
       sv.firstChild.style.left = sat * 100 + '%'; sv.firstChild.style.top = (1 - v) * 100 + '%';
       hue.firstChild.style.left = hh / 360 * 100 + '%';
-      hexIn.value = c.slice(1).toUpperCase();
-      return c;
+      if (alp) { alp.style.setProperty('--top', base); alp.firstChild.style.left = al * 100 + '%'; if (document.activeElement !== pct) pct.value = Math.round(al * 100); }
+      hexIn.value = base.slice(1).toUpperCase();
+      return withA(base, al);
     };
     const emit = () => { const c = paint(); cur = c; btn.setColor(c); onInput(c); };
     const drag = (el, fn) => el.addEventListener('pointerdown', e => {
@@ -3091,10 +5051,21 @@ function colorButton(value, label, { onStart, onInput, cls = '' }) {
     });
     drag(sv, (x, y) => { sat = x; v = 1 - y; });
     drag(hue, x => { hh = x * 360; });
+    if (alp) {
+      drag(alp, x => { al = Math.round(x * 100) / 100; });
+      const setPct = () => { const n = parseFloat(pct.value); if (!isFinite(n)) return; const a = clamp(n, 0, 100) / 100; if (a === al) return; if (onStart) onStart(); al = a; emit(); };
+      pct.addEventListener('input', setPct);
+      pct.addEventListener('focus', () => pct.select());
+      pct.addEventListener('blur', () => { pct.value = Math.round(al * 100); });
+      pct.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); pct.blur(); } else if (e.key === 'Escape') { e.stopPropagation(); closePicker(); btn.focus(); } });
+    }
     const commit = () => {
       const c = parseHex(hexIn.value);
-      if (c && c !== cur) { if (onStart) onStart(); [hh, sat, v] = hexToHsv(c); cur = c; btn.setColor(c); onInput(c); }
-      hexIn.value = cur.slice(1).toUpperCase(); paint();
+      if (c) {
+        const a = alpha && c.length === 9 ? colA(c) : al, nc = withA(c, a);
+        if (nc !== cur) { if (onStart) onStart(); [hh, sat, v] = hexToHsv(c); al = a; cur = nc; btn.setColor(nc); onInput(nc); }
+      }
+      paint();
     };
     hexIn.addEventListener('focus', () => hexIn.select());
     hexIn.addEventListener('paste', e => { const c = parseHex(e.clipboardData.getData('text/plain')); if (!c) return; e.preventDefault(); hexIn.value = c.slice(1); commit(); });
@@ -3118,17 +5089,35 @@ function peersOf(L) {
 function colorF(L, k, label) {
   const id = fid(L, k);
   const setAll = c => { for (const o of peersOf(L)) o[k] = c; };
-  const inp = colorButton(L[k], `${label} (seletor)`, { onStart:pushUndo, onInput:c => { setAll(c); hex.value = c.slice(1).toUpperCase(); changed(); } });
+  const six = () => String(L[k]).slice(1, 7).toUpperCase();
+  const show = () => { hex.value = six(); if (document.activeElement !== pct) pct.value = Math.round(colA(L[k]) * 100); };
+  const inp = colorButton(L[k], `${label} (seletor)`, { onStart:pushUndo, onInput:c => { setAll(c); show(); changed(); } });
   inp.id = id;
-  const hex = h('input', { type:'text', class:'hex', value:String(L[k]).replace('#', '').toUpperCase(), maxlength:32, spellcheck:'false', 'aria-label':`${label} (hex)`, title:'Cole ou digite o hex, com ou sem #' });
-  const put = c => { setAll(c); inp.setColor(c); hex.value = c.slice(1).toUpperCase(); changed(); };
-  const commit = () => { const c = parseHex(hex.value); if (c && c !== L[k]) { pushUndo(); put(c); } else hex.value = String(L[k]).replace('#', '').toUpperCase(); };
+  const hex = h('input', { type:'text', class:'hex', value:six(), maxlength:32, spellcheck:'false', 'aria-label':`${label} (hex)`, title:'Cole ou digite o hex, com ou sem #' });
+  const pct = h('input', { type:'number', class:'apct', min:0, max:100, step:1, inputmode:'numeric', value:Math.round(colA(L[k]) * 100), 'aria-label':`${label} (opacidade %)`, title:'Opacidade em %. Setas ↑↓ ajustam.' });
+  const put = c => { setAll(c); inp.setColor(c); show(); changed(); };
+  const commit = () => {
+    const c = parseHex(hex.value);
+    if (c) { const n = withA(c, c.length === 9 ? colA(c) : colA(L[k])); if (n !== L[k]) { pushUndo(); put(n); } }
+    show();
+  };
   hex.addEventListener('focus', () => hex.select());
-  hex.addEventListener('paste', e => { const c = parseHex(e.clipboardData.getData('text/plain')); if (!c) return; e.preventDefault(); pushUndo(); put(c); });
-  hex.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); hex.blur(); } else if (e.key === 'Escape') { hex.value = String(L[k]).replace('#', '').toUpperCase(); hex.blur(); } });
+  hex.addEventListener('paste', e => { const c = parseHex(e.clipboardData.getData('text/plain')); if (!c) return; e.preventDefault(); pushUndo(); put(withA(c, c.length === 9 ? colA(c) : colA(L[k]))); });
+  hex.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); hex.blur(); } else if (e.key === 'Escape') { hex.value = six(); hex.blur(); } });
   hex.addEventListener('blur', commit);
-  const sws = allBrandColors().map(c => h('button', { class:'mini-sw', style:`background:${c}`, title:c, 'aria-label':`Usar ${c}`, onclick:() => { pushUndo(); put(c); } }));
-  return field(label, h('div', { class:'colorctl' }, [inp, h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hex]), ...sws]), id);
+  let pctUndo = false;
+  pct.addEventListener('focus', () => { pct.select(); pctUndo = false; });
+  pct.addEventListener('input', () => {
+    const v = parseFloat(pct.value); if (!isFinite(v)) return;
+    const n = withA(L[k], clamp(v, 0, 100) / 100); if (n === L[k]) return;
+    if (!pctUndo) { pushUndo(); pctUndo = true; }
+    put(n);
+  });
+  pct.addEventListener('blur', () => show());
+  pct.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); pct.blur(); } else if (e.key === 'Escape') { pct.blur(); } });
+  // amostra da marca: troca a cor e mantém a opacidade que já estava
+  const sws = allBrandColors().map(c => h('button', { class:'mini-sw', style:`background:${c}`, title:c, 'aria-label':`Usar ${c}`, onclick:() => { pushUndo(); put(withA(c, colA(L[k]))); } }));
+  return field(label, h('div', { class:'colorctl' }, [inp, h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hex]), h('span', { class:'hexwrap pctwrap' }, [pct, h('i', { text:'%' })]), ...sws]), id);
 }
 function selectF(L, k, label, opts, o = {}) {
   const id = fid(L, k);
@@ -3136,16 +5125,32 @@ function selectF(L, k, label, opts, o = {}) {
   sel.addEventListener('change', () => { pushUndo(); for (const p of peersOf(L)) p[k] = o.num ? parseFloat(sel.value) : sel.value; RT.layout.clear(); changed({ props:!!o.props }); });
   return field(label, sel, id);
 }
+// mesclagem (blend mode): vale para toda a seleção, de qualquer tipo, como a opacidade. Devolve [campo, dica do modo escolhido]
+function blendF(L) {
+  const id = fid(L, 'blend'), cur = blendOf(L) || 'normal';
+  const sel = h('select', { id }, BLEND_GROUPS.flatMap(([g, xs]) => {
+    const os = xs.map(([v, t]) => h('option', { value:v, text:t, selected:cur === v }));
+    return g ? [h('optgroup', { label:g }, os)] : os;
+  }));
+  const hint = h('p', { class:'hint' });
+  const tip = () => {
+    const b = blendOf(L); hint.hidden = !b;
+    hint.textContent = b ? BLENDS[b].dica + (L.type === 'bg' ? ' O fundo fica embaixo de tudo: aqui ele mistura com preto.' : '') : '';
+  };
+  sel.addEventListener('change', () => { pushUndo(); for (const o of peersAny(L)) o.blend = sel.value; tip(); changed(); });
+  tip();
+  return [field('Mesclagem', sel, id), hint];
+}
 function segF(L, k, label, opts) {
   const wrap = h('div', { class:'segs' + (opts.every(o => String(o[1]).length <= 8) ? ' tight' : ''), role:'group', 'aria-label':label });
-  const draw = () => { wrap.innerHTML = ''; opts.forEach(([v, t]) => wrap.append(h('button', { 'aria-pressed':String(L[k] === v), text:t, onclick:() => { pushUndo(); for (const o of peersOf(L)) o[k] = v; RT.layout.clear(); draw(); changed(); if (k === 'mode' || k === 'kind') renderProps(); } }))); };
+  const draw = () => { wrap.innerHTML = ''; opts.forEach(([v, t]) => wrap.append(h('button', { 'aria-pressed':String(L[k] === v), text:t, onclick:() => { pushUndo(); for (const o of peersOf(L)) o[k] = v; RT.layout.clear(); draw(); changed(); if (k === 'mode' || k === 'kind' || k === 'strokeDash') renderProps(); } }))); };
   draw();
   return field(label, wrap, null, true);
 }
 function checkF(L, k, label) {
   const id = fid(L, k);
   const inp = h('input', { type:'checkbox', id, checked:!!L[k] });
-  inp.addEventListener('change', () => { pushUndo(); for (const o of peersOf(L)) o[k] = inp.checked; RT.layout.clear(); changed(); if (k === 'stroke' || k === 'tint') renderProps(); });
+  inp.addEventListener('change', () => { pushUndo(); for (const o of peersOf(L)) o[k] = inp.checked; RT.layout.clear(); changed(); if (k === 'stroke' || k === 'tint' || k === 'fill') renderProps(); });
   return h('label', { class:'check', for:id }, [inp, label]);
 }
 function textF(L, k, label, multi) {
@@ -3295,17 +5300,48 @@ function uploadF(label, accept, onFile) {
 // camadas que recebem a mudança: a selecionada e o resto da seleção (de qualquer tipo)
 function peersAny(L) { if (!isPicked(L.id)) return [L]; const ps = pickedLayers(); return ps.includes(L) ? ps : [L]; }
 function presetKeys(q, k) {
+  if (q.__g) return G_KEYS[k]; // o grupo (gview)
   if (k === 'in') return q.type === 'text' ? TEXT_IN : BLOCK_IN[q.type] || [];
   if (k === 'out') return q.type === 'text' ? TEXT_OUT : BLOCK_OUT[q.type] || [];
   return IDLE_BY[q.type] || ['none'];
 }
+/* favoritos e busca de presets: preferência de quem usa, vale em todos os arquivos (fica no navegador, fora do projeto) */
+const ICON_STAR = '<svg viewBox="0 0 16 16"><path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.6l-3.8 2 .7-4.3-3.1-3 4.3-.6z"/></svg>';
+const ICON_SEARCH = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.4 10.4L14 14"/></svg>';
+const FAVS = (() => { try { const o = JSON.parse(localStorage.getItem('mola-favs')); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } })(); // { in:[chaves], out:[…], idle:[…] }
+const isFav = (k, key) => (FAVS[k] || []).includes(key);
+function toggleFav(k, key) {
+  const a = FAVS[k] = FAVS[k] || [], i = a.indexOf(key);
+  if (i < 0) a.push(key); else a.splice(i, 1);
+  try { localStorage.setItem('mola-favs', JSON.stringify(FAVS)); } catch (e) {}
+}
+let presetQ = ''; // texto da lupa na aba Animação (continua ao trocar de camada)
+const fold = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const CAT_NAME = Object.fromEntries(CATS);
+// todas as palavras precisam aparecer no nome ou na categoria ("3d", "revela", "mola"), sem acento
+function presetMatch(P, q) { const hay = fold(P.label + ' ' + (CAT_NAME[P.cat] || '')); return fold(q).split(/\s+/).filter(Boolean).every(w => hay.includes(w)); }
+function presetSearch(box) {
+  const inp = h('input', { type:'text', id:'presetQ', value:presetQ, placeholder:'Buscar animação', 'aria-label':'Buscar animação (tecla /)', autocomplete:'off', spellcheck:'false' });
+  const set = v => { presetQ = v; inp.value = v; clr.hidden = !v; box.querySelectorAll('.chips').forEach(w => w.fill && w.fill()); };
+  const clr = h('button', { type:'button', class:'psearch-x', title:'Limpar busca (Esc)', 'aria-label':'Limpar busca', text:'×', hidden:!presetQ, onclick:() => { set(''); inp.focus(); } });
+  inp.addEventListener('input', () => set(inp.value));
+  inp.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); if (inp.value) set(''); else inp.blur(); } });
+  return h('label', { class:'psearch' }, [h('span', { class:'psearch-i', html:ICON_SEARCH }), inp, clr]);
+}
+// tecla /: abre a aba Animação e põe o cursor na lupa
+function findPreset() {
+  const L = selL(); if (!L || L.type === 'bg') { toast('Selecione um elemento para buscar a animação'); return; }
+  if (propTab !== 'anim') { propTab = 'anim'; renderProps(); }
+  const i = $('#presetQ'); if (i) { i.focus(); i.select(); }
+}
 function presetGrid(L, k, keys, map, title) {
   const wrap = h('div', { class:'chips' });
   const lgo = logoOf(L), svgOK = lgo && lgo.isSvg && lgo.parts.length, penOK = lgo && lgo.pen;
-  keys.forEach(key => {
+  const one = key => {
     const P = map[key]; const needSvg = P.svg && L.type === 'logo';
     const off = L.type === 'logo' && (P.svg ? !svgOK : P.pen ? !penOK : false);
-    const b = h('button', { class:'chip' + (off ? ' dim' : ''), 'aria-pressed':String(L[k] === key), title:off ? (P.svg ? 'Precisa de logo em SVG' : 'Precisa de logo em SVG ou PNG com fundo transparente') : P.label,
+    const fav = isFav(k, key);
+    const b = h('button', { class:'chip' + (off ? ' dim' : ''), 'data-key':key, 'aria-pressed':String(L[k] === key), title:off ? (P.svg ? 'Precisa de logo em SVG' : 'Precisa de logo em SVG ou PNG com fundo transparente') : P.label,
       onclick:() => {
         pushUndo();
         // vale para toda a seleção (grupo ou vários): quem não tem esse preset fica como está
@@ -3316,13 +5352,45 @@ function presetGrid(L, k, keys, map, title) {
           if (k === 'in' && Pq.dur != null && key !== 'cut') q.inDur = Pq.dur;
           if (k === 'out' && key !== 'cut') q.outDur = Math.min(.8, Math.max(.35, (Pq.dur || .6) * .55));
         }
-        wrap.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', 'false')); b.setAttribute('aria-pressed', 'true');
-        changed(); renderMarks();
+        // o mesmo preset pode aparecer duas vezes (em Favoritos e na categoria)
+        wrap.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', String(c.dataset.key === key)));        changed(); renderMarks();
         if (k === 'out') seekOut(L); else seekLayer(L);
       } }, [h('span', { text:P.label }), needSvg ? h('em', { text:'SVG' }) : null]);
-    wrap.append(b);
-  });
+    // "Sem animação" não tem estrela: já fica sempre no topo
+    const star = key === 'cut' || key === 'none' ? null : h('button', { type:'button', class:'fav', 'aria-pressed':String(fav), title:fav ? 'Tirar dos favoritos' : 'Favoritar',
+      'aria-label':(fav ? 'Tirar dos favoritos: ' : 'Favoritar: ') + P.label, html:ICON_STAR, onclick:() => { toggleFav(k, key); fill(); } });
+    wrap.append(h('div', { class:'chip-w' + (fav ? ' on' : '') }, [b, star]));
+  };
+  const head = t => wrap.append(h('div', { class:'chip-cat', text:t }));
+  const fill = () => {
+    wrap.innerHTML = '';
+    const q = presetQ.trim(), ks = q ? keys.filter(key => presetMatch(map[key], q)) : keys;
+    if (!ks.length) { wrap.append(h('p', { class:'chip-none', text:`Nenhuma com “${q}”.` })); return; }
+    // favoritos: atalho no topo (sem esconder da categoria); na busca, cada um aparece uma vez só
+    const favs = q ? [] : keys.filter(key => isFav(k, key));
+    // agrupa por categoria (Movimento, Revelação, 3D...), mantendo a ordem da lista dentro de cada uma
+    const cats = new Set(ks.map(key => map[key].cat || ''));
+    if (cats.size < 2) {
+      const top = favs.length && (ks[0] === 'none' || ks[0] === 'cut') ? [ks[0]] : [];
+      top.forEach(one);
+      if (favs.length) { head('Favoritos'); favs.forEach(one); head('Todos'); }
+      ks.filter(key => !top.includes(key)).forEach(one); return;
+    }
+    for (const [cat, name] of CATS) {
+      const cs = ks.filter(key => (map[key].cat || '') === cat);
+      if (cs.length) { if (name) head(name); cs.forEach(one); }
+      if (!cat && favs.length) { head('Favoritos'); favs.forEach(one); } // "Sem animação" em cima, favoritos logo depois
+    }
+  };
+  wrap.fill = fill; fill();
   return wrap;
+}
+// presets que desenham uma linha de destaque ("Linha e revela", "Corte diagonal", "Scanner")
+const usesLine = L => ['line', 'diag', 'scan'].some(k => L.in === k || L.out === k);
+function lineF(L) {
+  if (!usesLine(L)) return null;
+  if (!L.lineColor) L.lineColor = S.brand.colors[2];
+  return colorF(L, 'lineColor', 'Cor da linha');
 }
 function idleGrid(L) {
   const keys = IDLE_BY[L.type] || ['none'];
@@ -3334,47 +5402,95 @@ function renderProps() {
   const box = $('#props'); box.innerHTML = '';
   const L = selL();
   if (!L) { box.append(h('div', { class:'props-empty', text:'Selecione uma camada.' })); return; }
+  const gid = wholeGroup(); // grupo inteiro selecionado: a aba Animação é a do grupo
   const head = h('section', { class:'sec' }, [
     h('div', { class:'lhead' }, [
-      h('span', { class:'type-chip', style:`color:${TYPE_COLOR[L.type]}`, text:TYPE_LABEL[L.type] }),
-      (() => { const i = h('input', { type:'text', id:fid(L, 'name'), value:L.name, 'aria-label':'Nome da camada' }); i.addEventListener('input', () => { L.name = i.value; renderLayers(); autosave(); }); return i; })(),
+      h('span', { class:'type-chip', style:`color:${gid ? 'var(--accent)' : TYPE_COLOR[L.type]}`, text:gid ? 'Grupo' : TYPE_LABEL[L.type] }),
+      gid ? (() => { const i = h('input', { type:'text', id:'f-g-' + gid + '-name', value:groupName(gid), 'aria-label':'Nome do grupo' }); i.addEventListener('input', () => { gmeta(gid, true).name = i.value.trim() || undefined; renderLayers(); renderTimeline(); autosave(); }); return i; })()
+        : (() => { const i = h('input', { type:'text', id:fid(L, 'name'), value:L.name, 'aria-label':'Nome da camada' }); i.addEventListener('input', () => { L.name = i.value; renderLayers(); autosave(); }); return i; })(),
       L.type !== 'bg' ? h('button', { class:'icon-btn', title:'Duplicar', html:ICONS.copy, onclick:() => duplicateLayer(L) }) : null,
       L.type !== 'bg' ? h('button', { class:'icon-btn', title:'Apagar camada (Delete)', html:ICONS.trash, onclick:() => deleteLayer(L) }) : null,
     ]),
   ]);
-  if (L.type !== 'bg') box.append(alignBar());
-  if (L.type !== 'bg' && pickedLayers().length > 1) box.append(scaleBar());
+  if (L.type !== 'bg' && !NOBOX(L)) box.append(alignBar());
+  if (L.type !== 'bg' && !NOBOX(L) && pickedLayers().length > 1) box.append(scaleBar());
   box.append(head);
 
   if (L.type === 'bg') { box.append(bgProps(L)); return; }
+  if (NOBOX(L)) { box.append(...camFxProps(L)); return; } // câmera e transição: só preset, ritmo e tempo
 
   const tabs = h('div', { class:'tabs', role:'tablist' }, [['anim', 'Animação'], ['style', 'Conteúdo e estilo']].map(([k, t]) =>
     h('button', { role:'tab', 'aria-selected':String(propTab === k), text:t, onclick:() => { propTab = k; renderProps(); } })));
   head.append(tabs);
 
+  if (propTab === 'anim' && gid) { box.append(...groupAnimSecs(gid, head, box)); return; }
   if (propTab === 'anim') {
     const inKeys = L.type === 'text' ? TEXT_IN : BLOCK_IN[L.type];
     const outKeys = L.type === 'text' ? TEXT_OUT : BLOCK_OUT[L.type];
     const map = L.type === 'text' ? TP : BP;
-    box.append(h('section', { class:'sec' }, [h('h3', { text:'Entrada' }), presetGrid(L, 'in', inKeys, map)]));
-    box.append(h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), idleGrid(L)]));
-    box.append(h('section', { class:'sec' }, [h('h3', {}, ['Saída', h('small', { text:(L.end ?? S.duration) >= S.duration - .01 ? 'no fim do vídeo' : `em ${(L.end).toFixed(1)}s` })]), presetGrid(L, 'out', outKeys, map)]));
+    head.append(presetSearch(box));
+    // ▶ Ver: toca só o trecho (entrada ou saída) e para; nada toca sozinho ao trocar o preset
+    const seeBtn = (t, fn) => h('button', { type:'button', class:'see', title:t, 'aria-label':t, html:`${ICON_PLAY}<span>Ver</span>`, onclick:fn });
+    // velocidade e intensidade de cada fase, logo abaixo dos presets dela (sempre à vista; valem quando a fase tiver animação)
+    const rhythm = (m, minS, maxS, after) => {
+      const [sk, ik] = RHY[m]; for (const o of peersAny(L)) { o[sk] = spdOf(o, m); o[ik] = intOf(o, m); } // arquivos antigos: herda o valor único
+      return [rangeF(L, sk, 'Velocidade', minS, maxS, .05, v => v.toFixed(2) + '×', { after }),
+        rangeF(L, ik, 'Intensidade', 0, 1, .01, v => Math.round(v * 100) + '%', { after })];
+    };
+    box.append(h('section', { class:'sec' }, [h('h3', {}, ['Entrada', seeBtn('Ver a entrada (toca só este trecho)', () => previewIn(L))]), presetGrid(L, 'in', inKeys, map),
+      ...rhythm('in', .4, 6, () => seekLayer(L))]));
+    box.append(h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), idleGrid(L), ...rhythm('idle', .2, 4, () => seekLayer(L))]));
+    box.append(...animExtras(L)); // marca à mão (texto), movimento dentro da imagem
+    box.append(h('section', { class:'sec' }, [h('h3', {}, ['Saída', h('span', { class:'h3r' }, [h('small', { text:(L.end ?? S.duration) >= S.duration - .01 ? 'no fim do vídeo' : `em ${(L.end).toFixed(1)}s` }),
+      seeBtn('Ver a saída (toca só este trecho)', () => previewOut(L))])]), presetGrid(L, 'out', outKeys, map),
+      ...rhythm('out', .4, 6, () => seekOut(L))]));
     box.append(h('section', { class:'sec' }, [
-      h('h3', { text:'Ritmo' }),
-      rangeF(L, 'speed', 'Velocidade', .4, 6, .05, v => v.toFixed(2) + '×', { after:() => seekLayer(L) }),
-      rangeF(L, 'intensity', 'Intensidade', 0, 1, .01, v => Math.round(v * 100) + '%', { after:() => seekLayer(L) }),
+      h('h3', { text:'Tempo' }),
       rangeF(L, 'start', 'Entra em', 0, S.duration - .2, .1, v => v.toFixed(1) + 's', { onInput:() => { if (L.end != null && L.end < L.start + .3) L.end = Math.min(S.duration, L.start + .3); renderMarks(); }, after:() => { renderLayers(); seekLayer(L); } }),
       rangeF(L, 'end', 'Sai em', .3, S.duration, .1, v => (v ?? S.duration).toFixed(1) + 's', { onInput:() => { if (L.end < L.start + .3) L.end = L.start + .3; }, after:() => { renderProps(); seekOut(L); } }),
     ]));
   } else {
     box.append(styleProps(L));
+    box.append(...styleExtras(L)); // moldura, vídeo e sombra
   }
 }
+// aba Animação do grupo inteiro: age sobre o conjunto e se soma à animação de cada item (que não muda)
+function groupAnimSecs(gid, head, box) {
+  const G = gview(gid);
+  head.append(presetSearch(box));
+  const seeBtn = (t, fn) => h('button', { type:'button', class:'see', title:t, 'aria-label':t, html:`${ICON_PLAY}<span>Ver</span>`, onclick:fn });
+  const rhythm = (m, minS, maxS, after) => {
+    const [sk, ik] = RHY[m]; G[sk] = spdOf(G, m); G[ik] = intOf(G, m);
+    return [rangeF(G, sk, 'Velocidade', minS, maxS, .05, v => v.toFixed(2) + '×', { after }),
+      rangeF(G, ik, 'Intensidade', 0, 1, .01, v => Math.round(v * 100) + '%', { after })];
+  };
+  const idleMap = Object.fromEntries(G_KEYS.idle.map(k => [k, { label:IDLE[k] }]));
+  const w = gwin(gid);
+  return [
+    h('p', { class:'hint', text:'Animação do grupo inteiro: age sobre o conjunto e se soma à de cada item, que continua como está. Para mexer em um item só, clique nele na timeline ou use Ctrl + clique.' }),
+    h('section', { class:'sec' }, [h('h3', {}, ['Entrada do grupo', seeBtn('Ver a entrada do grupo (toca só este trecho)', () => previewIn(G))]), presetGrid(G, 'in', G_KEYS.in, BP),
+      ...rhythm('in', .4, 6, () => seekLayer(G))]),
+    h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), presetGrid(G, 'idle', G_KEYS.idle, idleMap), ...rhythm('idle', .2, 4, () => seekLayer(G))]),
+    h('section', { class:'sec' }, [h('h3', {}, ['Saída do grupo', h('span', { class:'h3r' }, [h('small', { text:`em ${w.end.toFixed(1)}s` }),
+      seeBtn('Ver a saída do grupo (toca só este trecho)', () => previewOut(G))])]), presetGrid(G, 'out', G_KEYS.out, BP),
+      ...rhythm('out', .4, 6, () => seekOut(G))]),
+  ];
+}
 function syncPosFields(L) {
-  ['x', 'y'].forEach(k => { const i = document.getElementById(fid(L, k)); if (i) { i.value = L[k]; const o = i.parentElement.querySelector('output'); if (o) o.textContent = Math.round(L[k] * 100) + '%'; } });
+  const p = posOf(L);
+  ['x', 'y'].forEach(k => { const i = document.getElementById(fid(L, k)); if (i) { i.value = p[k]; const o = i.parentElement.querySelector('.num'); if (o && document.activeElement !== o) o.value = Math.round(p[k] * 100) + '%'; } });
+  const n = document.getElementById(fid(L, 'fpos')), nn = posNote(L); if (n && nn) n.replaceWith(nn);
 }
 function posFields(L) {
-  return [rangeF(L, 'x', 'Horizontal', 0, 1, .005, v => Math.round(v * 100) + '%'), rangeF(L, 'y', 'Vertical', 0, 1, .005, v => Math.round(v * 100) + '%')];
+  return [rangeF(L, 'x', 'Horizontal', 0, 1, .005, v => Math.round(v * 100) + '%'), rangeF(L, 'y', 'Vertical', 0, 1, .005, v => Math.round(v * 100) + '%'), posNote(L)];
+}
+// fora do formato principal: de onde vem a posição e como voltar ao automático
+function posNote(L) {
+  if (S.format === baseFmt()) return null;
+  const ls = peersAny(L), own = ls.some(ownPos);
+  return h('div', { class:'posnote', id:fid(L, 'fpos') }, [
+    h('span', { text:own ? `Posição ou tamanho ajustados só no ${fmtLabel(S.format)}` : `Automática, reorganizada a partir do ${fmtLabel(baseFmt())}` }),
+    own ? h('button', { type:'button', class:'btn small ghost', text:'Voltar ao automático', onclick:() => resetPos(ls) }) : null]);
 }
 function styleProps(L) {
   const sec = h('section', { class:'sec' }), put = (...xs) => sec.append(...xs.filter(Boolean));
@@ -3384,6 +5500,7 @@ function styleProps(L) {
     put(h('h3', { text:`${peersAny(L).length} elementos` }),
       h('p', { class:'hint', text:'Tipos diferentes: aqui ficam só as opções em comum. Escolha um tipo só para ver as demais.' }),
       rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
+      ...blendF(L),
       h('h3', { text:'Posição (move todos juntos)' }),
       ...posFields(L));
     return sec;
@@ -3395,13 +5512,15 @@ function styleProps(L) {
       rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true }),
       rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
       rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
-      rangeF(L, 'maxW', 'Largura máx.', .3, 1, .01, v => Math.round(v * 100) + '%', { layout:true }),
+      rangeF(L, 'maxW', 'Largura máx.', .1, 1, .01, v => Math.round(v * 100) + '%', { layout:true }),
       segF(L, 'align', 'Alinhamento', [['left', 'Esq.'], ['center', 'Centro'], ['right', 'Dir.']]),
       h('div', { class:'checks' }, [checkF(L, 'upper', 'Caixa alta'), checkF(L, 'italic', 'Itálico')]),
       h('h3', { text:'Aparência' }),
       colorF(L, 'color', 'Cor'),
       L.in === 'highlight' || L.out === 'highlight' ? colorF(L, 'hl', 'Marca-texto') : null,
+      lineF(L),
       rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
+      ...blendF(L),
       h('h3', { text:'Posição' }),
       ...posFields(L));
   } else if (L.type === 'cta') {
@@ -3413,7 +5532,10 @@ function styleProps(L) {
       rangeF(L, 'padX', 'Folga lateral', 10, 160, 1, px), rangeF(L, 'padY', 'Folga vertical', 6, 80, 1, px),
       h('h3', { text:'Cores' }),
       colorF(L, 'bg', 'Fundo'), colorF(L, 'color', 'Texto'),
-      L.in === 'line' || L.out === 'line' ? colorF(L, 'lineColor', 'Cor da linha') : null,
+      lineF(L),
+      h('h3', { text:'Aparência' }),
+      rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
+      ...blendF(L),
       h('h3', { text:'Posição' }),
       ...posFields(L));
   } else if (L.type === 'logo') {
@@ -3422,6 +5544,7 @@ function styleProps(L) {
       h('p', { class:'hint', text:L.svg ? 'Este SVG é só desta camada. Tem as mesmas animações do logo.' : 'O arquivo do logo é trocado em Marca, na coluna da esquerda.' }),
       rangeF(L, 'size', 'Tamanho', .04, .95, .005, v => Math.round(v * 100) + '%'),
       rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
+      ...blendF(L),
       (L.tintColor || (L.tintColor = S.brand.colors[1]), h('h3', { text:'Cor do logo' })),
       checkF(L, 'tint', 'Pintar o logo de uma cor só'),
       L.tint ? colorF(L, 'tintColor', 'Cor') : null,
@@ -3430,12 +5553,18 @@ function styleProps(L) {
       (L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble') ? checkF(L, 'drawOrig', 'Usar as cores originais do SVG') : null,
       (L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble') ? rangeF(L, 'drawWidth', 'Espessura', 1, 16, .5, v => v + 'px') : null,
       (L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble') && !L.drawOrig ? colorF(L, 'drawColor', 'Cor do traço') : null,
-      L.in === 'line' || L.out === 'line' ? h('h3', { text:'Linha' }) : null,
-      L.in === 'line' || L.out === 'line' ? colorF(L, 'lineColor', 'Cor da linha') : null,
+      usesLine(L) ? h('h3', { text:'Linha' }) : null,
+      lineF(L),
       h('h3', { text:'Posição' }),
       ...posFields(L));
   } else if (L.type === 'shape') {
     const pct = v => Math.round(v * 100) + '%', k = L.kind;
+    if (L.fill == null) L.fill = true;
+    if (L.strokeDash == null) L.strokeDash = 'solid';
+    if (L.strokeGap == null) L.strokeGap = 1;
+    if (L.strokeCap == null) L.strokeCap = 'round';
+    if (L.strokeJoin == null) L.strokeJoin = 'round';
+    const filled = k !== 'line' && L.fill, stroked = !filled || L.stroke;
     put(h('h3', { text:'Forma' }),
       segF(L, 'kind', 'Tipo', Object.entries(SHAPE_KINDS)),
       k === 'custom' ? textF(L, 'd', 'Caminho SVG (atributo d do <path>)', true) : null,
@@ -3446,15 +5575,22 @@ function styleProps(L) {
       k === 'polygon' || k === 'star' ? rangeF(L, 'points', 'Pontas', 3, 12, 1, v => String(Math.round(v))) : null,
       k === 'star' ? rangeF(L, 'inner', 'Profundidade', .1, .95, .01, pct) : null,
       rangeF(L, 'rot', 'Rotação', -180, 180, 1, v => Math.round(v) + '°'),
-      k !== 'line' ? h('h3', { text:'Cor (mesmas animações do fundo)' }) : null);
-    if (k !== 'line') fillProps(L, sec);
+      k !== 'line' ? checkF(L, 'fill', 'Preenchimento') : null,
+      filled ? h('h3', { text:'Cor (mesmas animações do fundo)' }) : null);
+    if (filled) fillProps(L, sec);
     put(h('h3', { text:k === 'line' ? 'Traço' : 'Contorno' }),
-      k !== 'line' ? checkF(L, 'stroke', 'Contorno') : null,
-      k === 'line' || L.stroke ? rangeF(L, 'strokeW', 'Espessura', 1, 80, .5, v => v + 'px') : null,
-      k === 'line' || L.stroke ? colorF(L, 'strokeColor', 'Cor do traço') : null,
-      L.in === 'draw' && !L.stroke && k !== 'line' ? h('p', { class:'hint', text:'"Desenhar traço" usa a cor 2 como traço de apoio. Ative Contorno para mantê-lo.' }) : null,
+      filled ? checkF(L, 'stroke', 'Contorno') : null,
+      stroked ? rangeF(L, 'strokeW', 'Espessura', 1, 80, .5, v => v + 'px') : null,
+      stroked ? colorF(L, 'strokeColor', 'Cor do traço') : null,
+      stroked ? segF(L, 'strokeDash', 'Estilo', Object.entries(STROKE_STYLES)) : null,
+      stroked && L.strokeDash && L.strokeDash !== 'solid' ? rangeF(L, 'strokeGap', 'Espaçamento', .4, 3, .05, v => v.toFixed(2) + '×') : null,
+      stroked && L.strokeDash !== 'dot' ? segF(L, 'strokeCap', 'Pontas', [['round', 'Redonda'], ['butt', 'Reta'], ['square', 'Quadrada']]) : null,
+      stroked && k !== 'line' && k !== 'ellipse' ? segF(L, 'strokeJoin', 'Cantos', [['round', 'Redondo'], ['miter', 'Vivo'], ['bevel', 'Chanfro']]) : null,
+      L.in === 'draw' && !stroked ? h('p', { class:'hint', text:'"Desenhar traço" usa a cor 2 como traço de apoio. Ative Contorno para mantê-lo.' }) : null,
       h('h3', { text:'Aparência' }),
       rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, pct),
+      ...blendF(L),
+      lineF(L),
       h('h3', { text:'Posição' }),
       ...posFields(L));
   } else if (L.type === 'image') {
@@ -3478,11 +5614,12 @@ function styleProps(L) {
       rangeF(L, 'zoom', 'Zoom', .2, 5, .01, v => v.toFixed(2) + '×'),
       rangeF(L, 'ix', 'Horizontal', -1, 1, .005, pct),
       rangeF(L, 'iy', 'Vertical', -1, 1, .005, pct),
-      h('div', { class:'row' }, [h('button', { class:'btn small', text:'Preencher a máscara', onclick:() => { pushUndo(); L.zoom = 1; L.ix = 0; L.iy = 0; changed({ props:true }); } })]),
+      h('div', { class:'row' }, [h('button', { class:'btn small', text:'Preencher a máscara', onclick:() => { pushUndo(); setFrame(L, { zoom:1, ix:0, iy:0 }); changed({ props:true }); } })]),
       h('p', { class:'hint', text:'A imagem nunca distorce. No palco: a alça do canto aumenta tudo, as das laterais mudam a máscara, a roda do mouse dá zoom na imagem e Alt + arrastar move a imagem dentro.' }),
       h('h3', { text:'Aparência' }),
       rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
-      L.in === 'line' || L.out === 'line' ? colorF(L, 'lineColor', 'Cor da linha') : null,
+      ...blendF(L),
+      lineF(L),
       h('h3', { text:'Posição' }),
       ...posFields(L),
       checkF(L, 'keepIn', 'Manter dentro da margem'),
@@ -3493,6 +5630,7 @@ function styleProps(L) {
 function bgProps(L) {
   const sec = h('section', { class:'sec' }, [h('h3', { text:'Fundo' })]);
   fillProps(L, sec);
+  sec.append(h('h3', { text:'Aparência' }), ...blendF(L));
   return sec;
 }
 // cor animada: o mesmo motor do fundo, também usado nas formas
@@ -3508,7 +5646,7 @@ function fillProps(L, sec) {
   if (L.mode !== 'solid') sec.append(rangeF(L, 'motion', L.mode === 'image' ? 'Zoom lento' : 'Movimento', 0, 3, .05, v => v.toFixed(2) + '×'));
   sec.append(rangeF(L, 'grain', 'Granulado', 0, .4, .01, v => Math.round(v * 100) + '%'));
 }
-function renderAll() { renderFormats(); renderAdds(); renderBrand(); renderLayers(); renderProps(); $('#loop').checked = S.loop !== false; syncHist(); }
+function renderAll() { renderFormats(); renderAdds(); renderBrand(); renderLayers(); renderProps(); renderAudio(); $('#loop').checked = S.loop !== false; syncHist(); }
 
 /* ------------ eventos globais ------------ */
 $('#play').onclick = () => playing ? pause() : play();
@@ -3539,22 +5677,127 @@ $('#fps').addEventListener('change', e => { pushUndo(); S.fps = +e.target.value;
   addEventListener('keydown', e => { if (e.key === 'Escape') show(false); });
 }
 $('#dur').addEventListener('change', e => { pushUndo(); setDuration(parseFloat(e.target.value) || S.duration); e.target.value = S.duration; });
+/* ------------ atalhos: mover, marcar tempo, selecionar ------------ */
+// setas: move a seleção 1 px do vídeo (Shift = 10). Passos seguidos viram um só no desfazer
+let nudgeT = null;
+function nudge(dx, dy) {
+  const all = pickedLayers(), ls = all.filter(l => !l.locked), L = ls.includes(selL()) ? selL() : ls[0];
+  if (!L) { if (all.length && !nudgeT) lockedNote(all); return; }
+  if (!nudgeT) pushUndo();
+  clearTimeout(nudgeT); nudgeT = setTimeout(() => { nudgeT = null; }, 700);
+  const p = posOf(L); let x = p.x + dx / W(), y = p.y + dy / H();
+  if (!freeType(L) && L._bounds) { const f = fitInMargin(x * W(), y * H(), L._bounds.w, L._bounds.h); x = f.ax / W(); y = f.ay / H(); }
+  const ddx = x - p.x, ddy = y - p.y;
+  for (const o of ls) { const q = posOf(o); setPos(o, +clamp(q.x + ddx, -.2, 1.2).toFixed(5), +clamp(q.y + ddy, -.2, 1.2).toFixed(5)); }
+  syncPosFields(L); changed();
+}
+// I / O: a seleção entra / sai no quadro da agulha. Se a agulha passou do outro lado, o elemento inteiro vai para lá
+function markAt(edge) {
+  const all = pickedLayers(); if (!all.length) { toast('Selecione um elemento para marcar a entrada ou a saída'); return; }
+  const ls = all.filter(l => !l.locked); if (!ls.length) { lockedNote(all); return; }
+  pushUndo();
+  const t = clamp(Math.round(T * fps()) / fps(), 0, S.duration), r3 = v => Math.round(v * 1000) / 1000;
+  for (const L of ls) {
+    const end = L.end ?? S.duration, len = end - L.start;
+    if (edge === 'start') {
+      if (t <= end - .3) L.start = r3(t);
+      else { L.start = r3(Math.min(t, S.duration - .3)); L.end = r3(Math.min(S.duration, L.start + len)); }
+    } else if (t >= L.start + .3) L.end = r3(t);
+    else { L.end = r3(Math.max(t, .3)); L.start = r3(Math.max(0, L.end - len)); }
+  }
+  changed({ layers:true, props:true });
+  const L = ls.includes(selL()) ? selL() : ls[0];
+  toast(edge === 'start' ? `${L.name} entra em ${fmtSec(L.start)}` : `${L.name} sai em ${fmtSec(L.end ?? S.duration)}`, 2600, UNDO_ACT);
+}
+function selectAll() {
+  const ls = S.layers.filter(l => l.type !== 'bg'); if (!ls.length) return;
+  RT.picks = new Set(ls.map(l => l.id)); if (!RT.picks.has(RT.selected)) RT.selected = ls[ls.length - 1].id;
+  renderLayers(); renderProps(); needs = true;
+}
+function toggleVisible() {
+  const ls = pickedLayers(); if (!ls.length) return;
+  pushUndo(); const on = !ls.every(l => l.visible); ls.forEach(l => { l.visible = on; }); changed({ layers:true });
+}
+// d: 1 = uma para frente, -1 = uma para trás, 2 = na frente de tudo, -2 = logo acima do fundo
+function restack(L, d) {
+  const i = S.layers.indexOf(L); if (!L || L.type === 'bg' || i < 0) return;
+  if (Math.abs(d) === 1) { move(i, d); return; }
+  pushUndo(); S.layers.splice(i, 1); S.layers.splice(d > 0 ? S.layers.length : 1, 0, L); changed({ layers:true });
+}
 document.addEventListener('keydown', e => {
-  const tag = (e.target.tagName || '').toLowerCase();
-  const typing = tag === 'input' && !['range', 'checkbox', 'color'].includes(e.target.type) || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
-  if ((e.ctrlKey || e.metaKey) && !e.altKey && !typing) {
-    const k = e.key.toLowerCase();
+  const tag = (e.target.tagName || '').toLowerCase(), typing = typingIn(e.target);
+  const mod = e.ctrlKey || e.metaKey, k = (e.key || '').toLowerCase();
+  if (!$('#keys').hidden) { if (e.key === 'Escape' || e.key === '?') { e.preventDefault(); showKeys(false); } return; }
+  if (mod && !e.altKey && k === 's') { e.preventDefault(); if (e.shiftKey) saveAsCopy(); else flushSave().then(() => toast('Tudo salvo. O Mola salva sozinho a cada mudança.')); return; }
+  if (e.key === 'Escape') {
+    if (document.querySelector('.ctx')) { closeMenu(); return; }
+    if (openPicker) { closePicker(); return; }
+    if (typing) { if (tag === 'textarea' || e.target.isContentEditable) e.target.blur(); return; } // Esc sai do texto
+    if (overlayOpen() || !$('#mPop').hidden || RT.drag || RT.marq) return; // cada janela fecha sozinha
+    const L = selL(); if (L && L.type !== 'bg') { e.preventDefault(); selectBg(); }
+    return;
+  }
+  if (typing || overlayOpen() || RT.exporting) return;
+  if (mod && !e.altKey) {
     if (k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if (k === 'y') { e.preventDefault(); redo(); }
+    else if (k === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); }
+    else if (k === 'd') { e.preventDefault(); const L = selL(); if (L && L.type !== 'bg') duplicateLayer(L); }
+    else if (k === 'a') { e.preventDefault(); selectAll(); }
+    else if (k === 'h' && e.shiftKey) { e.preventDefault(); toggleVisible(); }
+    else if (k === 'l' && e.shiftKey) { e.preventDefault(); toggleLock(); }
+    else if (k === 'e' && e.shiftKey) { e.preventDefault(); exportVideo(); }
+    else if (e.key === ']' || e.key === '}' || e.key === '[' || e.key === '{') { e.preventDefault(); restack(selL(), (e.key === ']' || e.key === '}' ? 1 : -1) * (e.shiftKey ? 2 : 1)); }
+    return;
   }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); flushSave().then(() => toast('Tudo salvo. O Mola salva sozinho a cada mudança.')); }
   // espaço sempre toca/pausa (mesmo com um botão focado), menos enquanto digita
-  if (e.code === 'Space' && !typing) { e.preventDefault(); if (tag === 'button') e.target.blur(); playing ? pause() : play(); }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'g' && !typing) { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); }
-  if (e.key === 'Escape') closeMenu();
+  if (e.code === 'Space') { e.preventDefault(); if (tag === 'button') e.target.blur(); playing ? pause() : play(); return; }
   // atalhos do Figma: Delete / Backspace apagam a camada selecionada
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !typing) { const L = selL(); if (L && L.type !== 'bg') { e.preventDefault(); closeMenu(); deleteLayer(L); } }
+  if (e.key === 'Delete' || e.key === 'Backspace') { const L = selL(); if (L && L.type !== 'bg') { e.preventDefault(); closeMenu(); deleteLayer(L); } return; }
+  if (e.key === '?') { e.preventDefault(); showKeys(true); return; }
+  if (e.key === '/') { e.preventDefault(); findPreset(); return; }
+  if (e.key === '+' || e.key === '=') { e.preventDefault(); setZoom((RT.zoom || 1) * 1.25); return; }
+  if (e.key === '-' || e.key === '_') { e.preventDefault(); setZoom((RT.zoom || 1) / 1.25); return; }
+  if (e.shiftKey && e.code === 'Digit1') { e.preventDefault(); zoomFit(); return; }
+  if (e.shiftKey && e.code === 'Digit0') { e.preventDefault(); zoom100(); return; }
+  if (e.altKey) return;
+  const L = selL(), el = !!L && L.type !== 'bg';
+  if (e.key.startsWith('Arrow')) {
+    if (tag === 'input') return; // barra deslizante focada: as setas são dela
+    const dx = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0, dy = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+    if (el) { e.preventDefault(); const s = e.shiftKey ? 10 : 1; nudge(dx * s, dy * s); }
+    else if (dx) { e.preventDefault(); stepFrames(dx * (e.shiftKey ? fps() : 1)); }
+    return;
+  }
+  if (e.code === 'Comma' || e.code === 'Period') { e.preventDefault(); stepFrames((e.code === 'Comma' ? -1 : 1) * (e.shiftKey ? fps() : 1)); return; }
+  if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); pause(); T = e.key === 'Home' ? 0 : lastFrame(); RT.userSeek = true; needs = true; return; }
+  if (k === 'i' || k === 'o') { e.preventDefault(); markAt(k === 'i' ? 'start' : 'end'); return; }
+  if (e.key === 'Enter' && el && (e.target === document.body || e.target === cv)) { e.preventDefault(); editText(L); }
 });
+/* ------------ painel de atalhos (tecla ?) ------------ */
+const KEYS = [
+  ['Tocar', [['Espaço', 'Tocar e pausar'], [', .', 'Um quadro para trás / para frente'], ['Shift + , .', 'Um segundo para trás / para frente'], ['← →', 'Quadro a quadro, com nada selecionado'], ['Home End', 'Início / último quadro']]],
+  ['Tempo do elemento', [['I', 'Entra na agulha'], ['O', 'Sai na agulha'], ['Clique duplo na barra', 'Leva a agulha até ele'], ['Shift ao arrastar', 'Desliga o ímã da timeline'], ['Esc ao arrastar', 'Cancela']]],
+  ['Palco', [['← ↑ → ↓', 'Move 1 px (Shift: 10 px)'], ['Arrastar no vazio', 'Seleciona por área'], ['Shift + clique', 'Soma ou tira da seleção'], ['Ctrl + clique', 'Escolhe um item dentro do grupo'], ['Clique duplo / Enter', 'Edita o texto'], ['Ctrl ao arrastar', 'Desliga as guias'], ['Alt + arrastar imagem', 'Move a imagem na máscara'], ['Roda na imagem', 'Zoom na máscara'], ['Alças (8 pontos)', 'Cantos escalam; lados mudam largura, altura ou quebra do texto'], ['Alt ao puxar a alça', 'Escala a partir do centro'], ['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco']]],
+  ['Editar', [['Ctrl + Z', 'Desfazer'], ['Ctrl + Shift + Z', 'Refazer'], ['Ctrl + C / X / V', 'Copiar, recortar, colar (vale entre arquivos)'], ['Ctrl + D', 'Duplicar'], ['Delete', 'Apagar'], ['Ctrl + A', 'Selecionar tudo'], ['Esc', 'Tirar a seleção / sair do texto'], ['/', 'Buscar animação']]],
+  ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear']]],
+  ['Arquivo', [['Ctrl + S', 'Salvar agora (já salva sozinho)'], ['Ctrl + Shift + S', 'Salvar cópia'], ['Ctrl + Shift + E', 'Exportar MP4'], ['Ctrl + V', 'Colar imagem ou SVG'], ['?', 'Este painel']]],
+];
+function showKeys(on) {
+  const box = $('#keys');
+  if (on && !box.firstChild) {
+    const card = h('div', { class:'keys-card', role:'dialog', 'aria-modal':'true', 'aria-label':'Atalhos de teclado' }, [
+      h('div', { class:'files-head' }, [h('h2', { text:'Atalhos' }), h('div', { class:'spacer' }), h('button', { class:'btn small ghost', text:'Fechar', onclick:() => showKeys(false) })]),
+      h('div', { class:'keys-grid' }, KEYS.map(([t, rows]) => h('section', {}, [h('h3', { text:t }),
+        ...rows.map(([kk, d]) => h('div', { class:'krow' }, [h('kbd', { text:kk }), h('span', { text:d })]))]))),
+    ]);
+    box.append(card);
+    box.addEventListener('pointerdown', ev => { if (ev.target === box) showKeys(false); });
+  }
+  box.hidden = !on;
+  if (on) box.querySelector('button').focus();
+}
+$('#keysBtn').onclick = () => showKeys(true);
 /* ------------ adicionar elementos prontos ------------ */
 const ADD_KINDS = [
   { id:'title', label:'Título', gl:'<b style="font:600 20px serif">Aa</b>', mk:(B, F) => mkText('title', { name:'Título', text:'Seu título aqui', font:F[0], weight:500, size:104, lh:1.02, y:.42, in:'lineMask' }) },
@@ -3587,17 +5830,24 @@ function addLayer(L, opts = {}) {
   pushUndo();
   const st = opts.start ?? nextStart();
   L.start = st; L.end = S.duration;
-  if (opts.x != null) { L.x = opts.x; L.y = opts.y; } else L.y = freeY(L.y, st);
+  if (opts.x != null) { L.x = opts.x; L.y = opts.y; setPos(L, opts.x, opts.y); } else L.y = freeY(L.y, st); // solto num ponto: fica nele também fora do principal
   S.layers.push(L); select(L.id); propTab = 'style'; renderProps(); changed({ layers:true }); seekLayer(L); RT.userSeek = false;
   return L;
 }
 function renderAdds() {
   const box = $('#adds'); box.innerHTML = '';
   for (const k of ADD_KINDS) box.append(h('button', { class:'add', title:'Adicionar ' + k.label.toLowerCase(), onclick:() => {
+    if (k.add) { k.add(); return; }
     if (k.id === 'image') { $('#imgFile').click(); return; }
     if (k.id === 'svg') { $('#svgFile').click(); return; }
     addLayer(k.mk(S.brand, S.brand.fonts));
   } }, [h('span', { class:'gl', html:k.gl }), h('span', { text:k.label })]));
+  // meus elementos: salvos pelo botão direito ("Salvar em Meus elementos"), valem para qualquer arquivo
+  if (!MY_ELS.length) return;
+  box.append(h('div', { class:'adds-sub', text:'Meus elementos' }));
+  for (const el of MY_ELS) box.append(h('div', { class:'add my', role:'button', tabindex:'0', title:`Adicionar "${el.name}"`, onclick:() => addElement(el), onkeydown:e => { if (e.key === 'Enter') addElement(el); } }, [
+    el.thumb ? h('img', { class:'gl', src:el.thumb, alt:'' }) : h('span', { class:'gl', text:'★' }), h('span', { text:el.name }),
+    h('button', { class:'x', title:'Tirar de Meus elementos', 'aria-label':`Tirar "${el.name}" de Meus elementos`, text:'×', onclick:e => { e.stopPropagation(); removeElement(el); } })]));
 }
 const isImg = f => f && /^image\//.test(f.type);
 const isSvgFile = f => f && (f.type === 'image/svg+xml' || /\.svg$/i.test(f.name || ''));
@@ -3635,19 +5885,23 @@ $('#imgFile').addEventListener('change', e => { addImageFile(e.target.files[0]);
 $('#svgFile').addEventListener('change', e => { addImageFile(e.target.files[0]); e.target.value = ''; });
 {
   const box = $('#stageBox'), dz = $('#dropzone');
-  const hasImg = e => [...(e.dataTransfer?.items || [])].some(i => i.kind === 'file' && /^image\//.test(i.type));
+  const hasImg = e => [...(e.dataTransfer?.items || [])].some(i => i.kind === 'file' && /^(image|video|audio)\//.test(i.type));
   box.addEventListener('dragover', e => { if (!hasImg(e)) return; e.preventDefault(); dz.hidden = false; });
   box.addEventListener('dragleave', e => { if (!box.contains(e.relatedTarget)) dz.hidden = true; });
   box.addEventListener('drop', e => {
-    dz.hidden = true; const f = [...e.dataTransfer.files].find(isImg); if (!f) return;
+    const fs = [...e.dataTransfer.files], f = fs.find(isImg) || fs.find(isVid) || fs.find(isAud);
+    dz.hidden = true; if (!f) return;
     e.preventDefault();
+    if (isAud(f)) { setMusicFile(f); return; } // música vai para a trilha
     const r = $('#cv').getBoundingClientRect(), inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-    addImageFile(f, inside ? { x:clamp((e.clientX - r.left) / r.width), y:clamp((e.clientY - r.top) / r.height) } : null);
+    (isVid(f) ? addVideoFile : addImageFile)(f, inside ? { x:clamp((e.clientX - r.left) / r.width), y:clamp((e.clientY - r.top) / r.height) } : null);
   });
   document.addEventListener('paste', e => {
-    const tag = (e.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
+    const tag = (e.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable || overlayOpen()) return;
     const f = [...(e.clipboardData?.files || [])].find(isImg); if (f) { e.preventDefault(); addImageFile(f); return; }
-    const t = (e.clipboardData?.getData('text/plain') || '').trim(); if (/^(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(t)) { e.preventDefault(); addSvgText(t, 'SVG'); }
+    const t = (e.clipboardData?.getData('text/plain') || '').trim();
+    if (t.startsWith(CLIP_TAG)) { e.preventDefault(); try { pasteLayers(JSON.parse(t.slice(CLIP_TAG.length))); } catch (err) { toast('Não consegui colar esses elementos'); } return; }
+    if (/^(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(t)) { e.preventDefault(); addSvgText(t, 'SVG'); }
   });
 }
 
@@ -3702,10 +5956,7 @@ $('#fileNew').onclick = newFile;
 $('#files').addEventListener('pointerdown', e => { if (e.target.id === 'files') closeFiles(); });
 $('#files').addEventListener('keydown', e => { if (e.key === 'Escape') closeFiles(); });
 $('#fileSearch').addEventListener('input', renderFiles);
-$('#copyBtn').onclick = saveAsCopy;
-addEventListener('keydown', e => {
-  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); saveAsCopy(); }
-});
+$('#copyBtn').onclick = saveAsCopy; // Ctrl+Shift+S fica no atalho geral
 {
   const fn = $('#fileName');
   fn.addEventListener('keydown', e => { if (e.key === 'Enter') fn.blur(); if (e.key === 'Escape') { fn.value = FILES.name; fn.blur(); } });
@@ -3723,6 +5974,312 @@ $('#jsonFile').addEventListener('change', async e => {
 });
 
 /* ============================================================
+   Painéis dos recursos novos: câmera, transição, marca, movimento, moldura, sombra,
+   trilha, variações de texto e meus elementos
+   ============================================================ */
+function pickFile(accept, fn) { const i = h('input', { type:'file', accept, hidden:true }); i.addEventListener('change', () => { if (i.files[0]) fn(i.files[0]); i.remove(); }); document.body.append(i); i.click(); }
+// escolha por preset (chips): vale para a seleção do mesmo tipo; `after(v, camada)` ajusta o que depende dela; `seek(v)` leva a agulha a um quadro útil
+function chipPick(L, k, opts, after, seek) {
+  const wrap = h('div', { class:'chips' });
+  opts.forEach(([v, t]) => wrap.append(h('button', { class:'chip', 'aria-pressed':String((L[k] ?? 'none') === v), title:t, onclick:() => {
+    pushUndo();
+    for (const o of peersOf(L)) { o[k] = v; if (after) after(v, o); }
+    RT.layout.clear(); changed({ layers:true }); renderProps();
+    if (seek) seek(v);
+  } }, [h('span', { text:t })])));
+  return wrap;
+}
+const FXCOLS = { wipe:['c1', 'c2'], bars:['c1', 'c2', 'c3'], circle:['c1', 'c2'], blinds:['c1', 'c3'], flash:['c2'], zoom:['c2'] };
+function camFxProps(L) {
+  const cam = L.type === 'camera', map = cam ? CAMS : FXS, end = () => L.end ?? S.duration;
+  const seek = () => { pause(); T = clamp(cam ? L.start + (end() - L.start) * .6 : (L.start + end()) / 2 - .12, 0, S.duration); needs = true; };
+  const secs = [h('section', { class:'sec' }, [h('h3', { text:cam ? 'Movimento da câmera' : 'Transição' }),
+    chipPick(L, cam ? 'cam' : 'fx', Object.entries(map).map(([v, P]) => [v, P.label]), (v, o) => {
+      if (cam || !FXS[v].dur) return;
+      // outra transição: mantém o meio e usa a duração dela
+      const mid = (o.start + (o.end ?? S.duration)) / 2, d = FXS[v].dur;
+      o.start = +clamp(mid - d / 2, 0, Math.max(0, S.duration - d)).toFixed(2); o.end = +(o.start + d).toFixed(2);
+    }, seek),
+    h('p', { class:'hint', text:cam ? 'Mexe em todas as camadas juntas, do início ao fim da barra na timeline. Na paralaxe, o que está mais na frente anda mais.'
+      : 'No meio da barra a tela fica toda coberta: é ali que o conteúdo troca. A timeline gruda nesse ponto.' })])];
+  if (L.intensity == null) L.intensity = .5;
+  if (L.speed == null) L.speed = 1;
+  const rit = [h('h3', { text:'Ritmo' }), rangeF(L, 'intensity', 'Intensidade', 0, 1, .01, v => Math.round(v * 100) + '%', { after:seek })];
+  if (cam && ['punch', 'shake', 'hand'].includes(L.cam)) rit.push(rangeF(L, 'speed', 'Velocidade', .4, 3, .05, v => v.toFixed(2) + '×', { after:seek }));
+  rit.push(
+    rangeF(L, 'start', 'Começa em', 0, S.duration - .2, .05, v => v.toFixed(2) + 's', { onInput:() => { if (L.end != null && L.end < L.start + .2) L.end = Math.min(S.duration, L.start + .2); }, after:() => { renderLayers(); seek(); } }),
+    rangeF(L, 'end', 'Termina em', .2, S.duration, .05, v => (v ?? S.duration).toFixed(2) + 's', { onInput:() => { if (L.end < L.start + .2) L.end = L.start + .2; }, after:() => { renderLayers(); seek(); } }));
+  secs.push(h('section', { class:'sec' }, rit));
+  // transição que desenha algo (o chicote só mexe na câmera): opacidade e mesclagem, como nos outros elementos
+  if (!cam && FXS[L.fx] && FXS[L.fx].draw) secs.push(h('section', { class:'sec' }, [h('h3', { text:'Aparência' }),
+    rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'), ...blendF(L)]));
+  const cols = !cam && FXCOLS[L.fx];
+  if (cols) secs.push(h('section', { class:'sec' }, [h('h3', { text:'Cores' }),
+    ...cols.map((k, i) => colorF(L, k, cols.length === 1 ? 'Cor da luz' : i === 0 ? 'Cor da frente' : `Cor ${i + 1}`))]));
+  return secs;
+}
+function animExtras(L) {
+  const out = [];
+  if (L.type === 'text') {
+    const B = S.brand.colors;
+    const sec = h('section', { class:'sec' }, [h('h3', { text:'Marca à mão' }),
+      chipPick(L, 'mark', Object.entries(MARKS), (v, o) => { if (v !== 'none' && !o.markColor) o.markColor = (o.color || '').toLowerCase() === B[2].toLowerCase() ? B[1] : B[2]; },
+        v => { pause(); const ph = phase(L, L.start) || { inD:0 }; T = clamp(L.start + ph.inD + (v === 'none' ? .05 : 1 / (spdOf(L, 'in') || 1)), 0, (L.end ?? S.duration) - .02); needs = true; })]);
+    if (L.mark && L.mark !== 'none') sec.append(colorF(L, 'markColor', 'Cor da marca'), h('p', { class:'hint', text:'Se desenha logo depois da entrada e some na saída.' }));
+    out.push(sec);
+  }
+  if (L.type === 'image') out.push(h('section', { class:'sec' }, [h('h3', { text:'Movimento dentro da imagem' }),
+    chipPick(L, 'move', Object.entries(MOVES), null, () => { pause(); T = clamp(L.start + ((L.end ?? S.duration) - L.start) * .5, 0, S.duration); needs = true; }),
+    h('p', { class:'hint', text:'Anda devagar do começo ao fim da camada, sem mostrar a borda. "Rolar a tela" desce por prints compridos de app ou site.' })]));
+  return out;
+}
+// cor automática da sombra: escura; "Dura" usa o destaque da marca; "Luz" usa a cor do próprio elemento
+function autoShadowHex(L, key) {
+  const B = S.brand.colors, own = L.type === 'text' ? L.color : L.type === 'cta' ? L.bg : L.type === 'shape' ? L.c1 : null;
+  if (key === 'hard') return own && own.toLowerCase() === B[2].toLowerCase() ? B[3] : B[2];
+  if (key === 'glow') return own || B[2];
+  return '#000000';
+}
+function styleExtras(L) {
+  const out = [];
+  if (L.type === 'image') {
+    const sec = h('section', { class:'sec' }, [h('h3', { text:'Moldura' }),
+      chipPick(L, 'device', Object.entries(DEVICES), (v, o) => {
+        if (v === 'phone') { o.mask = 'rect'; o.mh = +(o.size * 2.05).toFixed(4); o.radius = Math.round(o.size * W() * .12); o.zoom = 1; o.ix = 0; o.iy = 0; }
+        if (v === 'browser') { o.mask = 'rect'; if (o.mh == null) { const G = blockGeom(o); o.mh = +((G ? G.h / W() : o.size * .62)).toFixed(4); } o.radius = 0; }
+      }, () => seekLayer(L))]);
+    if (L.device === 'phone') sec.append(h('p', { class:'hint', text:'Print comprido de app ou site: use "Rolar a tela" em Movimento dentro da imagem, na aba Animação.' }));
+    out.push(sec);
+    if (L.video) out.push(h('section', { class:'sec' }, [h('h3', { text:'Vídeo' }),
+      h('p', { class:'hint', text:`${fmtSec(L.vdur || 0)} de vídeo, sem som. Começa quando a camada entra e repete se for mais curto.` }),
+      uploadF('Trocar vídeo', 'video/*', async f => {
+        toast('Abrindo o vídeo…');
+        try { const id = await putMedia(f), p = await videoPoster(await mediaUrl(id)); pushUndo(); L.video = id; L.src = p.src; L.vdur = p.dur; await getImage(L.src); changed({ props:true }); toast('Vídeo trocado'); }
+        catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
+      })]));
+  }
+  if (L.type !== 'bg' && !NOBOX(L)) {
+    const sec = h('section', { class:'sec' }, [h('h3', { text:'Sombra' }),
+      chipPick(L, 'shadow', Object.entries(SHADOWS).map(([k, s]) => [k, s.label]), (v, o) => { o.shColor = v === 'none' ? null : autoShadowHex(o, v); }, () => seekLayer(L))]);
+    if (L.shadow && L.shadow !== 'none') sec.append(colorF(L, 'shColor', 'Cor da sombra'));
+    out.push(sec);
+  }
+  return out;
+}
+
+/* ------------ adicionar: câmera, transição, vídeo e preço de/por ------------ */
+function addCamera() {
+  const st = RT.userSeek && T > .05 ? Math.min(T, S.duration - .5) : 0;
+  const L = addLayer(base('camera', 'camera', { name:'Câmera', cam:'push', in:'cut', out:'cut', inDur:0, outDur:0, intensity:.5, speed:1 }), { start:st });
+  pause(); T = clamp(st + (S.duration - st) * .6, 0, S.duration); needs = true;
+  return L;
+}
+// sem agulha posicionada: a transição fica onde a maioria dos elementos sai (senão no meio do vídeo)
+function autoCut() {
+  const d = S.duration, ends = S.layers.filter(l => l.type !== 'bg' && !NOBOX(l) && l.end != null && l.end > .5 && l.end < d - .3).map(l => l.end);
+  if (!ends.length) return d / 2;
+  let best = ends[0], bn = 0;
+  for (const e of ends) { const n = ends.filter(o => Math.abs(o - e) < .2).length; if (n > bn) { bn = n; best = e; } }
+  return best;
+}
+function addFx() {
+  const d = FXS.bars.dur, mid = RT.userSeek && T > .05 ? T : autoCut(), c = S.brand.colors;
+  const st = +clamp(mid - d / 2, 0, Math.max(0, S.duration - d)).toFixed(2);
+  const L = addLayer(base('fx', 'fx', { name:'Transição', fx:'bars', in:'cut', out:'cut', inDur:0, outDur:0, intensity:.5, speed:1, c1:c[2], c2:c[1], c3:c[3] }), { start:st });
+  L.end = +(st + d).toFixed(2); changed({ layers:true });
+  pause(); T = clamp(st + d / 2 - .12, 0, S.duration); needs = true;
+  toast('No meio da transição a tela fica coberta: é ali que o conteúdo troca. A timeline gruda nesse ponto.', 6000);
+  return L;
+}
+// preço antigo riscado à mão e o novo contando logo depois (agrupados)
+function addPrice() {
+  const B = S.brand, F = B.fonts, st = nextStart(), gid = 'g' + Math.random().toString(36).slice(2, 7);
+  pushUndo();
+  const old = mkText('offer', { name:'Preço antigo', text:'R$ 199', font:F[1], weight:600, size:60, opacity:.75, y:freeY(.4, st), in:'rise', mark:'strike', markColor:B.colors[2], grp:gid });
+  const now = mkText('big', { name:'Preço novo', text:'R$ 99', font:F[2], weight:800, size:190, lh:1, y:Math.min(.9, old.y + .12), in:'counter', grp:gid });
+  old.start = st; old.end = S.duration; now.start = +Math.min(st + .9, S.duration - .5).toFixed(2); now.end = S.duration;
+  S.layers.push(old, now); (S.groups ||= {})[gid] = { name:'Preço de/por', open:true };
+  RT.picks = new Set([old.id, now.id]); RT.selected = now.id; propTab = 'style';
+  renderProps(); changed({ layers:true }); seekLayer(now); RT.userSeek = false;
+}
+ADD_KINDS.push(
+  { id:'price', label:'Preço de/por', gl:'<span style="font-size:10px;font-weight:700"><s style="opacity:.6">9</s> 5</span>', add:addPrice },
+  { id:'video', label:'Vídeo', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="18" height="14" rx="2"/><path d="M8 5v6l5-3z" fill="currentColor"/></svg>', add:() => pickFile('video/*', addVideoFile) },
+  { id:'camera', label:'Câmera', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="13" height="10" rx="2"/><path d="M14 7l5-3v8l-5-3"/></svg>', add:addCamera },
+  { id:'fx', label:'Transição', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 15L9 1M6 15L14 1M11 15L19 1"/></svg>', add:addFx },
+);
+
+/* ------------ trilha: painel na coluna da esquerda e faixa na timeline ------------ */
+function segSet(obj, k, label, opts, after) {
+  const wrap = h('div', { class:'segs tight', role:'group', 'aria-label':label });
+  const draw = () => { wrap.innerHTML = ''; opts.forEach(([v, t]) => wrap.append(h('button', { 'aria-pressed':String((obj[k] ?? opts[0][0]) === v), text:t, onclick:() => { pushUndo(); obj[k] = v; draw(); changed(); if (after) after(v); } }))); };
+  draw(); return field(label, wrap, null, true);
+}
+function renderAudio() {
+  const box = $('#audioBox'); if (!box || !S) return; box.innerHTML = '';
+  const A = S.audio, pick = () => pickFile('audio/*,.mp3,.wav,.m4a,.aac,.ogg', setMusicFile);
+  if (!A) box.append(h('div', { class:'row' }, [h('button', { class:'btn small', text:'Enviar música', onclick:pick })]),
+    h('p', { class:'hint', text:'MP3, WAV ou M4A. As batidas viram ímã na timeline. Também dá para arrastar o arquivo para o palco.' }));
+  else {
+    box.append(h('div', { class:'aud' }, [
+      h('span', { class:'aud-nm' }, [h('b', { text:A.name, title:A.name }), h('small', { text:`${A.bpm} bpm · ${fmtSec(A.dur)}` })]),
+      h('button', { class:'btn small ghost', text:'Trocar', onclick:pick }),
+      h('button', { class:'icon-btn', title:'Tirar a música', 'aria-label':'Tirar a música', html:ICONS.trash, onclick:() => { pushUndo(); S.audio = null; changed(); renderAudio(); renderTimeline(); toast('Música removida', 5000, UNDO_ACT); } })]),
+      segSet(A, 'from', 'A música começa', [['zero', 'Do início'], ['beat', '1ª batida'], ['peak', 'Parte forte']], () => renderTimeline()),
+      rangeF(A, 'vol', 'Volume', 0, 1, .01, v => Math.round(v * 100) + '%'),
+      h('div', { class:'row' }, [h('button', { class:'btn small', text:'Encaixar na batida', title:'Cada elemento entra na batida mais próxima (Ctrl+Z desfaz)', onclick:snapToBeats })]));
+  }
+  box.append(segSet(S, 'sfx', 'Sons nas entradas', Object.entries(SFX)),
+    h('p', { class:'hint', text:'Sopro nos deslizes, pop nas molas, cliques na digitação. Toca na prévia (espaço) e sai no MP4.' }));
+}
+function audioRow() {
+  const A = S.audio, cv2 = h('canvas', { class:'tl-wave' }), lane = h('div', { class:'tl-lane' }, [cv2]);
+  lane.addEventListener('pointerdown', e => { if (!e.button) tlScrub(e); });
+  const nm = h('div', { class:'tl-nm', title:`${A.name} · ${A.bpm} bpm` }, [h('span', { class:'dot', style:'background:var(--accent)' }), h('span', { text:A.name })]);
+  requestAnimationFrame(() => drawWave(cv2, lane));
+  return h('div', { class:'tl-row tl-audio' }, [nm, lane]);
+}
+function drawWave(c, lane) {
+  const A = S.audio, r = lane.getBoundingClientRect(), dpr = devicePixelRatio || 1; if (!A || !A.peaks || !r.width) return;
+  c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
+  const x = c.getContext('2d'), sk = audioSkip(), len = Math.max(.1, A.dur - sk), d = S.duration;
+  x.fillStyle = 'rgba(242,182,50,.35)';
+  for (let px = 0; px < c.width; px++) {
+    const ts = sk + (px / c.width * d) % len, v = A.peaks[Math.floor(ts * 10)] || 0, hh = Math.max(dpr, v * c.height * .85);
+    x.fillRect(px, (c.height - hh) / 2, 1, hh);
+  }
+  x.fillStyle = 'rgba(242,182,50,.95)';
+  for (const b of beatTimes()) x.fillRect(Math.round(b / d * c.width), c.height - 5 * dpr, Math.max(1, dpr), 5 * dpr);
+}
+
+/* ------------ variações de texto: a mesma animação com outros textos (títulos, preços, chamadas)
+   S.vars = { rows:[{ id, name, t:{ [id da camada]:texto } }] }. Em branco = igual ao arquivo ("Atual") ------------ */
+const varRows = () => (S.vars && S.vars.rows) || [];
+const varCols = () => S.layers.filter(l => l.type === 'text' || l.type === 'cta').sort((a, b) => a.start - b.start || a.y - b.y);
+function applyVariant(v) {
+  const saved = [];
+  if (v && v.t) for (const L of S.layers) { const t = v.t[L.id]; if (t && t !== L.text && (L.type === 'text' || L.type === 'cta')) { saved.push([L, L.text]); L.text = t; } }
+  if (saved.length) RT.layout.clear();
+  return () => { for (const [L, t] of saved) L.text = t; if (saved.length) RT.layout.clear(); };
+}
+async function withVariant(v, fn) { const back = applyVariant(v); try { return await fn(); } finally { back(); } }
+// cola de planilha: tabulação separa colunas, Enter separa linhas; aspas guardam quebras de linha (Excel, Google Planilhas)
+function parseTSV(text) {
+  const rows = [[]]; let cur = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"' && text[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; }
+    else if (ch === '"' && cur === '') q = true;
+    else if (ch === '\t') { rows[rows.length - 1].push(cur); cur = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; rows[rows.length - 1].push(cur); cur = ''; rows.push([]); }
+    else cur += ch;
+  }
+  rows[rows.length - 1].push(cur);
+  while (rows.length && rows[rows.length - 1].every(c => c === '')) rows.pop();
+  return rows;
+}
+function openVars() {
+  if (document.querySelector('.vsheet')) return;
+  const cols = varCols(); if (!cols.length) { toast('Adicione um texto ou um botão primeiro'); return; }
+  pause(); pushUndo();
+  S.vars ||= { rows:[] };
+  const rows = S.vars.rows;
+  let sel = -1;
+  const pv = h('canvas', { class:'vprev' }), pvName = h('b', { text:'Atual' });
+  pv.width = 300; pv.height = Math.round(300 * H() / W());
+  const drawPrev = () => {
+    const v = sel >= 0 ? rows[sel] : null, back = applyVariant(v);
+    try { renderFrame(pv.getContext('2d'), heroTime(), pv.width / W(), false); } finally { back(); }
+    pvName.textContent = v ? v.name : 'Atual'; needs = true;
+  };
+  const get = (r, c) => c < 0 ? (r < 0 ? 'Atual' : rows[r].name) : r < 0 ? cols[c].text : (rows[r].t[cols[c].id] ?? '');
+  const set = (r, c, val) => {
+    if (c < 0) { if (r >= 0) rows[r].name = val.trim() || `Versão ${r + 2}`; return; }
+    if (r < 0) { cols[c].text = val; RT.layout.clear(); return; }
+    if (val.trim()) rows[r].t[cols[c].id] = val; else delete rows[r].t[cols[c].id];
+  };
+  const grid = h('div', { class:'vgrid', style:`grid-template-columns:130px repeat(${cols.length}, minmax(160px, 1fr)) 28px` });
+  const spread = (r0, c0, text) => {
+    parseTSV(text).forEach((cells, i) => {
+      const r = r0 + i;
+      if (r >= rows.length) rows.push({ id:uid(), name:`Versão ${rows.length + 2}`, t:{} });
+      cells.forEach((v, j) => { if (c0 + j < cols.length) set(r, c0 + j, v); });
+    });
+    changed(); draw(); drawPrev();
+  };
+  const draw = () => {
+    grid.innerHTML = '';
+    grid.append(h('span', { class:'vh', text:'Versão' }), ...cols.map(L => h('span', { class:'vh', text:L.name, title:L.name })), h('span'));
+    for (let r = -1; r < rows.length; r++) {
+      const focus = () => { if (sel === r) return; sel = r; drawPrev(); grid.querySelectorAll('.vsel').forEach(n => n.classList.remove('vsel')); grid.querySelectorAll(`[data-r="${r}"]`).forEach(n => n.classList.add('vsel')); };
+      for (let c = -1; c < cols.length; c++) {
+        const el = c < 0 ? h('input', { type:'text', 'aria-label':'Nome da versão', readonly:r < 0 ? true : null }) : h('textarea', { rows:2, 'aria-label':cols[c].name, placeholder:r >= 0 ? cols[c].text : '' });
+        el.value = get(r, c); el.dataset.r = r; if (r === sel) el.classList.add('vsel');
+        el.addEventListener('focus', focus);
+        el.addEventListener('input', () => { set(r, c, el.value); changed(); if (c >= 0) drawPrev(); });
+        el.addEventListener('paste', e => { const t = e.clipboardData.getData('text/plain'); if (!/[\t\n]/.test(t.replace(/\r?\n$/, ''))) return; e.preventDefault(); spread(r, Math.max(0, c), t); });
+        grid.append(el);
+      }
+      grid.append(r < 0 ? h('span') : h('button', { class:'icon-btn', title:'Apagar esta versão', 'aria-label':`Apagar ${rows[r].name}`, html:ICONS.trash, onclick:() => { rows.splice(r, 1); sel = Math.min(sel, rows.length - 1); changed(); draw(); drawPrev(); } }));
+    }
+  };
+  const close = () => { ov.remove(); RT.layout.clear(); renderProps(); needs = true; };
+  const card = h('div', { class:'files-card vcard', role:'dialog', 'aria-modal':'true', 'aria-label':'Variações de texto' }, [
+    h('div', { class:'files-head' }, [h('h2', { text:'Variações de texto' }), h('div', { class:'spacer' }),
+      h('button', { class:'btn small', text:'+ Nova versão', onclick:() => { rows.push({ id:uid(), name:`Versão ${rows.length + 2}`, t:{} }); changed(); draw(); grid.querySelector(`textarea[data-r="${rows.length - 1}"]`)?.focus(); } }),
+      h('button', { class:'btn small primary', text:'Pronto', onclick:close })]),
+    h('p', { class:'hint', text:'A mesma animação com outros textos. Em branco fica igual à linha "Atual". Cole direto de uma planilha: cada linha vira uma versão e cada coluna um texto, na ordem de cima. Na exportação, escolha "Todas".' }),
+    h('div', { class:'vbody' }, [h('div', { class:'vscroll' }, [grid]), h('div', { class:'vside' }, [pv, pvName])]),
+  ]);
+  const ov = h('div', { class:'files vsheet', onpointerdown:e => { if (e.target === ov) close(); }, onkeydown:e => { e.stopPropagation(); if (e.key === 'Escape') close(); } }, [card]);
+  document.body.append(ov); draw(); drawPrev();
+}
+
+/* ------------ meus elementos: camadas salvas para reusar em qualquer arquivo (no navegador, chave 'elements') ------------ */
+let MY_ELS = [];
+async function loadElements() { MY_ELS = (await DB.get('elements')) || []; renderAdds(); }
+// miniatura: cada camada no seu quadro de repouso, recortada em volta
+function elementThumb(ls) {
+  try {
+    const k = 200 / W(), c = document.createElement('canvas'); c.width = 200; c.height = Math.round(H() * k);
+    const x = c.getContext('2d'), R = { rs:k, export:true };
+    for (const L of S.layers) if (ls.includes(L) && !NOBOX(L)) { x.setTransform(k, 0, 0, k, 0, 0); x.globalAlpha = 1; x.filter = 'none'; try { if (L.type === 'text') drawText(x, L, restTime(L), R); else drawBlock(x, L, restTime(L), R); } catch (e) {} }
+    const bs = ls.map(l => l._bounds).filter(Boolean); if (!bs.length) return null;
+    const p = 20, x0 = Math.max(0, Math.min(...bs.map(b => b.x)) - p) * k, y0 = Math.max(0, Math.min(...bs.map(b => b.y)) - p) * k;
+    const x1 = Math.min(W(), Math.max(...bs.map(b => b.x + b.w)) + p) * k, y1 = Math.min(H(), Math.max(...bs.map(b => b.y + b.h)) + p) * k;
+    const sw = Math.max(1, x1 - x0), sh = Math.max(1, y1 - y0), f = 56 / Math.max(sw, sh), o = document.createElement('canvas');
+    o.width = Math.max(1, Math.round(sw * f)); o.height = Math.max(1, Math.round(sh * f));
+    o.getContext('2d').drawImage(c, x0, y0, sw, sh, 0, 0, o.width, o.height);
+    return o.toDataURL('image/png');
+  } catch (e) { return null; } finally { needs = true; }
+}
+async function saveElement() {
+  const p = clipPayload(); if (!p) return;
+  const L = selL(), ls = pickedLayers();
+  const name = ls.length > 1 ? (L && L.grp && ls.every(o => o.grp === L.grp) ? groupName(L.grp) : `${ls.length} elementos`) : ls[0].name;
+  MY_ELS = [{ id:uid(), name, thumb:elementThumb(ls), p }, ...MY_ELS].slice(0, 48);
+  await DB.set('elements', MY_ELS); renderAdds();
+  toast(`"${name}" salvo em Meus elementos, na coluna da esquerda`);
+}
+function addElement(el) {
+  const p = JSON.parse(JSON.stringify(el.p)), st = nextStart(), s0 = Math.min(...p.layers.map(l => +l.start || 0));
+  for (const l of p.layers) {
+    const toEnd = l.end == null || (p.dur && l.end >= p.dur - .01);
+    l.start = (+l.start || 0) - s0 + st; l.end = toEnd ? null : l.end - s0 + st;
+  }
+  p.dur = null;
+  pasteLayers(p);
+  const L = selL(); if (L) seekLayer(L); RT.userSeek = false;
+  toast(`"${el.name}" adicionado`);
+}
+async function removeElement(el) {
+  const i = MY_ELS.indexOf(el); if (i < 0) return;
+  MY_ELS.splice(i, 1); await DB.set('elements', MY_ELS); renderAdds();
+  toast(`"${el.name}" saiu de Meus elementos`, 5000, { label:'Desfazer', fn:async () => { MY_ELS.splice(Math.min(i, MY_ELS.length), 0, el); await DB.set('elements', MY_ELS); renderAdds(); } });
+}
+$('#varBtn').onclick = openVars;
+
+/* ============================================================
    Início
    ============================================================ */
 (async function boot() {
@@ -3737,6 +6294,7 @@ $('#jsonFile').addEventListener('change', async e => {
   RT.selected = S.layers.find(l => l.type === 'logo')?.id || S.layers[1]?.id || S.layers[0]?.id;
   renderAll(); updPlay(); fitStage();
   requestAnimationFrame(tick);
+  loadElements();
   await refreshLogo();
   S.layers.forEach(l => l.src && getImage(l.src));
   ensureFonts();

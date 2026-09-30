@@ -40,8 +40,10 @@
     </div>
     <div class="spacer"></div>
     <label class="tog" for="safe"><input type="checkbox" id="safe"> Zona segura 9:16</label>
+    <button class="btn ghost keysbtn" id="keysBtn" title="Atalhos de teclado (?)" aria-label="Atalhos de teclado">?</button>
     <button class="btn ghost" id="undo" title="Desfazer (Ctrl+Z)">Desfazer</button>
     <button class="btn ghost" id="redo" title="Refazer (Ctrl+Shift+Z ou Ctrl+Y)" disabled>Refazer</button>
+    <button class="btn ghost" id="varBtn" title="A mesma animação com outros textos, para exportar várias versões">Variações</button>
     <button class="btn primary" id="export">Exportar MP4</button>
   </header>
 
@@ -51,7 +53,11 @@
       <div class="adds" id="adds"></div>
       <input type="file" id="imgFile" accept="image/*" hidden>
       <input type="file" id="svgFile" accept=".svg,image/svg+xml" hidden>
-      <p class="hint">Entra depois do último elemento. Para escolher o momento, pause e posicione a agulha antes. Imagens e SVG também podem ser arrastados para o palco ou colados com Ctrl+V (vale colar o código do SVG).</p>
+      <p class="hint">Entra depois do último elemento. Para escolher o momento, pause e posicione a agulha antes. Imagens, vídeos e SVG também podem ser arrastados para o palco ou colados com Ctrl+V (vale colar o código do SVG).</p>
+    </section>
+    <section class="sec">
+      <h3>Trilha <small>música e sons</small></h3>
+      <div id="audioBox"></div>
     </section>
     <section class="sec">
       <h3>Marca</h3>
@@ -92,12 +98,18 @@
   </aside>
 
   <main class="stage">
-    <div class="stage-box" id="stageBox"><canvas id="cv" width="540" height="960"></canvas><div class="dropzone" id="dropzone" hidden>Solte para adicionar a imagem</div></div>
+    <div class="stage-box" id="stageBox"><div class="stage-scroll" id="stageScroll"><div class="stage-pad"><canvas id="cv" width="540" height="960"></canvas></div></div><canvas id="ov" class="stage-ov" aria-hidden="true"></canvas><div class="dropzone" id="dropzone" hidden>Solte para adicionar a imagem</div><div class="stage-hint" id="stageHint" role="status" hidden></div></div>
     <div class="transport">
       <button class="play" id="play" aria-label="Tocar"></button>
       <div class="tc" id="tc">00:00 <span>/ 00:00</span></div>
       <div class="scrub"><input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Posição"><div class="marks" id="marks"></div></div>
       <label class="tog" for="loop"><input type="checkbox" id="loop" checked> Repetir</label>
+      <div class="zoom" role="group" aria-label="Zoom do palco">
+        <button type="button" id="zOut" title="Diminuir o zoom (-)" aria-label="Diminuir o zoom">−</button>
+        <button type="button" id="zVal" title="Clique para alternar entre ajustar ao espaço (Shift + 1) e 100% (Shift + 0)">100%</button>
+        <button type="button" id="zIn" title="Aumentar o zoom (+). Ctrl + roda do mouse também" aria-label="Aumentar o zoom">+</button>
+      </div>
+      <button class="btn small ghost" id="pngBtn"title="Salvar o quadro da agulha como imagem PNG (capa, post estático)">Quadro PNG</button>
       <button class="btn small ghost" id="tlToggle" aria-pressed="true">Timeline</button>
     </div>
     <div class="tl-grip" id="tlGrip" title="Arraste para mudar a altura da timeline"></div>
@@ -132,6 +144,7 @@
     <div class="fgrid" id="fgrid"></div>
   </div>
 </div>
+<div class="files keys" id="keys" hidden></div>
 <div class="toast" id="toast" hidden></div>
 <script src="vendor/mp4-muxer.js"></script>
 <script src="js/app.js"></script>
