@@ -175,7 +175,7 @@ function defaultBrand() {
 }
 /* ------------ margem ------------
    Texto, logo e botão param sempre dentro dela (a posição de repouso é empurrada para dentro e,
-   se não couber, o elemento encolhe). As animações de entrada/saída podem passar. Imagem e fundo ficam livres. */
+   se não couber, o elemento encolhe). As animações de entrada/saída podem passar. Imagem e fundo ficam livres, a não ser que a imagem tenha `keepIn` ("Manter dentro da margem", `freeType`). */
 function marginSides() {
   const m = S.margin || {}, d = m.px ?? 64, v = k => Math.max(0, m[k] ?? d);
   return { on:!!m.on, top:v('top'), right:v('right'), bottom:v('bottom'), left:v('left') };
@@ -1607,7 +1607,7 @@ function drawBlockContent(ctx, L, G, info, R) {
     ctx.fillText(L.text, 0, L.size * .35);
   }
 }
-const freeType = L => L.type === 'image' || L.type === 'shape'; // sem margem: podem sangrar
+const freeType = L => (L.type === 'image' && !L.keepIn) || L.type === 'shape'; // sem margem: podem sangrar (imagem com "Manter dentro da margem" obedece)
 function drawBlock(ctx, L, t, R) {
   const G = blockGeom(L); if (!G) return;
   const ph = phase(L, t); if (!ph) return;
@@ -3310,6 +3310,8 @@ function styleProps(L) {
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Preencher a máscara', onclick:() => { pushUndo(); L.zoom = 1; L.ix = 0; L.iy = 0; changed({ props:true }); } })]),
       h('p', { class:'hint', text:'A imagem nunca distorce. No palco: a alça do canto aumenta tudo, as das laterais mudam a máscara, a roda do mouse dá zoom na imagem e Alt + arrastar move a imagem dentro.' }),
       h('h3', { text:'Camada' }),
+      checkF(L, 'keepIn', 'Manter dentro da margem'),
+      h('p', { class:'hint', text:'Precisa da margem ligada. Se a imagem não couber, ela encolhe.' }),
       rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
       L.in === 'line' ? colorF(L, 'lineColor', 'Cor da linha') : null,
       ...posFields(L));
