@@ -43,8 +43,9 @@ button{cursor:pointer}
 .left,.right{background:var(--panel);overflow-y:auto;overflow-x:hidden;min-width:0}
 .left{grid-area:left;border-right:1px solid var(--line)}
 .right{grid-area:right;border-left:1px solid var(--line)}
-.sec{padding:16px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+.sec{padding:20px 16px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:16px}
 .sec h3{margin:0;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.sec > h3:not(:first-child){margin:8px -16px 0;padding:22px 16px 0;border-top:1px solid var(--line)}
 .sec h3 small{letter-spacing:0;text-transform:none;font-weight:500;color:var(--faint)}
 .hint{color:var(--faint);font-size:11.5px;margin:0}
 
@@ -148,7 +149,7 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .tl-row.ingrp .tl-nm{padding-left:28px;box-shadow:inset 2px 0 0 color-mix(in srgb,var(--accent) 55%,transparent)}
 .tl-bar.grp{background:color-mix(in srgb,var(--accent) 16%,transparent);border-style:dashed;border-color:color-mix(in srgb,var(--accent) 70%,transparent)}
 .tl-row.grp.sel .tl-bar.grp{border-color:var(--accent)}
-.tl-chev{all:unset;cursor:pointer;width:16px;height:16px;line-height:16px;text-align:center;color:var(--muted);flex:none;font-size:11px;transition:transform .12s}
+.tl-chev{all:unset;cursor:pointer;width:22px;height:26px;line-height:26px;margin:0 -4px;text-align:center;color:var(--muted);flex:none;font-size:11px;transition:transform .12s}
 .tl-chev:hover{color:var(--fg)}
 .tl-n{margin-left:auto;color:var(--faint);font:500 10px var(--f-mono)}
 .tl-bar{position:absolute;top:4px;bottom:4px;border-radius:4px;background:color-mix(in srgb,var(--c) 22%,transparent);border:1px solid color-mix(in srgb,var(--c) 55%,transparent);cursor:grab;overflow:hidden;min-width:6px}
@@ -209,8 +210,8 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .lhead input{font-weight:600;font-size:14px;background:transparent;border-color:transparent;padding:4px 6px}
 .lhead input:hover{border-color:var(--line-2)}
 .type-chip{font:500 10px var(--f-mono);text-transform:uppercase;letter-spacing:.06em;padding:3px 7px;border-radius:4px;background:var(--raised-2);white-space:nowrap}
-.chips{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
-.chip{border:1px solid var(--line);background:var(--raised);border-radius:6px;padding:7px 8px;text-align:left;font-size:12px;display:flex;justify-content:space-between;align-items:center;gap:6px;min-width:0}
+.chips{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.chip{border:1px solid var(--line);background:var(--raised);border-radius:7px;padding:8px 9px;text-align:left;font-size:12px;display:flex;justify-content:space-between;align-items:center;gap:6px;min-width:0}
 .chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chip:hover{border-color:var(--line-2);background:var(--raised-2)}
 .chip[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--fg)}
@@ -219,9 +220,9 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .tabs{display:flex;gap:2px;background:var(--raised);border-radius:7px;padding:3px}
 .tabs button{flex:1;border:0;background:transparent;padding:6px 4px;border-radius:5px;color:var(--muted);font-size:12px;font-weight:600}
 .tabs button[aria-selected="true"]{background:var(--raised-2);color:var(--fg)}
-.field{display:grid;grid-template-columns:96px minmax(0,1fr);gap:10px;align-items:center}
-.field > label{color:var(--muted);font-size:12px}
-.field.stack{grid-template-columns:1fr;gap:6px}
+.field{display:grid;grid-template-columns:96px minmax(0,1fr);gap:12px;align-items:center;min-height:32px}
+.field > label{color:var(--muted);font-size:13px}
+.field.stack{grid-template-columns:1fr;gap:8px}
 .rng{display:grid;grid-template-columns:minmax(0,1fr) 62px;gap:6px;align-items:center}
 .rng input{width:100%;accent-color:var(--accent);min-width:0}
 /* número ao lado da barra: parece texto, vira campo ao clicar */
@@ -234,9 +235,9 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .richbar{display:flex;gap:4px;align-items:center}
 .richbar .btn{width:30px;justify-content:center;padding-inline:0}
 .richbar select{flex:1;padding:4px 6px;font-size:11.5px}
-.colorctl{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.colorctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .cpick{width:34px;height:26px;border:1px solid var(--line-2);border-radius:5px;padding:0;cursor:pointer}
-.cpick.sw{width:30px;height:30px;border-radius:50%;border:2px solid var(--line-2)}
+.cpick.sw{width:34px;height:34px;border-radius:50%;border:2px solid var(--line-2)}
 .cp-pop{position:fixed;z-index:1000;width:220px;padding:10px;background:var(--panel);border:1px solid var(--line-2);border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:10px}
 .cp-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .cp-lbl{font:600 10.5px var(--f-mono);color:var(--faint);letter-spacing:.06em}
@@ -247,9 +248,10 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .cp-hue .cp-knob{top:50%}
 
 .mini-sw{width:18px;height:18px;border-radius:50%;border:1px solid var(--line-2);padding:0}
-.segs{display:flex;gap:2px;background:var(--bg);border:1px solid var(--line-2);border-radius:6px;padding:2px;flex-wrap:wrap}
-.segs button{flex:1;border:0;background:transparent;padding:4px 6px;border-radius:4px;color:var(--muted);font-size:11.5px;white-space:nowrap}
-.segs button[aria-pressed="true"]{background:var(--raised-2);color:var(--fg)}
+.segs{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px}
+.segs button{border:1px solid var(--line);background:var(--raised);padding:11px 10px;border-radius:8px;color:var(--muted);font-size:13px;font-weight:500;white-space:nowrap;line-height:1.2}
+.segs button:hover{border-color:var(--line-2);background:var(--raised-2);color:var(--fg)}
+.segs button[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--fg);font-weight:600}
 .check{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;cursor:pointer}
 .check input{accent-color:var(--accent)}
 details.adv summary{cursor:pointer;color:var(--muted);font-size:12px;list-style:none;display:flex;align-items:center;gap:6px}
@@ -307,6 +309,7 @@ details.adv > div{display:flex;flex-direction:column;gap:10px;margin-top:10px}
 .nm-edit{width:100%;min-width:0;font:inherit;padding:1px 4px;border-radius:4px;border:1px solid var(--line-2);background:var(--bg,#0e0e10);color:var(--fg)}
 .layer.drop-before,.tl-nm.drop-before{box-shadow:0 -2px 0 0 var(--accent,#7aa2ff)}
 .layer.drop-after,.tl-nm.drop-after{box-shadow:0 2px 0 0 var(--accent,#7aa2ff)}
+.tl-nm.drop-in{box-shadow:inset 0 0 0 1px var(--accent,#7aa2ff);background:color-mix(in srgb,var(--accent,#7aa2ff) 18%,transparent)}
 .layer[draggable="true"],.tl-nm[draggable="true"]{cursor:grab}
 
 .alrow{display:flex;align-items:center;gap:2px}
@@ -319,3 +322,87 @@ details.adv > div{display:flex;flex-direction:column;gap:10px;margin-top:10px}
 .lgroup small{color:var(--faint);font-weight:500;text-transform:none;letter-spacing:0;margin-right:auto}
 .lgroup .icon-btn{width:20px;height:20px;font-size:14px;line-height:1}
 .layer.ingrp{margin-left:10px;border-left:2px solid var(--line-2);border-radius:0 6px 6px 0}
+
+/* ===== Densidade e proporções no padrão do Figma (painéis 11px, controles de 28px, seções de 16px) ===== */
+:root{--f-ui:"Inter","Instrument Sans",ui-sans-serif,system-ui,sans-serif;--r:6px;--ctl:28px;--pad:16px}
+body{font-size:11px;line-height:1.4;letter-spacing:.005em}
+.app{grid-template-columns:240px minmax(0,1fr) 300px;grid-template-rows:48px minmax(0,1fr)}
+.top{gap:10px;padding-inline:12px}
+.btn{padding:0 12px;height:var(--ctl);font-size:11px;border-radius:6px}
+.btn.small{height:24px;padding:0 8px;font-size:11px}
+.seg button{padding:4px 10px;font-size:11px}
+.sec{padding:8px var(--pad) var(--pad);gap:8px}
+.sec h3{font-size:11px;letter-spacing:0;text-transform:none;font-weight:600;color:var(--fg);min-height:32px;margin:0 0 -2px}
+.sec > h3:not(:first-child){margin:4px calc(var(--pad) * -1) -2px;padding:8px var(--pad) 0;border-top:1px solid var(--line)}
+.sec h3 small{font-size:11px;color:var(--faint)}
+.hint{font-size:11px;color:var(--muted)}
+input[type=text],input[type=number],select{height:var(--ctl);padding:0 8px;border-radius:5px;border:1px solid transparent;background:var(--raised);font-size:11px}
+input[type=text]:hover,input[type=number]:hover,select:hover{border-color:var(--line-2)}
+textarea{border-color:transparent;background:var(--raised);border-radius:5px;padding:6px 8px;font-size:11px}
+.rich{background:var(--raised);border-color:transparent;font-size:12px;padding:6px 8px}
+.field{grid-template-columns:76px minmax(0,1fr);gap:8px;min-height:var(--ctl)}
+.field > label{font-size:11px;color:var(--muted)}
+.field.stack{gap:4px}
+.rng{grid-template-columns:minmax(0,1fr) 52px;gap:4px}
+.rng input.num{font-size:11px;height:24px;padding:0 6px}
+.chips{gap:4px}
+.chip{padding:0 6px;height:var(--ctl);font-size:11px;border-radius:5px;border-color:transparent}
+.segs{grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:4px}
+.segs button{padding:0 8px;height:var(--ctl);font-size:11px;border-radius:5px;border-color:transparent}
+.tabs{padding:2px;border-radius:6px;gap:0}
+.tabs button{padding:0;height:24px;font-size:11px;border-radius:4px}
+.lhead{gap:6px;min-height:32px}
+.lhead input{font-size:12px;height:24px;padding:0 6px}
+.type-chip{font-size:9px;padding:2px 5px}
+.icon-btn{width:28px;height:28px;border-radius:5px}
+.icon-btn svg{width:16px;height:16px}
+.check{font-size:11px}
+.layer{padding:0 8px;height:28px;border-radius:5px}
+.layers{gap:0}
+.adds{gap:4px}
+.add{padding:6px 2px 5px;font-size:11px;border-radius:6px;border-color:transparent}
+.tpl{border-radius:6px}
+.drop{padding:8px}
+.pg-name{font-size:11px;letter-spacing:0;text-transform:none;color:var(--fg)}
+.fontrow{grid-template-columns:64px 1fr;gap:8px}
+.fontrow label{font-size:11px}
+.transport{padding:6px 12px;gap:8px}
+.play{width:28px;height:28px}
+.tc{font-size:11px}
+.tl{--name:112px}
+.tl-ruler{height:24px}
+.tl-row{height:28px}
+.tl-nm{font-size:11px}
+.alrow{gap:0}
+.alrow i{margin:0 4px}
+.props-empty{padding:16px;font-size:11px}
+.mpop{width:232px}
+.ctx button{font-size:11px;padding:6px 8px}
+.cp-pop{width:232px}
+@media (max-width:1180px){.app{grid-template-columns:220px minmax(0,1fr) 280px}}
+
+/* campos de cor (Base, Luz, Cor 1…): mais ar entre um e outro, com divisor */
+.field:has(> .colorctl){align-items:start;padding-block:16px;margin-block:0}
+.field:has(> .colorctl) > label{padding-top:6px}
+.field:has(> .colorctl) + .field:has(> .colorctl){border-top:1px solid var(--line);margin-top:0}
+.colorctl{gap:8px 6px;row-gap:10px}
+.colorctl .mini-sw{width:20px;height:20px}
+.colorctl > :nth-child(2){margin-right:4px}
+
+/* texto: grupos claros, alinhamento numa linha só, sem nada recolhido */
+.segs.tight{grid-template-columns:repeat(auto-fit,minmax(56px,1fr))}
+.segs.tight button{padding:0 4px}
+.checks{display:flex;gap:16px;min-height:var(--ctl);align-items:center}
+.field:has(> .colorctl){padding-block:8px}
+.field.stack > .segs{width:100%}
+
+/* cor: rótulo em cima, controles embaixo (largura toda); hint e caixas de seleção respiram igual */
+.field:has(> .colorctl){grid-template-columns:1fr;gap:8px;padding-block:8px}
+.field:has(> .colorctl) > label{padding-top:0}
+.sec > .check{min-height:var(--ctl)}
+.sec > .hint{margin-top:-2px}
+.sec > .row{min-height:var(--ctl)}
+
+.tl-row .tl-nm[draggable="true"]{cursor:grab}
+.tl-row .tl-nm[draggable="true"]:active{cursor:grabbing}
+.tl-chev{cursor:pointer!important}

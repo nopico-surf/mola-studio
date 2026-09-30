@@ -1813,8 +1813,10 @@ function drawOverlays() {
       handlesOf(L).forEach(q => { ctx.fillStyle = '#F2B632'; ctx.strokeStyle = '#101115'; ctx.lineWidth = hRad() / 11 * 1.5; ctx.fillRect(q.x - s, q.y - s, s * 2, s * 2); ctx.strokeRect(q.x - s, q.y - s, s * 2, s * 2); });
     }
   }
-  if (RT.guide) { ctx.setLineDash([]); ctx.strokeStyle = 'rgba(143,176,255,.9)'; ctx.lineWidth = 2 / RS;
-    ctx.beginPath(); if (RT.guide.x) { ctx.moveTo(W() / 2, 0); ctx.lineTo(W() / 2, H()); } if (RT.guide.y) { ctx.moveTo(0, H() / 2); ctx.lineTo(W(), H() / 2); } ctx.stroke(); }
+  if (RT.guide) {
+    ctx.setLineDash([]); ctx.lineWidth = 2 / RS;
+    for (const g of RT.guide) { ctx.strokeStyle = g.c; ctx.beginPath(); ctx.moveTo(g.x0, g.y0); ctx.lineTo(g.x1, g.y1); ctx.stroke(); }
+  }
   ctx.restore();
 }
 let lastNow = performance.now();
@@ -1907,16 +1909,42 @@ cv.addEventListener('pointerdown', ev => {
     cv.setPointerCapture(ev.pointerId); return;
   }
   const L = hitTest(pt);
-  if (!L) { const bg = S.layers.find(l => l.type === 'bg'); if (bg) select(bg.id); return; }
+  if (!L) { if (ev.shiftKey) return; const bg = S.layers.find(l => l.type === 'bg'); if (bg) select(bg.id); return; } // Shift errando o clique não solta a seleção
   if (ev.shiftKey) { toggleSel(L); return; }
   const only = ev.ctrlKey || ev.metaKey, grp = isPicked(L.id) && pickedLayers().length > 1 && !only;
   if (only) select(L.id, true);
   else if (grp) { RT.selected = L.id; renderLayers(); renderProps(); needs = true; } else select(L.id);
   pushUndo();
   if (ev.altKey && L.type === 'image') RT.drag = { L, mode:'pan', pt0:pt, ix0:L.ix || 0, iy0:L.iy || 0, bw:L._bounds.w, bh:L._bounds.h };
-  else RT.drag = { L, mode:'move', tap:grp, pxy:[ev.clientX, ev.clientY], ox:pt.x - L.x * W(), oy:pt.y - L.y * H(), others:pickedLayers().filter(o => o !== L).map(o => ({ o, x0:o.x, y0:o.y })), x0:L.x, y0:L.y };
+  else RT.drag = { L, mode:'move', tap:grp, pxy:[ev.clientX, ev.clientY], ox:pt.x - L.x * W(), oy:pt.y - L.y * H(), others:pickedLayers().filter(o => o !== L).map(o => ({ o, x0:o.x, y0:o.y })), x0:L.x, y0:L.y, ...snapSetup() };
   cv.setPointerCapture(ev.pointerId);
 });
+// Guias ao arrastar: bordas e centro da seleção contra os elementos fora dela, o quadro e a margem (Ctrl desliga; Shift trava num eixo)
+function snapSetup() {
+  const mv = pickedLayers().filter(o => o._bounds && o.visible);
+  if (!mv.length) return {};
+  const x0 = Math.min(...mv.map(o => o._bounds.x)), y0 = Math.min(...mv.map(o => o._bounds.y));
+  const b0 = { x:x0, y:y0, w:Math.max(...mv.map(o => o._bounds.x + o._bounds.w)) - x0, h:Math.max(...mv.map(o => o._bounds.y + o._bounds.h)) - y0 };
+  const tg = [{ x:0, y:0, w:W(), h:H(), c:'rgba(143,176,255,.9)' }];
+  const M = marginBox(); if (M) tg.push({ x:M.x0, y:M.y0, w:M.x1 - M.x0, h:M.y1 - M.y0, c:'rgba(111,211,166,.9)' });
+  for (const o of S.layers) if (o.type !== 'bg' && o.visible && o._bounds && !isPicked(o.id) && phase(o, T)) tg.push({ x:o._bounds.x, y:o._bounds.y, w:o._bounds.w, h:o._bounds.h, c:'rgba(255,92,163,.95)' });
+  return { b0, tg };
+}
+function snapMove(D, dx, dy) {
+  const U = D.b0, thr = 7 * W() / (cv.getBoundingClientRect().width || 1);
+  const three = (a, n) => [a, a + n / 2, a + n];
+  const best = (vals, tgs) => { let b = null; for (const v of vals) for (const t of tgs) { const d = t - v; if (Math.abs(d) <= thr && (b === null || Math.abs(d) < Math.abs(b))) b = d; } return b; };
+  const bx = best(three(U.x + dx, U.w), D.tg.flatMap(t => three(t.x, t.w))); if (bx !== null) dx += bx;
+  const by = best(three(U.y + dy, U.h), D.tg.flatMap(t => three(t.y, t.h))); if (by !== null) dy += by;
+  const lines = [], mx = three(U.x + dx, U.w), my = three(U.y + dy, U.h);
+  for (const t of D.tg) {
+    for (const v of mx) for (const tv of three(t.x, t.w)) if (Math.abs(v - tv) < .5)
+      lines.push({ c:t.c, x0:tv, x1:tv, y0:Math.min(U.y + dy, t.y), y1:Math.max(U.y + dy + U.h, t.y + t.h) });
+    for (const v of my) for (const tv of three(t.y, t.h)) if (Math.abs(v - tv) < .5)
+      lines.push({ c:t.c, y0:tv, y1:tv, x0:Math.min(U.x + dx, t.x), x1:Math.max(U.x + dx + U.w, t.x + t.w) });
+  }
+  return { dx, dy, lines };
+}
 cv.addEventListener('pointermove', ev => {
   const pt = stagePt(ev);
   if (!RT.drag) {
@@ -1935,11 +1963,18 @@ cv.addEventListener('pointermove', ev => {
   else if (D.mode === 'pan') { L.ix = clamp(D.ix0 + (pt.x - D.pt0.x) / D.bw, -2, 2); L.iy = clamp(D.iy0 + (pt.y - D.pt0.y) / D.bh, -2, 2); }
   else {
     let x = (pt.x - D.ox) / W(), y = (pt.y - D.oy) / H();
-    RT.guide = { x:Math.abs(x - .5) < .012, y:Math.abs(y - .5) < .01 };
-    if (RT.guide.x) x = .5; if (RT.guide.y) y = .5;
-    if (!freeType(L) && L._bounds) { const f = fitInMargin(x * W(), y * H(), L._bounds.w, L._bounds.h); x = f.ax / W(); y = f.ay / H(); }
-    L.x = +clamp(x, -.2, 1.2).toFixed(4); L.y = +clamp(y, -.2, 1.2).toFixed(4);
-    for (const q of D.others || []) { q.o.x = +clamp(q.x0 + L.x - D.x0, -.2, 1.2).toFixed(4); q.o.y = +clamp(q.y0 + L.y - D.y0, -.2, 1.2).toFixed(4); }
+    RT.guide = null;
+    // Shift = movimento reto: trava no eixo em que mais andou
+    const lock = ev.shiftKey ? (Math.abs(x - D.x0) * W() >= Math.abs(y - D.y0) * H() ? 'y' : 'x') : null;
+    const relock = () => { if (lock === 'y') y = D.y0; else if (lock === 'x') x = D.x0; };
+    relock();
+    if (D.b0 && !ev.ctrlKey && !ev.metaKey) { const sn = snapMove(D, (x - D.x0) * W(), (y - D.y0) * H()); x = D.x0 + sn.dx / W(); y = D.y0 + sn.dy / H(); RT.guide = sn.lines; relock(); }
+    if (!freeType(L) && L._bounds) { const f = fitInMargin(x * W(), y * H(), L._bounds.w, L._bounds.h); x = f.ax / W(); y = f.ay / H(); relock(); }
+    // um deslocamento só para todos: se um bate no limite, ninguém passa (senão desalinham)
+    const its = [{ o:L, x0:D.x0, y0:D.y0 }, ...(D.others || [])];
+    const ddx = clamp(x - D.x0, Math.max(...its.map(q => -.2 - q.x0)), Math.min(...its.map(q => 1.2 - q.x0)));
+    const ddy = clamp(y - D.y0, Math.max(...its.map(q => -.2 - q.y0)), Math.min(...its.map(q => 1.2 - q.y0)));
+    for (const q of its) { q.o.x = +(q.x0 + ddx).toFixed(4); q.o.y = +(q.y0 + ddy).toFixed(4); }
     syncPosFields(L);
   }
   needs = true;
@@ -1972,14 +2007,36 @@ $('.stage').addEventListener('pointerdown', e => {
 /* ============================================================
    Desfazer, salvar automático, projetos
    ============================================================ */
-function pushUndo() { try { undoStack.push(JSON.stringify(S)); if (undoStack.length > 40) undoStack.shift(); } catch (e) {} $('#undo').disabled = !undoStack.length; }
-function undo() {
-  const s = undoStack.pop(); $('#undo').disabled = !undoStack.length; if (!s) return;
+const redoStack = [];
+let redoBase = null; // estado logo depois de desfazer/refazer: enquanto nada mudar, o refazer continua valendo
+function syncHist() { const u = $('#undo'), r = $('#redo'); if (u) u.disabled = !undoStack.length; if (r) r.disabled = !redoStack.length; }
+function pushUndo() {
+  try {
+    const snap = JSON.stringify(S);
+    if (redoStack.length && snap !== redoBase) redoStack.length = 0; // ação nova: o refazer perde o sentido
+    // controles chamam pushUndo ao focar/clicar sem mudar nada: não vira passo
+    if (undoStack[undoStack.length - 1] !== snap) { undoStack.push(snap); if (undoStack.length > 60) undoStack.shift(); }
+  } catch (e) {}
+  syncHist();
+}
+function applyState(s) {
   const prevLogo = JSON.stringify(S.brand.logo);
   S = JSON.parse(s); RT.layout.clear();
   if (!S.layers.find(l => l.id === RT.selected)) RT.selected = S.layers[0]?.id;
   if (JSON.stringify(S.brand.logo) !== prevLogo) refreshLogo();
+  ensureFonts(); S.layers.forEach(l => l.src && getImage(l.src));
+  redoBase = s;
   renderAll(); needs = true; autosave();
+}
+function undo() {
+  const cur = JSON.stringify(S);
+  let s; while ((s = undoStack.pop()) === cur) {} // pula passos idênticos ao estado atual
+  if (!s) { syncHist(); return; }
+  redoStack.push(cur); applyState(s); syncHist();
+}
+function redo() {
+  const s = redoStack.pop(); if (!s) { syncHist(); return; }
+  undoStack.push(JSON.stringify(S)); applyState(s); syncHist();
 }
 const DB = {
   db:null,
@@ -2022,6 +2079,7 @@ async function flushSave() {
 }
 function changed(opts = {}) {
   needs = true; autosave();
+  refreshBars();
   if (opts.layers) renderLayers();
   if (opts.props) renderProps();
   if (opts.marks) renderMarks();
@@ -2034,7 +2092,7 @@ async function openState(st, id, name) {
   if (!st || !st.layers || !st.brand) { toast('Arquivo de projeto inválido'); return false; }
   FILES.id = id; FILES.name = name; showFileName();
   DB.set('currentId', id);
-  undoStack.length = 0; $('#undo').disabled = true;
+  undoStack.length = 0; redoStack.length = 0; redoBase = null; syncHist();
   S = st; RT.layout.clear();
   RT.selected = S.layers.find(l => l.type === 'logo')?.id || S.layers.find(l => l.type !== 'bg')?.id || S.layers[0]?.id;
   renderAll(); fitStage();
@@ -2066,6 +2124,14 @@ async function duplicateFile(id) {
   await DB.set('file:' + nid, data);
   list.unshift({ ...rec, id:nid, name:`${rec.name} (cópia)`, createdAt:Date.now(), updatedAt:Date.now() });
   await DB.set('files', list); renderFiles();
+}
+// "Salvar como": o arquivo aberto fica como está e você passa a trabalhar na cópia
+async function saveAsCopy() {
+  if (saveT) await flushSave();
+  const list = (await DB.get('files')) || [], base = FILES.name.replace(/ \(cópia(?: \d+)?\)$/, '');
+  let n = 1, name; do { name = n === 1 ? `${base} (cópia)` : `${base} (cópia ${n})`; n++; } while (list.some(f => f.name === name));
+  const st = JSON.parse(JSON.stringify(S)), t = T;
+  if (await openState(st, newFileId(), name)) { T = t; needs = true; await flushSave(); toast(`Cópia criada: ${name}`); }
 }
 async function renameFile(id, name) {
   name = name.trim(); if (!name) return;
@@ -2348,6 +2414,25 @@ Object.assign(ICONS, {
   al_t:AL('M2 2.5h12', rc(3.5, 5, 3.2, 8) + rc(9.3, 5, 3.2, 5)), al_cv:AL('M2 8h12', rc(3.5, 3, 3.2, 10) + rc(9.3, 4.5, 3.2, 7)), al_b:AL('M2 13.5h12', rc(3.5, 3, 3.2, 8) + rc(9.3, 6, 3.2, 5)),
   al_dh:AL('M2.5 2v12M13.5 2v12', rc(6.3, 4, 3.4, 8)), al_dv:AL('M2 2.5h12M2 13.5h12', rc(4, 6.3, 8, 3.4)),
 });
+// escala a seleção toda (proporcional, em torno do centro do conjunto); devolve apply(f) sobre o tamanho de agora
+function beginScaleSel() {
+  const ls = pickedLayers(); ensureBounds(ls);
+  const its = ls.filter(o => o._bounds); if (!its.length) return null;
+  const x0 = Math.min(...its.map(o => o._bounds.x)), y0 = Math.min(...its.map(o => o._bounds.y));
+  const cx = (x0 + Math.max(...its.map(o => o._bounds.x + o._bounds.w))) / 2, cy = (y0 + Math.max(...its.map(o => o._bounds.y + o._bounds.h))) / 2;
+  const items = its.map(o => ({ o, s0:{ size:o.size, mh:o.mh, padX:o.padX, padY:o.padY }, ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2 }));
+  return f => { for (const q of items) { scaleLayer(q.o, q.s0, f); q.o.x = +((cx + (q.ox - cx) * f) / W()).toFixed(4); q.o.y = +((cy + (q.oy - cy) * f) / H()).toFixed(4); } needs = true; };
+}
+function scaleBar() {
+  const rng = h('input', { type:'range', min:25, max:300, step:1, value:100, 'aria-label':'Escala da seleção' }), out = h('output', { text:'100%' });
+  let ap = null;
+  rng.addEventListener('pointerdown', () => { pushUndo(); ap = beginScaleSel(); });
+  rng.addEventListener('input', () => { if (!ap) { pushUndo(); ap = beginScaleSel(); } if (ap) { ap(+rng.value / 100); out.textContent = rng.value + '%'; } });
+  rng.addEventListener('change', () => { ap = null; rng.value = 100; out.textContent = '100%'; changed({ props:true }); });
+  const step = (f, t) => h('button', { class:'icon-btn', title:t, 'aria-label':t, text:f > 1 ? '+' : '−', onclick:() => { pushUndo(); const a = beginScaleSel(); if (a) { a(f); changed({ props:true }); } } });
+  return h('section', { class:'sec' }, [h('h3', {}, ['Tamanho da seleção', h('small', { text:'todos juntos' })]),
+    h('div', { class:'row' }, [step(1 / 1.1, 'Diminuir 10%'), rng, out, step(1.1, 'Aumentar 10%')])]);
+}
 function alignBar() {
   const ls = pickedLayers(); if (!ls.length) return null;
   const n = new Set(ls.map(l => l.grp || l.id)).size;
@@ -2491,16 +2576,16 @@ let lastClick = { id:null, t:0 };
 function clickOrRename(L, where, ev) {
   if (ev && ev.shiftKey) { lastClick = { id:null, t:0 }; toggleSel(L); return; }
   if (ev && (ev.ctrlKey || ev.metaKey) && L.type !== 'bg') { lastClick = { id:null, t:0 }; select(L.id, true); return; }
-  const now = performance.now(), dbl = lastClick.id === L.id && now - lastClick.t < 450 && L.type !== 'bg';
+  const now = performance.now(), dbl = lastClick.id === L.id && now - lastClick.t < 700 && L.type !== 'bg';
   lastClick = dbl ? { id:null, t:0 } : { id:L.id, t:now };
   if (dbl) renameLayer(L, where); else select(L.id, where === 'tl');  // na timeline o item do grupo se escolhe sozinho; o grupo tem a própria linha
 }
 // arrastar para reordenar (lista de camadas e nomes da timeline). Topo da tela = mais à frente.
-let dragLayerId = null;
+let dragLayerId = null, dragGroupId = null;
 function dragReorder(el, L) {
   if (L.type === 'bg') return;
   el.draggable = true;
-  const clear = () => document.querySelectorAll('.drop-before,.drop-after').forEach(n => n.classList.remove('drop-before', 'drop-after'));
+  const clear = () => document.querySelectorAll('.drop-before,.drop-after,.drop-in').forEach(n => n.classList.remove('drop-before', 'drop-after', 'drop-in'));
   el.addEventListener('dragstart', e => { dragLayerId = L.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', L.id); });
   el.addEventListener('dragend', () => { dragLayerId = null; clear(); });
   el.addEventListener('dragover', e => {
@@ -2514,15 +2599,52 @@ function dragReorder(el, L) {
     if (!dragLayerId || dragLayerId === L.id) return;
     e.preventDefault();
     const above = el.classList.contains('drop-before'); clear();
-    const mv = S.layers.find(l => l.id === dragLayerId); dragLayerId = null;
-    if (!mv) return;
-    pushUndo();
-    S.layers.splice(S.layers.indexOf(mv), 1);
-    // "acima" na tela = índice maior
-    let j = S.layers.indexOf(L) + (above ? 1 : 0);
-    j = Math.max(1, j);
-    S.layers.splice(j, 0, mv);
-    changed({ layers:true });
+    const one = S.layers.find(l => l.id === dragLayerId); dragLayerId = null;
+    if (one) applyDrop(one, L, above);
+  });
+}
+// solta em cima de um item (entra no grupo dele, ou sai do grupo se o item não tem) ou do cabeçalho de um grupo (metade de cima = acima do grupo, de baixo = dentro)
+function applyDrop(one, T, above, gid) {
+  // arrastar uma camada da seleção leva todas juntas (mantendo a ordem entre elas)
+  const dg = dragGroupId; dragGroupId = null;
+  const mvs = dg ? S.layers.filter(l => l.grp === dg) : isPicked(one.id) ? pickedLayers() : [one];
+  if (!mvs.includes(one)) mvs.push(one);
+  const set = new Set(mvs);
+  if (T && set.has(T)) return;
+  const members = gid ? S.layers.filter(l => l.grp === gid) : [];
+  if (gid && members.every(m => set.has(m))) return;
+  const g0 = mvs[0].grp, whole = !!g0 && mvs.every(m => m.grp === g0) && S.layers.filter(l => l.grp === g0).every(m => set.has(m));
+  const block = S.layers.filter(l => set.has(l));
+  pushUndo();
+  S.layers = S.layers.filter(l => !set.has(l));
+  // "acima" na tela = índice maior
+  const topOf = id => Math.max(...S.layers.map((l, i) => l.grp === id ? i : -1)) + 1;
+  let j, ng;
+  if (gid) { j = topOf(gid); ng = above ? undefined : gid; }
+  else { j = S.layers.indexOf(T) + (above ? 1 : 0); ng = T.grp; }
+  if (whole && ng && ng !== g0) { j = topOf(ng); ng = undefined; }  // grupo inteiro não entra em outro grupo
+  j = Math.max(1, j);
+  S.layers.splice(j, 0, ...block);
+  if (!whole) block.forEach(l => { if (ng) l.grp = ng; else delete l.grp; });
+  if (S.groups) for (const k of Object.keys(S.groups)) if (!S.layers.some(l => l.grp === k)) delete S.groups[k];
+  changed({ layers:true });
+}
+// cabeçalho do grupo como alvo de soltar
+function groupDrop(el, gid) {
+  const clear = () => document.querySelectorAll('.drop-before,.drop-after,.drop-in').forEach(n => n.classList.remove('drop-before', 'drop-after', 'drop-in'));
+  el.addEventListener('dragover', e => {
+    if (!dragLayerId) return;
+    e.preventDefault(); clear();
+    const r = el.getBoundingClientRect();
+    el.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-in');
+  });
+  el.addEventListener('dragleave', () => el.classList.remove('drop-before', 'drop-in'));
+  el.addEventListener('drop', e => {
+    if (!dragLayerId) return;
+    e.preventDefault();
+    const above = el.classList.contains('drop-before'); clear();
+    const one = S.layers.find(l => l.id === dragLayerId); dragLayerId = null;
+    if (one) applyDrop(one, null, above, gid);
   });
 }
 function move(i, d) {
@@ -2596,6 +2718,15 @@ function placeBar(bar, L) {
   bar.querySelector('.seg.in').style.width = (ph.inD / span * 100) + '%';
   bar.querySelector('.seg.out').style.width = (ph.outD / span * 100) + '%';
 }
+// reposiciona as barras existentes (velocidade, duração de entrada/saída etc.) sem refazer a timeline
+function refreshBars() {
+  const tl = $('#tl'); if (!tl || tl.hidden) return;
+  for (const row of tl.querySelectorAll('.tl-row')) {
+    const bar = row.querySelector('.tl-bar'); if (!bar || bar.classList.contains('drag')) continue;
+    if (row.dataset.gid) { if (S.layers.some(l => l.grp === row.dataset.gid)) placeBar(bar, gpseudo(row.dataset.gid)); }
+    else { const L = S.layers.find(l => l.id === row.dataset.id); if (L) placeBar(bar, L); }
+  }
+}
 function renderTimeline() {
   const tl = $('#tl'); if (!tl || tl.hidden) return;
   const keep = tl.scrollTop; tl.innerHTML = '';
@@ -2624,12 +2755,17 @@ function renderTimeline() {
     });
     lane.addEventListener('pointerleave', () => { if (!bar.classList.contains('drag')) bar.classList.remove('hl', 'hr'); });
     const chev = h('button', { class:'tl-chev', title:g.open === false ? 'Mostrar os itens do grupo' : 'Recolher o grupo', 'aria-label':'Recolher ou expandir o grupo', 'aria-expanded':String(g.open !== false), text:'▾',
-      onclick:e => { e.stopPropagation(); g.open = g.open === false; renderTimeline(); autosave(); } });
+      onpointerdown:e => { e.stopPropagation(); if (e.button) return; e.preventDefault(); g.open = g.open === false; renderTimeline(); autosave(); },
+      onclick:e => { e.stopPropagation(); if (e.detail === 0) { g.open = g.open === false; renderTimeline(); autosave(); } } });
     chev.style.transform = g.open === false ? 'rotate(-90deg)' : '';
     const nm = h('div', { class:'tl-nm', title:'Clique para selecionar o grupo. Clique duas vezes para renomear', onclick:e => {
       if (e.detail > 1) { const n = prompt('Nome do grupo', groupName(gid)); if (n && n.trim()) { pushUndo(); g.name = n.trim(); changed({ layers:true, props:true }); } return; }
       select(mem[mem.length - 1].id);
     } }, [chev, h('span', { text:groupName(gid) }), h('small', { class:'tl-n', text:String(mem.length) })]);
+    groupDrop(nm, gid);
+    nm.draggable = true;
+    nm.addEventListener('dragstart', e => { dragGroupId = gid; dragLayerId = mem[0].id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', gid); });
+    nm.addEventListener('dragend', () => { dragGroupId = null; dragLayerId = null; document.querySelectorAll('.drop-before,.drop-after,.drop-in').forEach(n => n.classList.remove('drop-before', 'drop-after', 'drop-in')); });
     const row = h('div', { class:'tl-row grp' + (on ? ' sel' : '') }, [nm, lane]);
     row.dataset.gid = gid;
     tl.append(row);
@@ -2648,7 +2784,7 @@ function renderTimeline() {
     lane.addEventListener('pointerdown', e => {
       if (e.button) return;
       const m = tlHit(bar, e.clientX);
-      if (e.shiftKey && m === 'm') { e.preventDefault(); toggleSel(L); return; }
+      if (e.shiftKey && m) { e.preventDefault(); e.stopPropagation(); toggleSel(L); return; } // sem stopPropagation o .stage solta a seleção
       if (m) tlDrag(e, L, bar, m); else tlScrub(e);
     });
     lane.addEventListener('pointermove', e => {
@@ -2679,11 +2815,15 @@ function tlDuration(e) {
 }
 function tlScrub(e) {
   const g = tlGeom(); if (!g) return;
+  // sem isso o navegador pode iniciar um arrastar-e-soltar nativo (imagem "fantasma" duplicada) e perder o pointerup
+  e.preventDefault();
+  try { getSelection().removeAllRanges(); } catch (err) {}
   pause();
   const set = ev => { T = clamp((ev.clientX - g.x0) / g.w) * S.duration; RT.userSeek = true; needs = true; };
   set(e);
-  const mv = ev => set(ev), up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); };
-  addEventListener('pointermove', mv); addEventListener('pointerup', up);
+  const mv = ev => set(ev), nodrag = ev => ev.preventDefault();
+  const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); removeEventListener('dragstart', nodrag, true); };
+  addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up); addEventListener('dragstart', nodrag, true);
 }
 // qual parte da barra está sob o ponteiro: 'l' | 'r' (borda, com folga de 8px para fora) | 'm' (meio) | null
 function tlHit(bar, cx) {
@@ -2754,17 +2894,20 @@ function tlDrag(e, L, bar, mode) {
   const g = tlGeom(); if (!g) return;
   // item dentro de um grupo: arrasta só ele (o grupo todo se move pela barra do grupo)
   const wholeGrp = L.grp && groupOf(L).every(l => isPicked(l.id));
-  if (wholeGrp || (RT.selected !== L.id && !(mode === 'm' && isPicked(L.id)))) {
+  if (wholeGrp || !isPicked(L.id)) {
     RT.selected = L.id; RT.picks = new Set([L.id]); renderLayers(); renderProps(); needs = true;
     // selecionar redesenha a timeline: arrasta a barra nova, não a que saiu da tela
     bar = g.tl.querySelector(`.tl-row[data-id="${L.id}"] .tl-bar`) || bar;
   }
   pushUndo(); pause();
-  const grp = mode === 'm' && isPicked(L.id) ? pickedLayers().filter(o => o !== L).map(o => ({ o, s:o.start, e:o.end })) : [];
+  const grp = isPicked(L.id) ? pickedLayers().filter(o => o !== L).map(o => ({ o, s:o.start, e:o.end })) : [];
   const d = S.duration, s0 = L.start, e0 = L.end ?? d, end0 = L.end, x0 = e.clientX, grid = v => Math.round(v * 10) / 10, MIN = .3;
   // ímã: início, fim, agulha e as bordas das outras camadas (Shift desliga)
   const pts = [0, d, T];
-  for (const o of S.layers) if (o !== L && o.type !== 'bg') pts.push(o.start, o.end ?? d);
+  for (const o of S.layers) if (o !== L && o.type !== 'bg' && !grp.some(q => q.o === o)) pts.push(o.start, o.end ?? d);
+  // limites do deslocamento para a seleção toda andar junta (ninguém sai do vídeo, ninguém fica para trás)
+  const ext = (s, en) => en != null && en < d - .01 ? en : s + MIN;
+  const dLo = Math.max(-s0, ...grp.map(q => -q.s)), dHi = Math.min(d - ext(s0, L.end), ...grp.map(q => d - ext(q.s, q.e)));
   const tol = 7 / g.w * d;
   const near = v => { let best = null; for (const p of pts) if (Math.abs(p - v) <= tol && (best === null || Math.abs(p - v) < Math.abs(best - v))) best = p; return best; };
   const lane = bar.parentElement, tip = h('div', { class:'tl-tip' }), guide = h('div', { class:'tl-snap', hidden:true });
@@ -2790,18 +2933,24 @@ function tlDrag(e, L, bar, mode) {
     // ajusta um valor: ímã primeiro, senão grade de 0,1s
     const fit = v => { const p = free ? null : near(v); return p !== null ? { v:p, hit:p } : { v:grid(v), hit:null }; };
     let hit = null;
-    if (mode === 'm' && e0 >= d - .01) { const f = fit(s0 + dt); L.start = clamp(f.v, 0, d - MIN); hit = f.hit; } // fica até o fim: move só a entrada
+    if (mode === 'm' && e0 >= d - .01) { const f = fit(s0 + dt); L.start = clamp(f.v, s0 + dLo, s0 + dHi); hit = f.hit; } // fica até o fim: move só a entrada
     else if (mode === 'm') {
       const len = e0 - s0, a = fit(s0 + dt), b = fit(e0 + dt);
       // prende pela borda que achou ímã mais perto
       let s = a.hit !== null && (b.hit === null || Math.abs(a.hit - (s0 + dt)) <= Math.abs(b.hit - (e0 + dt))) ? (hit = a.hit, a.v)
             : b.hit !== null ? (hit = b.hit, b.v - len) : grid(s0 + dt);
-      s = clamp(s, 0, d - len); if (hit !== null && Math.abs(s - hit) > 1e-6 && Math.abs(s + len - hit) > 1e-6) hit = null;
+      s = clamp(s, s0 + dLo, s0 + dHi); if (hit !== null && Math.abs(s - hit) > 1e-6 && Math.abs(s + len - hit) > 1e-6) hit = null;
       L.start = s; L.end = Math.round((s + len) * 1000) / 1000;
     }
     else if (mode === 'l') { const f = fit(s0 + dt); L.start = clamp(f.v, 0, e0 - MIN); hit = L.start === f.v ? f.hit : null; }
     else { const f = fit(e0 + dt); L.end = clamp(f.v, s0 + MIN, d); hit = L.end === f.v ? f.hit : null; }
-    if (mode === 'm') for (const q of grp) { const qe = q.e ?? d, len = qe - q.s, ns = clamp(q.s + L.start - s0, 0, d - Math.min(len, d)); q.o.start = ns; if (q.e != null) q.o.end = Math.round((ns + len) * 1000) / 1000; }
+    // mesma diferença para todos os selecionados (mover ou esticar as bordas)
+    const r3 = v => Math.round(v * 1000) / 1000;
+    for (const q of grp) {
+      if (mode === 'm') { q.o.start = r3(q.s + L.start - s0); if (q.e != null && q.e < d - .01) q.o.end = r3(q.e + L.start - s0); }
+      else if (mode === 'l') q.o.start = r3(clamp(q.s + L.start - s0, 0, ext(q.s, q.e) - MIN));
+      else { const ne = r3(clamp((q.e ?? d) + (L.end ?? d) - e0, q.s + MIN, d)); if (q.e != null || ne < d - .01) q.o.end = ne; }
+    }
     show(hit);
     needs = true; // a agulha fica onde está
   };
@@ -2851,7 +3000,10 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
   const out = h('input', { type:'text', class:'num', inputmode:'decimal', 'aria-label':`${label} (valor)`, value:fmt(L[k]) });
   const inp = h('input', { type:'range', id, min, max, step, value:L[k] });
   // tamanho, opacidade, ritmo etc. valem para todas as camadas do mesmo tipo selecionadas; posição e tempo ficam só na principal
-  const set = v => { for (const o of (['x', 'y', 'start', 'end'].includes(k) ? [L] : ['speed', 'intensity', 'opacity'].includes(k) ? peersAny(L) : peersOf(L))) o[k] = v; if (opts.layout) RT.layout.clear(); if (opts.onInput) opts.onInput(); changed(); };
+  const set = v => {
+    // posição: a seleção toda se move junto (mesmo deslocamento)
+    if (k === 'x' || k === 'y') { const d = v - L[k]; for (const o of peersAny(L)) o[k] = o === L ? v : +clamp(o[k] + d, -.2, 1.2).toFixed(4); if (opts.onInput) opts.onInput(); changed(); return; }
+    for (const o of (['start', 'end'].includes(k) ? [L] : ['speed', 'intensity', 'opacity'].includes(k) ? peersAny(L) : peersOf(L))) o[k] = v; if (opts.layout) RT.layout.clear(); if (opts.onInput) opts.onInput(); changed(); };
   inp.addEventListener('pointerdown', pushUndo);
   inp.addEventListener('input', () => { set(parseFloat(inp.value)); out.value = fmt(L[k]); });
   if (opts.after) inp.addEventListener('change', opts.after);
@@ -2985,15 +3137,15 @@ function selectF(L, k, label, opts, o = {}) {
   return field(label, sel, id);
 }
 function segF(L, k, label, opts) {
-  const wrap = h('div', { class:'segs', role:'group', 'aria-label':label });
-  const draw = () => { wrap.innerHTML = ''; opts.forEach(([v, t]) => wrap.append(h('button', { 'aria-pressed':String(L[k] === v), text:t, onclick:() => { pushUndo(); L[k] = v; RT.layout.clear(); draw(); changed(); if (k === 'mode' || k === 'kind') renderProps(); } }))); };
+  const wrap = h('div', { class:'segs' + (opts.every(o => String(o[1]).length <= 8) ? ' tight' : ''), role:'group', 'aria-label':label });
+  const draw = () => { wrap.innerHTML = ''; opts.forEach(([v, t]) => wrap.append(h('button', { 'aria-pressed':String(L[k] === v), text:t, onclick:() => { pushUndo(); for (const o of peersOf(L)) o[k] = v; RT.layout.clear(); draw(); changed(); if (k === 'mode' || k === 'kind') renderProps(); } }))); };
   draw();
-  return field(label, wrap, null);
+  return field(label, wrap, null, true);
 }
 function checkF(L, k, label) {
   const id = fid(L, k);
   const inp = h('input', { type:'checkbox', id, checked:!!L[k] });
-  inp.addEventListener('change', () => { pushUndo(); for (const o of (k === 'tint' ? peersOf(L) : [L])) o[k] = inp.checked; RT.layout.clear(); changed(); if (k === 'stroke' || k === 'tint') renderProps(); });
+  inp.addEventListener('change', () => { pushUndo(); for (const o of peersOf(L)) o[k] = inp.checked; RT.layout.clear(); changed(); if (k === 'stroke' || k === 'tint') renderProps(); });
   return h('label', { class:'check', for:id }, [inp, label]);
 }
 function textF(L, k, label, multi) {
@@ -3025,11 +3177,11 @@ function richF(L, label) {
       sp.style.fontWeight = r.w ?? L.weight; sp.style.fontStyle = (r.i ?? L.italic) ? 'italic' : 'normal';
       if (r.w != null) sp.dataset.w = r.w;
       if (r.i != null) sp.dataset.i = r.i ? '1' : '0';
-      if (r.c) { sp.dataset.c = r.c; sp.style.color = r.c; }
+      if (r.c) sp.dataset.c = r.c;
       ed.append(sp);
     }
     ed.style.fontFamily = `"${L.font}", var(--f-ui)`;
-    ed.style.fontWeight = L.weight; ed.style.fontStyle = L.italic ? 'italic' : 'normal'; ed.style.color = L.color;
+    ed.style.fontWeight = L.weight; ed.style.fontStyle = L.italic ? 'italic' : 'normal';
     if (typeof showClr === 'function') showClr();
   };
   // lê o editor mantendo o estilo de cada trecho
@@ -3191,6 +3343,7 @@ function renderProps() {
     ]),
   ]);
   if (L.type !== 'bg') box.append(alignBar());
+  if (L.type !== 'bg' && pickedLayers().length > 1) box.append(scaleBar());
   box.append(head);
 
   if (L.type === 'bg') { box.append(bgProps(L)); return; }
@@ -3226,32 +3379,46 @@ function posFields(L) {
 function styleProps(L) {
   const sec = h('section', { class:'sec' }), put = (...xs) => sec.append(...xs.filter(Boolean));
   const px = v => Math.round(v) + 'px';
+  // tipos misturados: só o que todos têm em comum (opacidade e posição)
+  if (peersAny(L).some(o => o.type !== L.type)) {
+    put(h('h3', { text:`${peersAny(L).length} elementos` }),
+      h('p', { class:'hint', text:'Tipos diferentes: aqui ficam só as opções em comum. Escolha um tipo só para ver as demais.' }),
+      rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
+      h('h3', { text:'Posição (move todos juntos)' }),
+      ...posFields(L));
+    return sec;
+  }
   if (L.type === 'text') {
-    put(richF(L, 'Texto (Enter quebra a linha)'), fontF(L),
+    put(h('h3', { text:'Texto' }), richF(L, 'Texto (Enter quebra a linha)'), fontF(L),
       selectF(L, 'weight', 'Peso do texto', WEIGHTS.map(([v, t]) => [v, `${t} ${v}`]), { num:true, props:true }),
+      h('h3', { text:'Tipografia' }),
       rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true }),
+      rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
+      rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
+      rangeF(L, 'maxW', 'Largura máx.', .3, 1, .01, v => Math.round(v * 100) + '%', { layout:true }),
+      segF(L, 'align', 'Alinhamento', [['left', 'Esq.'], ['center', 'Centro'], ['right', 'Dir.']]),
+      h('div', { class:'checks' }, [checkF(L, 'upper', 'Caixa alta'), checkF(L, 'italic', 'Itálico')]),
+      h('h3', { text:'Aparência' }),
       colorF(L, 'color', 'Cor'),
       L.in === 'highlight' || L.out === 'highlight' ? colorF(L, 'hl', 'Marca-texto') : null,
       rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
-      segF(L, 'align', 'Alinhamento', [['left', 'Esq.'], ['center', 'Centro'], ['right', 'Dir.']]),
-      h('details', { class:'adv' }, [h('summary', { text:'Mais ajustes de tipografia' }), h('div', {}, [
-        rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
-        rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
-        rangeF(L, 'maxW', 'Largura máx.', .3, 1, .01, v => Math.round(v * 100) + '%', { layout:true }),
-        h('div', { class:'row', style:'gap:16px' }, [checkF(L, 'upper', 'Caixa alta'), checkF(L, 'italic', 'Itálico')]),
-      ])]),
+      h('h3', { text:'Posição' }),
       ...posFields(L));
   } else if (L.type === 'cta') {
-    put(textF(L, 'text', 'Texto do botão'), fontF(L),
+    put(h('h3', { text:'Texto' }), textF(L, 'text', 'Texto do botão'), fontF(L),
       selectF(L, 'weight', 'Peso', [[400, 'Regular'], [500, 'Medium'], [600, 'Semibold'], [700, 'Bold'], [800, 'Extrabold']], { num:true }),
       rangeF(L, 'size', 'Tamanho', 16, 120, 1, px),
-      colorF(L, 'bg', 'Fundo'), colorF(L, 'color', 'Texto'),
+      h('h3', { text:'Forma' }),
       rangeF(L, 'radius', 'Arredondado', 0, 999, 1, v => v >= 999 ? 'pílula' : px(v)),
       rangeF(L, 'padX', 'Folga lateral', 10, 160, 1, px), rangeF(L, 'padY', 'Folga vertical', 6, 80, 1, px),
-      L.in === 'line' ? colorF(L, 'lineColor', 'Cor da linha') : null,
+      h('h3', { text:'Cores' }),
+      colorF(L, 'bg', 'Fundo'), colorF(L, 'color', 'Texto'),
+      L.in === 'line' || L.out === 'line' ? colorF(L, 'lineColor', 'Cor da linha') : null,
+      h('h3', { text:'Posição' }),
       ...posFields(L));
   } else if (L.type === 'logo') {
     put(
+      h('h3', { text:'Logo' }),
       h('p', { class:'hint', text:L.svg ? 'Este SVG é só desta camada. Tem as mesmas animações do logo.' : 'O arquivo do logo é trocado em Marca, na coluna da esquerda.' }),
       rangeF(L, 'size', 'Tamanho', .04, .95, .005, v => Math.round(v * 100) + '%'),
       rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
@@ -3259,11 +3426,13 @@ function styleProps(L) {
       checkF(L, 'tint', 'Pintar o logo de uma cor só'),
       L.tint ? colorF(L, 'tintColor', 'Cor') : null,
       L.tint ? h('p', { class:'hint', text:'Troca todas as cores do logo por esta. Serve para logo preto, branco ou de outra marca.' }) : null,
-      h('h3', { text:'Traço (Desenhar traço)' }),
-      colorF(L, 'drawColor', 'Cor do traço'),
-      checkF(L, 'drawOrig', 'Usar as cores originais do SVG'),
-      rangeF(L, 'drawWidth', 'Espessura', 1, 16, .5, v => v + 'px'),
-      colorF(L, 'lineColor', 'Cor da linha'),
+      (L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble') ? h('h3', { text:'Traço' }) : null,
+      (L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble') ? checkF(L, 'drawOrig', 'Usar as cores originais do SVG') : null,
+      (L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble') ? rangeF(L, 'drawWidth', 'Espessura', 1, 16, .5, v => v + 'px') : null,
+      (L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble') && !L.drawOrig ? colorF(L, 'drawColor', 'Cor do traço') : null,
+      L.in === 'line' || L.out === 'line' ? h('h3', { text:'Linha' }) : null,
+      L.in === 'line' || L.out === 'line' ? colorF(L, 'lineColor', 'Cor da linha') : null,
+      h('h3', { text:'Posição' }),
       ...posFields(L));
   } else if (L.type === 'shape') {
     const pct = v => Math.round(v * 100) + '%', k = L.kind;
@@ -3281,10 +3450,12 @@ function styleProps(L) {
     if (k !== 'line') fillProps(L, sec);
     put(h('h3', { text:k === 'line' ? 'Traço' : 'Contorno' }),
       k !== 'line' ? checkF(L, 'stroke', 'Contorno') : null,
-      k === 'line' || L.stroke ? colorF(L, 'strokeColor', 'Cor do traço') : null,
       k === 'line' || L.stroke ? rangeF(L, 'strokeW', 'Espessura', 1, 80, .5, v => v + 'px') : null,
-      rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, pct),
+      k === 'line' || L.stroke ? colorF(L, 'strokeColor', 'Cor do traço') : null,
       L.in === 'draw' && !L.stroke && k !== 'line' ? h('p', { class:'hint', text:'"Desenhar traço" usa a cor 2 como traço de apoio. Ative Contorno para mantê-lo.' }) : null,
+      h('h3', { text:'Aparência' }),
+      rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, pct),
+      h('h3', { text:'Posição' }),
       ...posFields(L));
   } else if (L.type === 'image') {
     const pct = v => Math.round(v * 100) + '%';
@@ -3309,12 +3480,13 @@ function styleProps(L) {
       rangeF(L, 'iy', 'Vertical', -1, 1, .005, pct),
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Preencher a máscara', onclick:() => { pushUndo(); L.zoom = 1; L.ix = 0; L.iy = 0; changed({ props:true }); } })]),
       h('p', { class:'hint', text:'A imagem nunca distorce. No palco: a alça do canto aumenta tudo, as das laterais mudam a máscara, a roda do mouse dá zoom na imagem e Alt + arrastar move a imagem dentro.' }),
-      h('h3', { text:'Camada' }),
-      checkF(L, 'keepIn', 'Manter dentro da margem'),
-      h('p', { class:'hint', text:'Precisa da margem ligada. Se a imagem não couber, ela encolhe.' }),
+      h('h3', { text:'Aparência' }),
       rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
-      L.in === 'line' ? colorF(L, 'lineColor', 'Cor da linha') : null,
-      ...posFields(L));
+      L.in === 'line' || L.out === 'line' ? colorF(L, 'lineColor', 'Cor da linha') : null,
+      h('h3', { text:'Posição' }),
+      ...posFields(L),
+      checkF(L, 'keepIn', 'Manter dentro da margem'),
+      h('p', { class:'hint', text:'Precisa da margem ligada. Se a imagem não couber, ela encolhe.' }));
   }
   return sec;
 }
@@ -3336,7 +3508,7 @@ function fillProps(L, sec) {
   if (L.mode !== 'solid') sec.append(rangeF(L, 'motion', L.mode === 'image' ? 'Zoom lento' : 'Movimento', 0, 3, .05, v => v.toFixed(2) + '×'));
   sec.append(rangeF(L, 'grain', 'Granulado', 0, .4, .01, v => Math.round(v * 100) + '%'));
 }
-function renderAll() { renderFormats(); renderAdds(); renderBrand(); renderLayers(); renderProps(); $('#loop').checked = S.loop !== false; $('#undo').disabled = !undoStack.length; }
+function renderAll() { renderFormats(); renderAdds(); renderBrand(); renderLayers(); renderProps(); $('#loop').checked = S.loop !== false; syncHist(); }
 
 /* ------------ eventos globais ------------ */
 $('#play').onclick = () => playing ? pause() : play();
@@ -3344,6 +3516,7 @@ $('#scrub').addEventListener('input', e => { pause(); RT.userSeek = true; T = e.
 $('#loop').onchange = e => { S.loop = e.target.checked; autosave(); };
 $('#safe').onchange = () => { needs = true; if ($('#safe').checked && S.format !== '9x16') toast('A zona segura aparece no formato 9:16'); };
 $('#undo').onclick = undo;
+$('#redo').onclick = redo;
 // camadas que iam até o fim acompanham a nova duração
 function setDuration(v) {
   v = clamp(v, 2, 60); const old = S.duration; if (v === old) return;
@@ -3369,7 +3542,11 @@ $('#dur').addEventListener('change', e => { pushUndo(); setDuration(parseFloat(e
 document.addEventListener('keydown', e => {
   const tag = (e.target.tagName || '').toLowerCase();
   const typing = tag === 'input' && !['range', 'checkbox', 'color'].includes(e.target.type) || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !typing) { e.preventDefault(); undo(); }
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !typing) {
+    const k = e.key.toLowerCase();
+    if (k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+    else if (k === 'y') { e.preventDefault(); redo(); }
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); flushSave().then(() => toast('Tudo salvo. O Mola salva sozinho a cada mudança.')); }
   // espaço sempre toca/pausa (mesmo com um botão focado), menos enquanto digita
   if (e.code === 'Space' && !typing) { e.preventDefault(); if (tag === 'button') e.target.blur(); playing ? pause() : play(); }
@@ -3525,6 +3702,10 @@ $('#fileNew').onclick = newFile;
 $('#files').addEventListener('pointerdown', e => { if (e.target.id === 'files') closeFiles(); });
 $('#files').addEventListener('keydown', e => { if (e.key === 'Escape') closeFiles(); });
 $('#fileSearch').addEventListener('input', renderFiles);
+$('#copyBtn').onclick = saveAsCopy;
+addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); saveAsCopy(); }
+});
 {
   const fn = $('#fileName');
   fn.addEventListener('keydown', e => { if (e.key === 'Enter') fn.blur(); if (e.key === 'Escape') { fn.value = FILES.name; fn.blur(); } });
