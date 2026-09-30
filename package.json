@@ -1,0 +1,9 @@
+{
+  "name": "mola-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Editor de animação por presets para anúncios, no navegador",
+  "scripts": {
+    "dev": "npx serve ."
+  }
+}

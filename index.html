@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mola Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&display=swap">
+<link rel="stylesheet" href="css/app.css">
+<style>body{margin:0}</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top">
+    <div class="logo-word"><i></i>mola</div>
+    <div class="filebox">
+      <button class="btn small ghost" id="filesBtn" title="Ver todos os arquivos">Arquivos</button>
+      <span class="slash" aria-hidden="true">/</span>
+      <input id="fileName" type="text" aria-label="Nome do arquivo" spellcheck="false" title="Clique para renomear">
+      <span class="savest" id="saveState" aria-live="polite"></span>
+    </div>
+    <div class="seg" id="fmt" role="group" aria-label="Formato"></div>
+    <label class="durbox" for="dur">Duração <input id="dur" type="number" min="2" max="60" step="0.5"> s</label>
+    <label class="durbox" for="fps">FPS <select id="fps"></select></label>
+    <div class="mwrap">
+      <button class="btn small ghost" id="mBtn" aria-expanded="false" aria-controls="mPop">Margem <span id="mSum"></span></button>
+      <div class="mpop" id="mPop" hidden>
+        <label class="check" for="mOn"><input type="checkbox" id="mOn"> Usar margem</label>
+        <div class="mgrid">
+          <label class="mt" for="mT">Superior<input id="mT" type="number" min="0" max="800" step="4"></label>
+          <label class="ml" for="mL">Esquerda<input id="mL" type="number" min="0" max="800" step="4"></label>
+          <div class="mbox" aria-hidden="true"></div>
+          <label class="mr" for="mR">Direita<input id="mR" type="number" min="0" max="800" step="4"></label>
+          <label class="mb" for="mB">Inferior<input id="mB" type="number" min="0" max="800" step="4"></label>
+        </div>
+        <p class="hint">Em pixels do vídeo (1080 de largura). Texto, logo e botão sempre param dentro. Imagens ficam livres.</p>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <label class="tog" for="safe"><input type="checkbox" id="safe"> Zona segura 9:16</label>
+    <button class="btn ghost" id="undo" title="Desfazer (Ctrl+Z)">Desfazer</button>
+    <button class="btn primary" id="export">Exportar MP4</button>
+  </header>
+
+  <aside class="left">
+    <section class="sec">
+      <h3>Adicionar <small>já vem animado</small></h3>
+      <div class="adds" id="adds"></div>
+      <input type="file" id="imgFile" accept="image/*" hidden>
+      <input type="file" id="svgFile" accept=".svg,image/svg+xml" hidden>
+      <p class="hint">Entra depois do último elemento. Para escolher o momento, pause e posicione a agulha antes. Imagens e SVG também podem ser arrastados para o palco ou colados com Ctrl+V (vale colar o código do SVG).</p>
+    </section>
+    <section class="sec">
+      <h3>Marca</h3>
+      <label class="drop" id="logoDrop" for="logoFile">
+        <div class="thumb" id="logoThumb"></div>
+        <div><b>Logo</b><span id="logoName">SVG ou PNG</span></div>
+      </label>
+      <input type="file" id="logoFile" accept=".svg,image/svg+xml,image/png,image/jpeg,image/webp" hidden>
+      <p class="hint">Com SVG o logo pode se desenhar e se montar por partes. PNG usa as outras revelações.</p>
+      <div class="swatches" id="brandColors"></div>
+      <div class="fontrow"><label for="bf0">Título</label><select id="bf0"></select></div>
+      <div class="fontrow"><label for="bf1">Texto</label><select id="bf1"></select></div>
+      <div class="fontrow"><label for="bf2">Impacto</label><select id="bf2"></select></div>
+      <div class="row">
+        <input type="text" id="gfont" list="gfonts" placeholder="Nome no Google Fonts">
+        <button class="btn small" id="gfontAdd">Adicionar</button>
+      </div>
+      <datalist id="gfonts"></datalist>
+      <div class="row">
+        <button class="btn small" id="fontUp">Enviar arquivo de fonte</button>
+        <input type="file" id="fontFile" accept=".ttf,.otf,.woff,.woff2" hidden>
+      </div>
+      <div class="fontlist" id="fontList"></div>
+    </section>
+    <section class="sec">
+      <h3>Camadas</h3>
+      <div class="layers" id="layers"></div>
+    </section>
+    <section class="sec">
+      <h3>Arquivo <small>salva sozinho</small></h3>
+      <div class="row"><button class="btn small" id="filesOpen">Todos os arquivos</button></div>
+      <div class="row">
+        <button class="btn small" id="jsonOut">Exportar .json</button>
+        <button class="btn small" id="jsonIn">Importar .json</button>
+        <input type="file" id="jsonFile" accept=".json,application/json" hidden>
+      </div>
+    </section>
+  </aside>
+
+  <main class="stage">
+    <div class="stage-box" id="stageBox"><canvas id="cv" width="540" height="960"></canvas><div class="dropzone" id="dropzone" hidden>Solte para adicionar a imagem</div></div>
+    <div class="transport">
+      <button class="play" id="play" aria-label="Tocar"></button>
+      <div class="tc" id="tc">00:00 <span>/ 00:00</span></div>
+      <div class="scrub"><input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Posição"><div class="marks" id="marks"></div></div>
+      <label class="tog" for="loop"><input type="checkbox" id="loop" checked> Repetir</label>
+      <button class="btn small ghost" id="tlToggle" aria-pressed="true">Timeline</button>
+    </div>
+    <div class="tl-grip" id="tlGrip" title="Arraste para mudar a altura da timeline"></div>
+    <div class="tl" id="tl"></div>
+  </main>
+
+  <aside class="right" id="props"></aside>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-card">
+    <h2 id="mTitle">Exportando vídeo</h2>
+    <div class="bar"><i id="mBar"></i></div>
+    <p class="meta" id="mMeta"></p>
+    <video id="mVideo" controls playsinline loop hidden></video>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn" id="mClose">Fechar</button>
+      <button class="btn primary" id="mSave" hidden>Salvar MP4</button>
+    </div>
+  </div>
+</div>
+<div class="files" id="files" hidden>
+  <div class="files-card" role="dialog" aria-modal="true" aria-labelledby="filesTitle">
+    <div class="files-head">
+      <h2 id="filesTitle">Arquivos</h2>
+      <input type="text" id="fileSearch" placeholder="Buscar" aria-label="Buscar arquivo">
+      <div class="spacer"></div>
+      <button class="btn small primary" id="fileNew">Novo arquivo</button>
+      <button class="btn small ghost" id="filesClose">Fechar</button>
+    </div>
+    <p class="hint">Tudo fica salvo sozinho neste navegador. Clique para abrir, clique duas vezes no nome para renomear.</p>
+    <div class="fgrid" id="fgrid"></div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+<script src="vendor/mp4-muxer.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
