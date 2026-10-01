@@ -3330,6 +3330,17 @@ function drawOverlays() {
     ctx.fillStyle = '#F2B632'; rrect(ctx, b.x - p, ty, tw + 12 * px, th, 4 * px); ctx.fill();
     ctx.fillStyle = '#1B1403'; ctx.fillText(hv.name, b.x - p + 6 * px, ty + th / 2);
   }
+  // edição de texto aberta: contorno cheio e etiqueta, para saber que dá para digitar
+  const ed = !playing && RT.editId ? S.layers.find(l => l.id === RT.editId) : null;
+  if (ed && ed.visible && ed._bounds && ed.id === RT.selected && phase(ed, T)) {
+    const b = ed._bounds, p = 10 * px, txt = 'Editando texto · Esc para sair';
+    ctx.setLineDash([]); ctx.lineWidth = 2.5 * px; ctx.strokeStyle = '#F2B632';
+    ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
+    ctx.font = `600 ${11 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(txt).width, th = 20 * px, ty = b.y - p - th - 4 * px < 0 ? b.y + b.h + p + 4 * px : b.y - p - th - 4 * px;
+    ctx.fillStyle = '#F2B632'; rrect(ctx, b.x - p, ty, tw + 14 * px, th, 4 * px); ctx.fill();
+    ctx.fillStyle = '#1B1403'; ctx.fillText(txt, b.x - p + 7 * px, ty + th / 2);
+  }
   // seleção por área: retângulo e quem vai entrar nela
   if (RT.marq) {
     const r = RT.marq;
@@ -3721,6 +3732,10 @@ function editText(L) {
   el.focus();
   if (el.isContentEditable) { const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
   else el.select();
+  // feedback: contorno "Editando" no palco e o campo pulsa; some quando o campo perde o foco
+  RT.editId = L.id; needs = true;
+  const box = el; box.classList.remove('edit-flash'); void box.offsetWidth; box.classList.add('edit-flash');
+  el.addEventListener('blur', () => { if (RT.editId === L.id) { RT.editId = null; needs = true; } }, { once:true });
 }
 
 /* ============================================================
@@ -5009,6 +5024,13 @@ function allBrandColors() {
   brandGroups(B).forEach(g => g.colors.forEach(x => out.push(x.c)));
   return [...new Set(out)];
 }
+// a paleta na ordem em que aparece na aba Marca: [{ title, items:[{ n, c }] }]
+function brandLib() {
+  const B = S.brand, nm = (i) => B.names?.[i] || ROLE_NAMES[i] || `Cor ${i + 1}`, hx = c => String(c).slice(0, 7).toLowerCase();
+  const out = [{ title:'Marca', items:B.colors.map((c, i) => ({ n:nm(i), c:hx(c) })) }];
+  brandGroups(B).forEach(g => out.push({ title:g.name, items:g.colors.map((x, i) => ({ n:x.n || `Cor ${i + 1}`, c:hx(x.c) })) }));
+  return out.filter(g => g.items.length);
+}
 function renderPalette() {
   const B = S.brand, box = $('#brandColors'); box.innerHTML = '';
   const groups = brandGroups(B);
@@ -5020,9 +5042,36 @@ function renderPalette() {
     i.addEventListener('keydown', e => { if (e.key === 'Enter') i.blur(); });
     return i;
   };
-  const chip = (c, label, onInput, onDel, nameEl) => {
+  // Arrastar pela alça reorganiza dentro do grupo: `move(de, para)` troca a ordem nos dados.
+  const grip = (i, move) => {
+    const g = h('span', { class:'sw-grip', title:'Arrastar para reordenar', 'aria-label':'Arrastar para reordenar',
+      html:'<svg width="14" height="18" viewBox="0 0 14 18" fill="currentColor" aria-hidden="true"><circle cx="4" cy="3.5" r="1.7"/><circle cx="10" cy="3.5" r="1.7"/><circle cx="4" cy="9" r="1.7"/><circle cx="10" cy="9" r="1.7"/><circle cx="4" cy="14.5" r="1.7"/><circle cx="10" cy="14.5" r="1.7"/></svg>' });
+    g.addEventListener('pointerdown', e => {
+      if (e.button) return;
+      e.preventDefault();
+      const row = g.parentNode, list = row.parentNode;
+      const rows = [...list.querySelectorAll(':scope > .swcol')];
+      let to = i;
+      row.classList.add('dragging'); g.setPointerCapture(e.pointerId);
+      const idxAt = y => { let k = 0; rows.forEach((r, j) => { const b = r.getBoundingClientRect(); if (y > b.top + b.height / 2) k = j; }); return k; };
+      const clear = () => rows.forEach(r => r.classList.remove('drop-above', 'drop-below'));
+      const onMove = ev => {
+        to = idxAt(ev.clientY); clear();
+        if (to !== i) rows[to].classList.add(to < i ? 'drop-above' : 'drop-below');
+      };
+      const end = ev => {
+        g.removeEventListener('pointermove', onMove); g.removeEventListener('pointerup', end); g.removeEventListener('pointercancel', end);
+        clear(); row.classList.remove('dragging');
+        if (ev.type === 'pointerup' && to !== i) { pushUndo(); move(i, to); redo(); }
+      };
+      g.addEventListener('pointermove', onMove); g.addEventListener('pointerup', end); g.addEventListener('pointercancel', end);
+    });
+    return g;
+  };
+  const reorder = (arrs, from, to) => arrs.forEach(a => { const [x] = a.splice(from, 1); a.splice(to, 0, x); });
+  const chip = (c, label, onInput, onDel, nameEl, gripEl) => {
     const sw = colorButton(c, `Cor ${label}`, { cls:'sw', alpha:false, onStart:pushUndo, onInput:x => { onInput(x); needs = true; autosave(); } });
-    return h('div', { class:'swcol' }, [h('div', { class:'swwrap' }, [sw, onDel ? h('button', { class:'sw-del', title:'Remover cor', 'aria-label':'Remover cor', text:'×', onclick:() => { pushUndo(); onDel(); redo(); } }) : null]), nameEl]);
+    return h('div', { class:'swcol' }, [gripEl, h('div', { class:'swwrap' }, [sw, onDel ? h('button', { class:'sw-del', title:'Remover cor', 'aria-label':'Remover cor', text:'×', onclick:() => { pushUndo(); onDel(); redo(); } }) : null]), nameEl]);
   };
   const group = (title, titleEl, chips, onAdd, onDelGroup) => h('div', { class:'pgroup' }, [
     h('div', { class:'pg-head' }, [titleEl || h('span', { class:'pg-name', text:title }), onDelGroup ? h('button', { class:'icon-btn', title:'Apagar grupo', 'aria-label':'Apagar grupo', html:ICONS.trash, onclick:() => { pushUndo(); onDelGroup(); redo(); } }) : null]),
@@ -5031,11 +5080,16 @@ function renderPalette() {
   // Marca
   box.append(group('Marca', null, B.colors.map((c, i) => chip(c, B.names[i] || ROLE_NAMES[i] || `Cor ${i + 1}`,
     x => { B.colors[i] = x; }, i >= ROLE_NAMES.length ? () => { B.colors.splice(i, 1); B.names.splice(i, 1); } : null,
-    nameIn(B.names[i] || ROLE_NAMES[i] || '', `Cor ${i + 1}`, v => { B.names[i] = v; }, 'sw-lbl'))),
+    nameIn(B.names[i] || ROLE_NAMES[i] || '', `Cor ${i + 1}`, v => { B.names[i] = v; }, 'sw-lbl'),
+    grip(i, (a, b) => {
+      // o nome padrão (Fundo, Texto…) acompanha a cor: grava antes de mover
+      B.colors.forEach((_, k) => { B.names[k] = B.names[k] || ROLE_NAMES[k] || ''; });
+      reorder([B.colors, B.names], a, b);
+    }))),
     () => { B.colors.push('#888888'); }));
   // Demais grupos
   groups.forEach((g, gi) => box.append(group(g.name, nameIn(g.name, 'Nome do grupo', v => { g.name = v || 'Grupo'; }, 'pg-name'),
-    g.colors.map((x, ci) => chip(x.c, x.n || `Cor ${ci + 1}`, c => { x.c = c; }, () => g.colors.splice(ci, 1), nameIn(x.n, `Cor ${ci + 1}`, v => { x.n = v; }, 'sw-lbl'))),
+    g.colors.map((x, ci) => chip(x.c, x.n || `Cor ${ci + 1}`, c => { x.c = c; }, () => g.colors.splice(ci, 1), nameIn(x.n, `Cor ${ci + 1}`, v => { x.n = v; }, 'sw-lbl'), grip(ci, (a, b) => reorder([g.colors], a, b)))),
     () => { g.colors.push({ n:'', c:'#888888' }); }, () => groups.splice(gi, 1))));
   box.append(h('button', { class:'btn small ghost pg-new', text:'+ Novo grupo', onclick:() => { pushUndo(); groups.push({ name:`Grupo ${groups.length + 1}`, colors:[{ n:'', c:'#888888' }] }); redo(); } }));
 }
@@ -5808,10 +5862,31 @@ function colorButton(value, label, { onStart, onInput, cls = '', alpha = true })
           if (onStart) onStart(); [hh, sat, v] = hexToHsv(c); emit();
         } catch (e) {} // Esc cancela
       } }) : null;
+    // cores da marca: um clique troca a cor e mantém a opacidade
+    // lista como a de estilos do Figma: grupos na mesma ordem da paleta da marca (aba Marca), com busca
+    const lib = cls.includes('sw') ? null : brandLib();
+    const pick = c => { if (onStart) onStart(); [hh, sat, v] = hexToHsv(c); emit(); };
+    const libList = h('div', { class:'cp-list' }), libQ = h('input', { type:'text', class:'cp-q', placeholder:'Buscar cor da marca', spellcheck:'false', 'aria-label':'Buscar cor da marca' });
+    const fillLib = () => {
+      const q = libQ.value.trim().toLowerCase().replace(/^#/, ''), now = cur.slice(0, 7).toLowerCase();
+      libList.innerHTML = '';
+      for (const g of lib || []) {
+        const its = g.items.filter(x => !q || x.n.toLowerCase().includes(q) || x.c.slice(1).includes(q));
+        if (!its.length) continue;
+        libList.append(h('div', { class:'cp-gh', text:g.title }), ...its.map(x => h('button', { type:'button', class:'cp-it' + (x.c === now ? ' on' : ''), title:x.c.toUpperCase(), onclick:() => { pick(x.c); fillLib(); } }, [
+          h('i', { class:'cp-dot', style:`background:${x.c}` }), h('span', { class:'cp-nm', text:x.n }), h('span', { class:'cp-hx', text:x.c.slice(1).toUpperCase() })])));
+      }
+      if (!libList.firstChild) libList.append(h('div', { class:'cp-empty', text:'Nenhuma cor' }));
+    };
+    libQ.addEventListener('input', fillLib);
+    libQ.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); closePicker(); btn.focus(); } });
+    const brandSws = lib && lib.length ? [h('div', { class:'cp-lib' }, [libQ, libList])] : [];
+    if (brandSws.length) fillLib();
     const pop = h('div', { class:'cp-pop', role:'dialog', 'aria-label':label }, [
       h('div', { class:'cp-row' }, [h('span', { class:'cp-lbl', text:'HEX' }), h('span', { class:'cp-rr' }, [h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hexIn]), eye])]),
       sv, hue,
-      alpha ? h('div', { class:'cp-row' }, [h('span', { class:'cp-lbl', text:'OPAC.' }), alp, h('span', { class:'hexwrap pctwrap' }, [pct, h('i', { text:'%' })])]) : null
+      alpha ? h('div', { class:'cp-row' }, [h('span', { class:'cp-lbl', text:'OPAC.' }), alp, h('span', { class:'hexwrap pctwrap' }, [pct, h('i', { text:'%' })])]) : null,
+      ...brandSws
     ]);
     pop._btn = btn;
     const paint = () => {
@@ -5853,9 +5928,12 @@ function colorButton(value, label, { onStart, onInput, cls = '', alpha = true })
     hexIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commit(); closePicker(); } else if (e.key === 'Escape') { e.stopPropagation(); closePicker(); btn.focus(); } });
     hexIn.addEventListener('blur', commit);
     document.body.append(pop); openPicker = pop; paint();
-    const r = btn.getBoundingClientRect(), pw = pop.offsetWidth, ph = pop.offsetHeight;
+    const r = btn.getBoundingClientRect(), pw = pop.offsetWidth;
+    let ph = pop.offsetHeight;
+    // alto demais para a janela: a lista da marca encolhe (e rola) em vez de sair da tela
+    if (ph > innerHeight - 16) { libList.style.maxHeight = Math.max(72, libList.offsetHeight - (ph - (innerHeight - 16))) + 'px'; ph = pop.offsetHeight; }
     pop.style.left = clamp(r.left, 8, innerWidth - pw - 8) + 'px';
-    pop.style.top = (r.bottom + 6 + ph > innerHeight ? Math.max(8, r.top - ph - 6) : r.bottom + 6) + 'px';
+    pop.style.top = clamp(r.bottom + 6 + ph > innerHeight ? r.top - ph - 6 : r.bottom + 6, 8, Math.max(8, innerHeight - ph - 8)) + 'px';
     document.addEventListener('pointerdown', pickerOutside, true);
     hexIn.focus();
   });
@@ -5896,9 +5974,8 @@ function colorF(L, k, label) {
   });
   pct.addEventListener('blur', () => show());
   pct.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); pct.blur(); } else if (e.key === 'Escape') { pct.blur(); } });
-  // amostra da marca: troca a cor e mantém a opacidade que já estava
-  const sws = allBrandColors().map(c => h('button', { class:'mini-sw', style:`background:${c}`, title:c, 'aria-label':`Usar ${c}`, onclick:() => { pushUndo(); put(withA(c, colA(L[k]))); } }));
-  return field(label, h('div', { class:'colorctl' }, [inp, h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hex]), h('span', { class:'hexwrap pctwrap' }, [pct, h('i', { text:'%' })]), ...sws]), id);
+  // as cores da marca ficam na lista do seletor (colorButton)
+  return field(label, h('div', { class:'colorctl' }, [inp, h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hex]), h('span', { class:'hexwrap pctwrap' }, [pct, h('i', { text:'%' })])]), id);
 }
 function selectF(L, k, label, opts, o = {}) {
   const id = fid(L, k);

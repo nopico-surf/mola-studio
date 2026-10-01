@@ -78,6 +78,12 @@ button{cursor:pointer}
 input.pg-name:focus{color:var(--fg);border-bottom:1px solid var(--accent)}
 input.sw-lbl{flex:1;min-width:0;width:auto;text-align:left;font-size:12px;color:var(--muted)}
 input.sw-lbl:focus{color:var(--fg)}
+.sw-grip{flex:none;width:20px;height:var(--ctl);margin-right:-6px;display:grid;place-items:center;color:var(--muted);cursor:grab;opacity:.35;user-select:none;touch-action:none;border-radius:5px}
+.swcol:hover .sw-grip,.swcol.dragging .sw-grip{opacity:1}
+.sw-grip:hover{color:var(--fg)}
+.swcol.dragging{opacity:.55}
+.swcol.drop-above{box-shadow:0 -2px 0 var(--accent)}
+.swcol.drop-below{box-shadow:0 2px 0 var(--accent)}
 .swwrap{position:relative;flex:none}
 .sw-del{position:absolute;top:-4px;right:-4px;width:15px;height:15px;border-radius:50%;border:1px solid var(--line-2);background:var(--raised);color:var(--fg);font-size:11px;line-height:1;padding:0;display:none;place-items:center;z-index:1}
 .swwrap:hover .sw-del{display:grid}
@@ -295,6 +301,8 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 /* editor de texto com peso por trecho */
 .rich{background:var(--bg);border:1px solid var(--line-2);border-radius:6px;padding:6px 8px;min-height:58px;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;line-height:1.35;font-size:14px;cursor:text}
 .rich:focus{border-color:var(--accent);outline:none}
+.edit-flash{animation:editFlash .7s ease-out}
+@keyframes editFlash{0%{box-shadow:0 0 0 0 rgba(242,182,50,.7)}100%{box-shadow:0 0 0 10px rgba(242,182,50,0)}}
 .richbar{display:flex;gap:4px;align-items:center}
 .richbar .btn{width:30px;justify-content:center;padding-inline:0}
 .richbar select{flex:1;padding:4px 6px;font-size:11px}
@@ -309,6 +317,18 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .hexwrap.pctwrap input::-webkit-outer-spin-button,.hexwrap.pctwrap input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .cpick.sw{width:34px;height:34px;border-radius:50%;border:2px solid var(--line-2)}
 .cp-pop{position:fixed;z-index:1000;width:220px;padding:10px;background:var(--raised);border:1px solid var(--line-2);border-radius:9px;box-shadow:0 16px 40px -8px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:10px}
+.cp-lib{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line-2);padding-top:10px;margin:0 -10px -10px;padding-inline:10px;padding-bottom:6px}
+.cp-q{height:var(--ctl);background:var(--bg);border:1px solid transparent;border-radius:var(--r);color:var(--fg);font:11px var(--f-ui);padding:0 8px;outline:none}
+.cp-q:focus{border-color:var(--accent)}
+.cp-list{max-height:190px;overflow:auto;margin:0 -4px;padding:0 4px;display:flex;flex-direction:column;gap:1px}
+.cp-gh{font:600 10.5px var(--f-mono);color:var(--faint);letter-spacing:.04em;padding:8px 4px 4px}
+.cp-it{display:flex;align-items:center;gap:8px;height:var(--ctl);flex:none;padding:0 6px;border:0;border-radius:var(--r);background:transparent;color:var(--fg);font:11px var(--f-ui);text-align:left;cursor:pointer}
+.cp-it:hover{background:var(--raised-2, rgba(255,255,255,.07))}
+.cp-it.on{background:color-mix(in srgb,var(--accent) 24%,transparent)}
+.cp-dot{flex:none;width:16px;height:16px;border-radius:4px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.cp-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp-hx{font:10.5px var(--f-mono);color:var(--faint)}
+.cp-empty{font-size:11px;color:var(--faint);padding:8px 4px}
 .cp-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .cp-lbl{font:600 10.5px var(--f-mono);color:var(--faint);letter-spacing:.06em}
 .cp-sv,.cp-hue{position:relative;border-radius:5px;cursor:crosshair;touch-action:none}
@@ -511,11 +531,12 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .add.my .x{position:absolute;top:1px;right:2px;width:16px;height:16px;border:0;border-radius:4px;background:transparent;color:var(--muted);font-size:13px;line-height:1;display:none;place-items:center;padding:0}
 .add.my:hover .x,.add.my:focus-within .x{display:grid}
 .add.my .x:hover{background:var(--raised-2);color:var(--fg)}
-.aud{display:flex;align-items:center;gap:6px;min-width:0;margin-bottom:6px}
+#audioBox{display:flex;flex-direction:column;gap:8px}
+#audioBox .hint{margin:0}
+.aud{display:flex;align-items:center;gap:6px;min-width:0}
 .aud-nm{flex:1;min-width:0;display:grid;line-height:1.25}
 .aud-nm b{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .aud-nm small{color:var(--muted);font:500 10.5px var(--f-mono)}
-#audioBox .row{margin-top:6px}
 .tl-ruler u.tl-beat{position:absolute;bottom:0;height:5px;border-left:1px solid color-mix(in srgb,var(--accent) 70%,transparent);text-decoration:none;pointer-events:none}
 .tl-row.tl-audio{background:color-mix(in srgb,var(--accent) 4%,transparent)}
 .tl-row.tl-audio .tl-lane{cursor:ew-resize}
@@ -546,3 +567,9 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 /* padronização: todo slider usa a cor da marca; o valor ao lado de um slider fora do .rng parece o do .rng */
 input[type=range]{accent-color:var(--accent)}
 .sec .row > output{font:11px var(--f-mono);color:var(--muted);min-width:40px;text-align:center;font-variant-numeric:tabular-nums}
+
+/* campo de cor ocupa a linha toda: amostra | hex (estica) | opacidade */
+.colorctl{display:grid;grid-template-columns:34px minmax(0,1fr) 72px;gap:6px;width:100%}
+.colorctl > .hexwrap{min-width:0}
+.colorctl .hexwrap input.hex{flex:1;width:auto;min-width:0}
+.colorctl .pctwrap{justify-content:flex-end}
