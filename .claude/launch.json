@@ -55,6 +55,28 @@
         "3004"
       ],
       "port": 3004
+    },
+    {
+      "name": "mola-6",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3005"
+      ],
+      "port": 3005
+    },
+    {
+      "name": "mola-7",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3006"
+      ],
+      "port": 3006
     }
   ]
 }
