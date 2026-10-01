@@ -377,11 +377,15 @@ function adaptLayout() {
   const M = marginBox() || { x0:0, x1:W() }, Mw = M.x1 - M.x0; // na horizontal é igual em todos os formatos
   const len = s => s.b - s.a, wt = g => g * g * g / (g * g + GAP_TAU * GAP_TAU), least = g => Math.min(g, 12 + g * .25);
   const pic = i => i.L.type === 'image' || i.L.type === 'shape';
-  // o que se sobrepõe na vertical vira um trecho rígido só; imagem ou forma sozinha na sua altura pode mudar
+  // o que se sobrepõe na vertical vira um trecho rígido só; imagem ou forma sozinha na sua altura pode mudar.
+  // A fila de um layout automático com espaço em número também (o espaço entre os itens não estica nem encolhe)
+  const fl = new Map();
+  for (const i of body) if (inFlow(i.L) && !flowOf(i.L.grp).auto) { const u = fl.get(i.L.grp) || { t:i.t, b:i.b }; u.t = Math.min(u.t, i.t); u.b = Math.max(u.b, i.b); fl.set(i.L.grp, u); }
+  const rt = i => (fl.get(inFlow(i.L) && i.L.grp) || i).t, rb = i => (fl.get(inFlow(i.L) && i.L.grp) || i).b;
   const runs = [];
-  for (const i of body.filter(i => i.L.visible).sort((p, q) => p.t - q.t)) {
+  for (const i of body.filter(i => i.L.visible).sort((p, q) => rt(p) - rt(q))) {
     const r = runs[runs.length - 1];
-    if (r && i.t <= r.b) { r.b = Math.max(r.b, i.b); r.its.push(i); } else runs.push({ a:i.t, b:i.b, its:[i] });
+    if (r && rt(i) <= r.b) { r.b = Math.max(r.b, rb(i)); r.its.push(i); } else runs.push({ a:rt(i), b:rb(i), its:[i] });
   }
   // a borda de dentro de uma faixa presa ao quadro (foto no topo, tarja embaixo) divide o vão: o que está colado nela continua colado
   const cuts = its.filter(i => i.edge === 'top' || i.edge === 'bottom').map(i => i.edge === 'top' ? i.b : i.t)
@@ -493,11 +497,19 @@ function placement() {
 // onde a camada fica no formato aberto: no principal, x/y; nos outros, o ajuste feito ali ou a adaptação automática
 // fpos[formato] também guarda o que foi mexido no palco só naquele formato: s (escala pela alça do canto),
 // ww/hh (máscara pelas alças laterais, px) e zoom/ix/iy (enquadramento da imagem)
-function placeOf(L) {
+function placeRaw(L) {
   if (S.format === baseFmt()) return { x:L.x, y:L.y, k:1, hh:null, ww:null };
   const p = placement().get(L.id) || { x:L.x, y:L.y, k:1, hh:null, ww:null }, f = L.fpos && L.fpos[S.format];
   return f ? { ...p, x:f.x ?? p.x, y:f.y ?? p.y, k:p.k * (f.s ?? 1), ww:f.ww ?? p.ww, hh:f.hh ?? p.hh } : p;
 }
+// grupo com layout automático: a fila decide a posição (o item arrastado para trocar de lugar segue o mouse)
+function placeOf(L) {
+  const p = placeRaw(L);
+  if (!(S.flow || inFlow(L)) || flowSkip(L)) return p;
+  const q = flowPlace().get(L.id); return q ? { ...p, x:q.x, y:q.y } : p;
+}
+// quem está sendo arrastado para trocar de lugar segue o mouse (item da fila do grupo ou bloco da coluna do quadro)
+const flowSkip = L => { const D = RT.drag; return !!D && (D.flowL === L.id || !!(D.flowB && D.flowB.has(L.id))); };
 function posOf(L) { const p = placeOf(L); return { x:p.x, y:p.y }; }
 const fmtOwn = () => S.format !== baseFmt(); // mexer no palco agora grava só neste formato
 const fOf = L => (fmtOwn() && L.fpos && L.fpos[S.format]) || {};
@@ -529,6 +541,232 @@ function resetPos(ls) {
   changed({ props:true }); toast(ms.length > 1 ? `${ms.length} elementos voltaram ao automático` : 'Voltou ao automático');
 }
 const fmtLabel = f => FORMATS[f].label;
+
+/* ------------ layout automático (como o do Figma, mas solto para animar) ------------
+   S.groups[gid].flow = { dir:'v'|'h', gap (px do vídeo), auto, align, pin }. Os itens do grupo ficam em fila com o mesmo espaço
+   entre eles; no Auto, espalhados entre o primeiro e o último. align = alinhamento no outro eixo (start | center | end);
+   pin = o lado que fica parado quando um item muda de tamanho (texto maior, outra variação). Só a posição de repouso vira regra:
+   a animação de cada item continua por cima, e quem ainda não entrou já guarda o lugar (nada pula quando ele aparece).
+   A ordem é a da posição (quem está em cima ou à esquerda vem antes): arrastar um item sozinho (Ctrl + clique) para além do
+   vizinho troca a ordem; as setas também. Item oculto não ocupa lugar; L.flowFree = fora do layout (fica onde está, no grupo).
+   A âncora sai das posições guardadas + L.fsz (tamanho de cada item na última conta, px sem escala), então o lado fixo não anda
+   quando algo cresce. `flowBake` (em pushUndo e changed) grava posição e tamanho de volta: outros formatos, desligar o layout
+   e desagrupar veem o mesmo que a tela. */
+const flowOf = gid => { const g = gid && S.groups && S.groups[gid]; return (g && g.flow) || null; };
+const flowMember = L => !!(L && L.grp && L.visible && !L.flowFree && L.type !== 'bg' && !NOBOX(L));
+const inFlow = L => flowMember(L) && !!flowOf(L.grp);
+// a seleção leva todos os itens da fila (então mover, alinhar ou escalar é do grupo inteiro)
+const flowWhole = (gid, ls) => S.layers.every(o => o.grp !== gid || !inFlow(o) || ls.includes(o));
+// tamanho de repouso de um item (px, já com a escala do formato) e o da última conta; p = posição bruta (placeRaw)
+function flowItem(L, p, Hf) {
+  let w, hh, bw, bh;
+  if (L.type === 'text') { const lay = layoutText(L, L.upper ? L.text.toUpperCase() : L.text); w = bw = lay.blockW; hh = bh = lay.blockH; }
+  else { const G = blockGeom(L); if (!G) return null; bw = G.w; bh = G.h; w = p.ww || G.w; hh = p.hh || G.h; }
+  const r = (L.rot || 0) * Math.PI / 180, c = Math.abs(Math.cos(r)), s = Math.abs(Math.sin(r)), ext = (a, b) => [a * c + b * s, a * s + b * c];
+  const [ew, eh] = ext(w, hh), [bx, by] = ext(bw, bh), f0 = L.fsz || [bx, by], k = p.k || 1;
+  // fsz vale no principal; fora dele a máscara pode ter outro tamanho (ww/hh): na mesma proporção
+  return { L, k, cx:p.x * W(), cy:p.y * Hf, w:ew * k, h:eh * k, w0:f0[0] * k * ew / (bx || 1), h0:f0[1] * k * eh / (by || 1), raw:[bx, by] };
+}
+// itens de um grupo: no formato aberto ou (base) no principal, direto de x/y; any = antes de ligar o layout
+function flowItems(gid, base, any) {
+  const Hf = base ? FORMATS[baseFmt()].h : H();
+  return S.layers.map((L, i) => {
+    if (L.grp !== gid || !(any ? flowMember(L) : inFlow(L))) return null;
+    const it = flowItem(L, base ? { x:L.x, y:L.y, k:1 } : placeRaw(L), Hf); if (it) it.i = i;
+    return it;
+  }).filter(Boolean);
+}
+// a fila: rects em ordem ({ cx, cy, w, h, L }, px), o espaço usado e a âncora (fz congela a âncora enquanto um item é arrastado)
+// F.w / F.h = tamanho fixo do frame (px do principal, na horizontal / vertical); vazio = abraça o conteúdo.
+// bx = caixa imposta (puxando a alça do frame), em px do formato aberto
+function flowSolve(F, its, M, fz, bx) {
+  const v = F.dir !== 'h', A = v ? 'cy' : 'cx', B = v ? 'cx' : 'cy', Z = v ? 'h' : 'w', Z0 = v ? 'h0' : 'w0', C = v ? 'w' : 'h', C0 = v ? 'w0' : 'h0';
+  const o = [...its].sort((p, q) => p[A] - q[A] || p.i - q.i);
+  const a0 = fz && (!F.auto || fz.all) ? fz : { lo:Math.min(...o.map(i => i[A] - i[Z0] / 2)), hi:Math.max(...o.map(i => i[A] + i[Z0] / 2)) };
+  const x0 = fz || { cl:Math.min(...o.map(i => i[B] - i[C0] / 2)), ch:Math.max(...o.map(i => i[B] + i[C0] / 2)) };
+  const sum = o.reduce((n, i) => n + i[Z], 0), kk = o.reduce((n, i) => n + i.k, 0) / o.length;
+  // frame com tamanho fixo: a caixa sai do conteúdo (como estava na última conta) + a folga, pelo alinhamento; o conteúdo se alinha dentro dela
+  const off = (m, free) => m === 'end' ? free : m === 'center' ? free / 2 : 0, Lm = v ? F.h : F.w, Lc = v ? F.w : F.h;
+  let a = a0, x = x0;
+  if (bx) { a = v ? { lo:bx.y0, hi:bx.y1 } : { lo:bx.x0, hi:bx.x1 }; x = v ? { cl:bx.x0, ch:bx.x1 } : { cl:bx.y0, ch:bx.y1 }; }
+  else {
+    if (Lm) { const l = Math.max(Lm * kk, sum + (F.auto ? 0 : (F.gap ?? 24) * kk * (o.length - 1))), lo = a0.lo - off(F.auto ? 'center' : F.pin || 'start', l - (a0.hi - a0.lo)); a = { lo, hi:lo + l }; }
+    if (Lc) { const l = Math.max(Lc * kk, ...o.map(i => i[C])), cl = x0.cl - off(F.align || 'center', l - (x0.ch - x0.cl)); x = { cl, ch:cl + l }; }
+  }
+  let gap = (F.gap ?? 24) * kk, pos;
+  if (F.auto && o.length > 1) { gap = (a.hi - a.lo - sum) / (o.length - 1); if (gap < 0) { gap = 0; pos = (a.lo + a.hi - sum) / 2; } else pos = a.lo; }
+  else { const tot = sum + gap * (o.length - 1); pos = F.pin === 'end' ? a.hi - tot : F.pin === 'center' ? (a.lo + a.hi - tot) / 2 : a.lo; }
+  const rects = o.map(i => {
+    const c = F.align === 'start' ? x.cl + i[C] / 2 : F.align === 'end' ? x.ch - i[C] / 2 : (x.cl + x.ch) / 2, m = pos + i[Z] / 2;
+    pos += i[Z] + gap;
+    return { cx:v ? c : m, cy:v ? m : c, w:i.w, h:i.h, L:i.L };
+  });
+  // texto, logo e botão não passam da margem: a fila entra inteira (empurrado sozinho, um item encostaria no vizinho)
+  const rs = M ? rects.filter(r => !freeType(r.L)) : [];
+  let sx = 0, sy = 0;
+  if (rs.length) {
+    const sh = (a0, a1, m0, m1) => a1 - a0 > m1 - m0 ? 0 : a0 < m0 ? m0 - a0 : a1 > m1 ? m1 - a1 : 0;
+    sx = sh(Math.min(...rs.map(r => r.cx - r.w / 2)), Math.max(...rs.map(r => r.cx + r.w / 2)), M.x0, M.x1);
+    sy = sh(Math.min(...rs.map(r => r.cy - r.h / 2)), Math.max(...rs.map(r => r.cy + r.h / 2)), M.y0, M.y1);
+    for (const r of rects) { r.cx += sx; r.cy += sy; }
+  }
+  // a caixa do frame (px): no eixo fixo, a do frame; no que abraça, a do conteúdo
+  const ext = (k, s) => [Math.min(...rects.map(r => r[k] - r[s] / 2)), Math.max(...rects.map(r => r[k] + r[s] / 2))];
+  const fixM = bx || Lm, fixC = bx || Lc, [m0, m1] = fixM ? [a.lo, a.hi] : ext(A, Z), [c0, c1] = fixC ? [x.cl, x.ch] : ext(B, C);
+  const dm = fixM ? (v ? sy : sx) : 0, dc = fixC ? (v ? sx : sy) : 0;
+  const box = v ? { x0:c0 + dc, x1:c1 + dc, y0:m0 + dm, y1:m1 + dm } : { x0:m0 + dm, x1:m1 + dm, y0:c0 + dc, y1:c1 + dc };
+  return { rects, gap, kk, v, box, fz:{ ...a0, ...x0 } };
+}
+// uma conta por quadro no formato aberto (como placement): Map id → { x, y } em frações; RT.flowRects = a fila de cada grupo
+function flowPlace() {
+  const key = `${RT.frameNo}|${S.format}|${baseFmt()}`;
+  if (RT.flowKey === key && RT.flowS === S) return RT.flowMap;
+  const m = new Map(); RT.flowKey = key; RT.flowS = S; RT.flowMap = m;
+  const R = flowLayout(false, RT.drag);
+  for (const [id, q] of R.pos) m.set(id, { x:q.cx / W(), y:q.cy / H() });
+  RT.flowRects = R.groups; RT.frameRows = R.frame; RT.frameIds = R.frame ? R.frame.ids : new Set();
+  return m;
+}
+/* Tudo junto: 1) a fila de cada grupo com layout; 2) a coluna do quadro (S.flow), por cima. Devolve pos (id → { cx, cy } px),
+   groups (gid → resultado de flowSolve, já com o deslocamento do quadro), frame (linhas da coluna) e sizes (id → tamanho para o fsz).
+   base = no principal, direto de x/y; D = arrasto em curso ({ flow, fz } congela a âncora de um grupo; flowB = blocos soltos do quadro) */
+function flowLayout(base, D) {
+  const fmt = base ? baseFmt() : S.format, Hf = FORMATS[fmt].h, M = marginBox(fmt), pos = new Map(), groups = new Map(), sizes = new Map();
+  if (S.groups) for (const gid of Object.keys(S.groups)) {
+    const F = flowOf(gid); if (!F) continue;
+    const its = flowItems(gid, base); if (!its.length) continue;
+    const r = flowSolve(F, its, M, D && D.flow === gid ? D.fz : null);
+    for (const q of r.rects) pos.set(q.L.id, { cx:q.cx, cy:q.cy });
+    for (const it of its) sizes.set(it.L.id, it.raw);
+    groups.set(gid, r);
+  }
+  const frame = S.flow ? frameSolve(base, Hf, M, pos, sizes, D) : null;
+  if (frame) for (const [gid, r] of groups) { // a caixa do grupo anda junto com a coluna (alças e espaços no lugar certo)
+    const q = r.rects[0] && pos.get(r.rects[0].L.id); if (!q) continue;
+    const dx = q.cx - r.rects[0].cx, dy = q.cy - r.rects[0].cy; if (!dx && !dy) continue;
+    r.rects = r.rects.map(o => ({ ...o, cx:o.cx + dx, cy:o.cy + dy })); r.box = { x0:r.box.x0 + dx, x1:r.box.x1 + dx, y0:r.box.y0 + dy, y1:r.box.y1 + dy };
+  }
+  return { pos, groups, frame, sizes };
+}
+/* ------------ layout automático do quadro: S.flow = { gap, auto, pin, align } ------------
+   Tudo que está no quadro vira uma coluna. Cada grupo é um bloco só; blocos que se sobrepõem na vertical (texto em cima da foto,
+   cena 2 no lugar da cena 1, coisas lado a lado) formam uma linha rígida. Quem não aparece na tela junto não se empurra: cada linha
+   desce só abaixo das linhas anteriores que aparecem junto com ela. A margem é o respiro: pin start | center | end = a coluna encosta
+   em cima, fica no meio ou encosta embaixo; auto = espalha de margem a margem. Foto ou forma que sangra pela borda de cima ou de baixo
+   fica de fora e o que está abaixo (ou acima) dela respeita a borda. align: keep = na horizontal fica onde está; start | center | end = na margem.
+   As linhas saem das posições guardadas + fsz (estáveis quando algo cresce); a altura de cada linha, do tamanho de agora. */
+function frameSolve(base, Hf, M, pos, sizes, D) {
+  const FF = S.flow, Mb = M || { x0:0, y0:0, x1:W(), y1:Hf }, gap = FF.gap ?? 24, blocks = new Map(), bands = [], ids = new Set();
+  const moving = D && D.flowB;
+  S.layers.forEach((L, i) => {
+    if (!L.visible || L.type === 'bg' || NOBOX(L)) return;
+    const g = L.grp || null; if (g ? (gmeta(g) || {}).free : L.flowFree) return;
+    const it = flowItem(L, base ? { x:L.x, y:L.y, k:1 } : placeRaw(L), Hf); if (!it) return;
+    if (!g && freeType(L)) { // sangra pela borda: fica de fora (cobre o quadro inteiro = fundo; só em cima ou só embaixo = faixa)
+      const t = it.cy - it.h / 2, b = it.cy + it.h / 2, up = t <= 1, dn = b >= Hf - 1;
+      if (up || dn) { if (!(up && dn)) bands.push({ up, t, b, sp:[[L.start || 0, L.end ?? S.duration]] }); return; }
+    }
+    const q = pos.get(L.id), key = g ? 'g:' + g : L.id, bl = blocks.get(key) || { key, ms:[], sp:[], i };
+    blocks.set(key, bl); ids.add(L.id); if (!sizes.has(L.id)) sizes.set(L.id, it.raw);
+    bl.ms.push({ L, it, cx:q ? q.cx : it.cx, cy:q ? q.cy : it.cy }); bl.sp.push([L.start || 0, L.end ?? S.duration]);
+    if (moving && moving.has(L.id)) bl.forced = true;
+  });
+  // o que está em cima de uma foto que sangra (em repouso) fica com ela, fora da coluna
+  const meets0 = (a, b) => a.some(([a0, a1]) => b.some(([b0, b1]) => Math.min(a1, b1) - Math.max(a0, b0) > .01));
+  for (const [k, bl] of blocks) {
+    const rt = Math.min(...bl.ms.map(m => m.it.cy - m.it.h0 / 2)), rb = Math.max(...bl.ms.map(m => m.it.cy + m.it.h0 / 2));
+    if (!bl.forced && bands.some(bd => meets0(bd.sp, bl.sp) && (bd.up ? rt < bd.b - 1 : rb > bd.t + 1))) { blocks.delete(k); bl.ms.forEach(m => { ids.delete(m.L.id); if (!inFlow(m.L)) sizes.delete(m.L.id); }); }
+  }
+  if (!blocks.size) return { rows:[], ids, gaps:new Map() };
+  const mn = (a, f) => Math.min(...a.map(f)), mx = (a, f) => Math.max(...a.map(f));
+  for (const bl of blocks.values()) {
+    bl.rt = mn(bl.ms, m => m.it.cy - m.it.h0 / 2); bl.rb = mx(bl.ms, m => m.it.cy + m.it.h0 / 2); // guardado (estável)
+    bl.ct = mn(bl.ms, m => m.cy - m.it.h / 2); bl.cb = mx(bl.ms, m => m.cy + m.it.h / 2); // agora
+    bl.cl = mn(bl.ms, m => m.cx - m.it.w / 2); bl.cr = mx(bl.ms, m => m.cx + m.it.w / 2);
+  }
+  // linhas: blocos que se sobrepõem na vertical. O bloco arrastado só fica na linha em que já estava (D.mates), senão vira linha própria
+  const rows = [], all = [...blocks.values()];
+  for (const bl of all.filter(b => !b.forced).sort((p, q) => p.rt - q.rt || p.i - q.i)) {
+    const r = rows[rows.length - 1];
+    if (r && bl.rt < r.rb - 1) { r.bs.push(bl); r.rb = Math.max(r.rb, bl.rb); } else rows.push({ bs:[bl], rt:bl.rt, rb:bl.rb });
+  }
+  for (const bl of all.filter(b => b.forced)) {
+    const r = D.mates && rows.find(r => r.bs.some(b => D.mates.has(b.key)));
+    if (r) r.bs.push(bl); else rows.push({ bs:[bl], rt:bl.rt, rb:bl.rb });
+  }
+  for (const r of rows) {
+    r.ord = r.bs.some(b => b.forced) ? (mn(r.bs, b => b.rt) + mx(r.bs, b => b.rb)) / 2 : (r.rt + r.rb) / 2;
+    r.ct = mn(r.bs, b => b.ct); r.H = mx(r.bs, b => b.cb) - r.ct; r.cl = mn(r.bs, b => b.cl); r.cr = mx(r.bs, b => b.cr); r.sp = r.bs.flatMap(b => b.sp);
+    r.rt0 = mn(r.bs, b => b.rt); r.rb0 = mx(r.bs, b => b.rb);
+  }
+  rows.sort((p, q) => p.ord - q.ord);
+  const meets = (a, b) => a.some(([a0, a1]) => b.some(([b0, b1]) => Math.min(a1, b1) - Math.max(a0, b0) > .01));
+  // cenas: linhas ligadas por aparecerem juntas
+  const par = rows.map((_, j) => j), root = j => { while (par[j] !== j) j = par[j] = par[par[j]]; return j; };
+  for (let a = 0; a < rows.length; a++) for (let b = a + 1; b < rows.length; b++) if (meets(rows[a].sp, rows[b].sp)) par[root(a)] = root(b);
+  const comps = new Map(); rows.forEach((r, j) => { const k = root(j); if (!comps.has(k)) comps.set(k, []); comps.get(k).push(r); });
+  const gaps = new Map();
+  for (const cs of comps.values()) {
+    // faixa útil: a margem, menos as fotos que sangram e aparecem junto (o que está abaixo da de cima / acima da de baixo)
+    let lo = Mb.y0, hi = Mb.y1;
+    for (const bd of bands) if (cs.some(r => meets(r.sp, bd.sp))) {
+      if (bd.up && cs.some(r => r.rt0 >= bd.b - 1)) lo = Math.max(lo, bd.b + gap);
+      if (!bd.up && cs.some(r => r.rb0 <= bd.t + 1)) hi = Math.min(hi, bd.t - gap);
+    }
+    const down = g => { for (let j = 0; j < cs.length; j++) { let y = lo; for (let k = 0; k < j; k++) if (meets(cs[k].sp, cs[j].sp)) y = Math.max(y, cs[k].Y + cs[k].H + g); cs[j].Y = y; } return mx(cs, r => r.Y + r.H) - lo; };
+    const span = hi - lo, shift = d => cs.forEach(r => { r.Y += d; });
+    let g = gap;
+    if (FF.auto) {
+      if (down(0) >= span || down(span) <= down(0) + .5) { g = 0; down(0); shift((span - (mx(cs, r => r.Y + r.H) - lo)) / 2); }
+      else { let a = 0, b = span; for (let n = 0; n < 32; n++) { const m = (a + b) / 2; if (down(m) <= span) a = m; else b = m; } g = a; down(g); }
+    } else if (FF.pin === 'end') {
+      for (let j = cs.length - 1; j >= 0; j--) { let e = hi; for (let k = j + 1; k < cs.length; k++) if (meets(cs[k].sp, cs[j].sp)) e = Math.min(e, cs[k].Y - g); cs[j].Y = e - cs[j].H; }
+    } else { const ext = down(g); if (FF.pin === 'center') shift((span - ext) / 2); }
+    cs.forEach(r => gaps.set(r, g));
+  }
+  // horizontal e saída: cada linha anda inteira
+  for (const r of rows) {
+    const dx = FF.align === 'start' ? Mb.x0 - r.cl : FF.align === 'end' ? Mb.x1 - r.cr : FF.align === 'center' ? (Mb.x0 + Mb.x1 - r.cl - r.cr) / 2 : 0, dy = r.Y - r.ct;
+    r.dx = dx; r.dy = dy;
+    for (const b of r.bs) for (const m of b.ms) pos.set(m.L.id, { cx:m.cx + dx, cy:m.cy + dy });
+  }
+  return { rows, ids, gaps };
+}
+// grava o que a fila decidiu: no principal em x/y (+ fsz); no formato aberto, só em quem já tem posição própria ali
+function flowBake() {
+  if (!S || RT.drag) return;
+  try { flowBake1(); } catch (e) { console.error(e); }
+}
+function flowBake1() {
+  const on = S.flow || (S.groups && Object.values(S.groups).some(g => g && g.flow));
+  const own = on && fmtOwn() ? flowLayout(false) : null; // antes de trocar o fsz (a âncora depende dele)
+  const R = on ? flowLayout(true) : null, Hb = FORMATS[baseFmt()].h, byId = new Map(S.layers.map(l => [l.id, l]));
+  if (R) for (const [id, q] of R.pos) {
+    const L = byId.get(id), x = q.cx / W(), y = q.cy / Hb;
+    if (Math.abs(L.x - x) > 1e-4) L.x = +x.toFixed(5);
+    if (Math.abs(L.y - y) > 1e-4) L.y = +y.toFixed(5);
+  }
+  if (own) for (const [id, q] of own.pos) { const L = byId.get(id), f = L.fpos && L.fpos[S.format]; if (f && (f.x != null || f.y != null)) { f.x = +(q.cx / W()).toFixed(5); f.y = +(q.cy / H()).toFixed(5); } }
+  if (R) for (const [id, z] of R.sizes) { const L = byId.get(id); if (!L.fsz || Math.abs(L.fsz[0] - z[0]) > .05 || Math.abs(L.fsz[1] - z[1]) > .05) L.fsz = z.map(n => +n.toFixed(2)); }
+  for (const L of S.layers) if (L.fsz && !(R && R.sizes.has(L.id))) delete L.fsz;
+}
+// ao ligar: direção, espaço, alinhamento e lado fixo saem de como os itens já estão
+function flowGuess(gid, dir) {
+  const its = flowItems(gid, false, true); if (!its.length) return null;
+  const spread = (A, Z) => {
+    const o = [...its].sort((p, q) => p[A] - q[A]), gs = [];
+    for (let j = 1; j < o.length; j++) gs.push(o[j][A] - o[j][Z] / 2 - (o[j - 1][A] + o[j - 1][Z] / 2));
+    return { gs, ov:gs.filter(g => g < -1).length };
+  };
+  const V = spread('cy', 'h'), Hz = spread('cx', 'w');
+  dir ||= Hz.ov < V.ov ? 'h' : 'v';
+  const v = dir === 'v', gs = (v ? V : Hz).gs.filter(g => g >= 0).sort((p, q) => p - q);
+  const B = v ? 'cx' : 'cy', C = v ? 'w' : 'h', near = f => its.every(i => Math.abs(f(i) - f(its[0])) < 6);
+  let align = near(i => i[B]) ? 'center' : near(i => i[B] - i[C] / 2) ? 'start' : near(i => i[B] + i[C] / 2) ? 'end' : null;
+  if (!align && v) { const al = new Set(its.map(i => i.L.type === 'text' ? i.L.align : 'center')); align = al.size === 1 ? ({ left:'start', right:'end' })[[...al][0]] : null; }
+  const lo = Math.min(...its.map(i => v ? i.cy - i.h / 2 : i.cx - i.w / 2)), hi = Math.max(...its.map(i => v ? i.cy + i.h / 2 : i.cx + i.w / 2)), mid = (lo + hi) / 2 / (v ? H() : W());
+  return { dir, gap:gs.length ? Math.round(gs[gs.length >> 1]) : 24, auto:false, align:align || 'center', pin:mid < .4 ? 'start' : mid > .6 ? 'end' : 'center' };
+}
 
 /* ------------ fábrica de camadas ------------ */
 function base(type, role, defs, o = {}) {
@@ -1913,7 +2151,7 @@ function charStyles(L, txt) {
 function layoutText(L, txt) {
   const M = marginBox(), size = L.size, ls = (L.ls || 0) * size, maxW = Math.min((L.maxW || .84) * W(), M ? M.x1 - M.x0 : Infinity);
   const font = fontStr(L, size), sty = charStyles(L, txt);
-  const key = [txt, font, ls, maxW, L.lh, L.align, sty ? sty.join(';') : ''].join('|');
+  const key = [txt, font, ls, maxW, L.lh, L.align, L.fixW ? 1 : 0, sty ? sty.join(';') : ''].join('|');
   let lay = RT.layout.get(key); if (lay) return lay;
   if (RT.layout.size > 400) RT.layout.clear();
   const all = [...txt].map((ch, i) => ({ ch, c:sty ? sty[i][2] : null, f:sty ? fontStr(L, size, sty[i][0], sty[i][1]) : font }));
@@ -1962,6 +2200,7 @@ function layoutText(L, txt) {
     const baseline = -blockH / 2 + li * lineH + lineH / 2 + size * .34;
     return { text:cs.map(c => c.ch).join(''), glyphs, width, baseline, li };
   });
+  if (L.fixW) blockW = Math.max(blockW, maxW); // largura fixa (puxada pela alça lateral): a caixa tem essa largura e o texto se alinha dentro
   for (const l of out) l.x0 = L.align === 'left' ? -blockW / 2 : L.align === 'right' ? blockW / 2 - l.width : -l.width / 2;
   lay = { lines:out, blockW, blockH, lineH, size, font, mixed:!!sty, nChars:ci, nWords:wi, nLines:out.length };
   RT.layout.set(key, lay);
@@ -2945,6 +3184,7 @@ function drawOverlays() {
       handlesOf(L).forEach(q => { ctx.fillStyle = '#F2B632'; ctx.strokeStyle = '#101115'; ctx.lineWidth = hRad() / 11 * 1.5; ctx.fillRect(q.x - s, q.y - s, s * 2, s * 2); ctx.strokeRect(q.x - s, q.y - s, s * 2, s * 2); });
     }
   }
+  drawFlowGaps(ctx, 1 / OS * dpr); // espaços do layout automático
   if (RT.guide) {
     ctx.setLineDash([]); ctx.lineWidth = 2 / OS;
     for (const g of RT.guide) { ctx.strokeStyle = g.c; ctx.beginPath(); ctx.moveTo(g.x0, g.y0); ctx.lineTo(g.x1, g.y1); ctx.stroke(); }
@@ -3061,6 +3301,7 @@ const masked = L => L.type === 'image' && (L.mask === 'rect' || L.mask === 'circ
 const resizable = L => masked(L) || L.type === 'shape' && L.kind !== 'custom' && L.kind !== 'line';
 // caixa que envolve toda a seleção (grupo ou vários), só das camadas que estão na tela agora
 function selUnion() {
+  const fb = flowFrameSel(); if (fb) return fb; // grupo com layout: a caixa é o frame dele
   const ls = freePicked().filter(o => o._bounds && o.visible && phase(o, T)); if (!ls.length || pickedLayers().length < 2) return null;
   const x0 = Math.min(...ls.map(o => o._bounds.x)), y0 = Math.min(...ls.map(o => o._bounds.y));
   return { x:x0, y:y0, w:Math.max(...ls.map(o => o._bounds.x + o._bounds.w)) - x0, h:Math.max(...ls.map(o => o._bounds.y + o._bounds.h)) - y0, ls };
@@ -3104,7 +3345,10 @@ function startResize(ev, pt, hd) {
   }
   const items = (grp ? freePicked().filter(o => o._bounds) : [L]).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y, ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2, s0:{ ...size0(o), strokeW:o.strokeW } }; });
   RT.drag = { L, mode:'rs', how, hx, hy, pt0:pt, items, off:{ x:pt.x - hd.x, y:pt.y - hd.y }, b0:{ w:b.w, h:b.h }, C:{ x:cx, y:cy }, g0:grp ? null : geomNow(L),
-    A:{ x:cx - hx * b.w / 2, y:cy - hy * b.h / 2 }, H0:{ x:cx + hx * b.w / 2, y:cy + hy * b.h / 2 }, s0:items[0].s0, k:b.k || 1, bw:b.w / (b.k || 1) };
+    A:{ x:cx - hx * b.w / 2, y:cy - hy * b.h / 2 }, H0:{ x:cx + hx * b.w / 2, y:cy + hy * b.h / 2 }, s0:items[0].s0, k:b.k || 1, bw:b.w / (b.k || 1),
+    fl:grp ? flowScale(items.map(q => q.o)) : null }; // grupo com layout: o espaço (e o frame) escala junto
+  // frame do grupo com layout: os lados mudam o tamanho dele; os cantos escalam tudo junto (como antes)
+  if (b.gid && (hx === 0 || hy === 0)) Object.assign(RT.drag, { how:'frame', gid:b.gid, B0:{ x0:b.x, y0:b.y, x1:b.x + b.w, y1:b.y + b.h } }); // alça do frame: muda o tamanho dele
   cv.setPointerCapture(ev.pointerId);
 }
 // puxa a alça: o lado oposto fica parado (Alt: o centro fica parado)
@@ -3112,7 +3356,13 @@ function resizeTo(D, pt, ev) {
   const p = 14, { hx, hy, L } = D, alt = ev.altKey, q0 = D.items[0], span = alt ? 2 : 1;
   const ex = pt.x - D.off.x - hx * p, ey = pt.y - D.off.y - hy * p; // onde a borda puxada está agora
   const A = alt ? D.C : D.A;
-  if (D.how === 'tw') { L.maxW = +clamp((D.bw + 2 * hx * (pt.x - D.pt0.x) / D.k + 1) / W(), .1, 1).toFixed(4); return; }
+  if (D.how === 'frame') { flowResize(D, ex, ey, alt); return; }
+  if (D.how === 'tw') { // caixa de largura fixa: o lado oposto fica parado (Alt: os dois lados)
+    const d = hx * (pt.x - D.pt0.x) / D.k * (alt ? 2 : 1), Mg = marginBox(), mw = clamp(D.bw + d + 1, .1 * W(), Mg ? Mg.x1 - Mg.x0 : W()); // não passa da margem (o texto quebra nela)
+    L.fixW = true; L.maxW = +(mw / W()).toFixed(4);
+    if (!alt) setPos(L, +(q0.x0 + hx * (mw - D.bw - 1) * D.k / 2 / W()).toFixed(5), null);
+    RT.layout.clear(); return;
+  }
   if (D.how === 'wid' || D.how === 'hei' || D.how === 'thick') {
     const dist = hx ? (ex - A.x) * hx : (ey - A.y) * hy;
     // fora do formato principal a máscara muda só neste formato (fpos ww/hh, px do bloco antes da escala)
@@ -3136,12 +3386,14 @@ function resizeTo(D, pt, ev) {
     const a = scaleAny(q.o, q.s0, f);
     setPos(q.o, +(q.x0 + (A.x + (q.ox - A.x) * a - q.ox) / W()).toFixed(4), +(q.y0 + (A.y + (q.oy - A.y) * a - q.oy) / H()).toFixed(4));
   }
+  if (D.fl) D.fl(f);
 }
 cv.addEventListener('pointerdown', ev => {
   if (ev.button === 1) { panStage(ev); return; }
   if (ev.button === 2) return; // botão direito abre o menu (contextmenu)
   const pt = stagePt(ev), hd = handleAt(pt);
   if (hd) { startResize(ev, pt, hd); return; }
+  const gp = flowGapAt(pt); if (gp) { startGapDrag(ev, pt, gp); return; } // espaço do layout automático
   const L = hitTest(pt);
   if (!L) { marquee(ev); return; } // no vazio: arrastar seleciona por área; só um clique solta a seleção (com Shift, não)
   if (ev.shiftKey) { toggleSel(L); return; }
@@ -3150,7 +3402,7 @@ cv.addEventListener('pointerdown', ev => {
   else if (grp) { RT.selected = L.id; renderLayers(); renderProps(); needs = true; } else select(L.id);
   pushUndo();
   if (ev.altKey && L.type === 'image') { const pn = panOf(L); RT.drag = { L, mode:'pan', pt0:pt, ix0:pn.ix, iy0:pn.iy, bw:L._bounds.w, bh:L._bounds.h }; }
-  else { const p = posOf(L); RT.drag = { L, mode:'move', tap:grp, pxy:[ev.clientX, ev.clientY], ox:pt.x - p.x * W(), oy:pt.y - p.y * H(), others:freePicked().filter(o => o !== L).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y }; }), x0:p.x, y0:p.y, ...snapSetup() }; }
+  else { const p = posOf(L); RT.drag = { L, mode:'move', tap:grp, pxy:[ev.clientX, ev.clientY], ox:pt.x - p.x * W(), oy:pt.y - p.y * H(), others:freePicked().filter(o => o !== L).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y }; }), x0:p.x, y0:p.y, ...snapSetup() }; flowGrab(RT.drag); }
   cv.setPointerCapture(ev.pointerId);
 });
 // Guias ao arrastar: bordas e centro da seleção contra os elementos fora dela, o quadro e a margem (Ctrl desliga; Shift trava num eixo)
@@ -3183,14 +3435,15 @@ cv.addEventListener('pointermove', ev => {
   const pt = stagePt(ev);
   if (!RT.drag) {
     if (RT.marq) return;
-    const hd = handleAt(pt), ht = hitTest(pt);
-    cv.style.cursor = hd ? HCUR[hd.k] : ht ? (ev.altKey && ht.type === 'image' ? 'all-scroll' : 'move') : '';
-    setHover(hd ? null : ht && ht.id);
+    const hd = handleAt(pt), gp = !hd && flowGapAt(pt), ht = !gp && hitTest(pt);
+    cv.style.cursor = hd ? HCUR[hd.k] : gp ? (gp.v ? 'row-resize' : 'col-resize') : ht ? (ev.altKey && ht.type === 'image' ? 'all-scroll' : 'move') : '';
+    setHover(hd || gp ? null : ht && ht.id);
     return;
   }
   const D = RT.drag, L = D.L;
   if (D.tap && Math.hypot(ev.clientX - D.pxy[0], ev.clientY - D.pxy[1]) > 3) D.tap = false;
-  if (D.mode === 'rs') resizeTo(D, pt, ev); // largura de quebra do texto ('tw'): parte da largura real do bloco (não da máx.), senão o começo do arrasto não faz nada; +1 px para não quebrar no empate
+  if (D.mode === 'gap') gapDrag(D, pt);
+  else if (D.mode === 'rs') resizeTo(D, pt, ev); // largura de quebra do texto ('tw'): parte da largura real do bloco (não da máx.), senão o começo do arrasto não faz nada; +1 px para não quebrar no empate
   else if (D.mode === 'pan') setPan(L, clamp(D.ix0 + (pt.x - D.pt0.x) / D.bw, -2, 2), clamp(D.iy0 + (pt.y - D.pt0.y) / D.bh, -2, 2));
   else {
     let x = (pt.x - D.ox) / W(), y = (pt.y - D.oy) / H();
@@ -3224,6 +3477,8 @@ cv.addEventListener('wheel', ev => {
 const endDrag = () => {
   if (!RT.drag) return;
   const mv = RT.drag.mode === 'move', tap = RT.drag.tap && RT.drag.L; // toque sem arrastar num grupo: fica só essa camada
+  if (RT.drag.flowL) { const D = RT.drag, p = placeRaw(D.L); if (Math.abs(p.x - D.x0) + Math.abs(p.y - D.y0) > 1e-6) flowCommit(D.flow, D.fz); } // item da fila solto: entra no lugar dele
+  else if (RT.drag.flowB) { const D = RT.drag, p = placeRaw(D.L); if (Math.abs(p.x - D.x0) + Math.abs(p.y - D.y0) > 1e-6) frameCommit(D); } // bloco da coluna do quadro solto
   RT.drag = null; RT.guide = null;
   if (tap) select(tap.id);
   changed({ props:!mv });
@@ -3301,6 +3556,7 @@ let redoBase = null; // estado logo depois de desfazer/refazer: enquanto nada mu
 function syncHist() { const u = $('#undo'), r = $('#redo'); if (u) u.disabled = !undoStack.length; if (r) r.disabled = !redoStack.length; }
 function pushUndo() {
   try {
+    flowBake(); // o passo começa com as posições que a tela mostra (fonte que carregou depois, por exemplo)
     const snap = JSON.stringify(S);
     if (redoStack.length && snap !== redoBase) redoStack.length = 0; // ação nova: o refazer perde o sentido
     // controles chamam pushUndo ao focar/clicar sem mudar nada: não vira passo
@@ -3367,6 +3623,7 @@ async function flushSave() {
   if (!$('#files').hidden) renderFiles();
 }
 function changed(opts = {}) {
+  flowBake();
   RT.rev++; needs = true; autosave();
   refreshBars();
   if (opts.layers) renderLayers();
@@ -4118,6 +4375,8 @@ function selUnits(ls) {
 function alignLayers(mode) {
   const all = pickedLayers(), ls = all.filter(l => !l.locked);
   if (!ls.length) { lockedNote(all); return; }
+  if (ls.every(l => inFlow(l) && !flowWhole(l.grp, ls))) { toast('Está no layout automático: quem alinha é o grupo (selecione o grupo inteiro)'); return; }
+  if (S.flow && RT.frameIds && ls.every(l => RT.frameIds.has(l.id)) && (['t', 'cv', 'b', 'dv'].includes(mode) || (S.flow.align || 'keep') !== 'keep')) { toast('Layout do quadro ligado: a posição vem da coluna (clique no vazio para ver as opções)'); return; }
   ensureBounds(ls);
   const U = selUnits(ls); if (!U.length) return;
   const ref = U.length > 1 ? { x0:Math.min(...U.map(u => u.x0)), y0:Math.min(...U.map(u => u.y0)), x1:Math.max(...U.map(u => u.x1)), y1:Math.max(...U.map(u => u.y1)) } : (() => { const M = marginBox(); return M ? { x0:M.x0, y0:M.y0, x1:M.x1, y1:M.y1 } : { x0:0, y0:0, x1:W(), y1:H() }; })();
@@ -4160,6 +4419,7 @@ Object.assign(ICONS, {
   al_l:AL('M2.5 2v12', rc(5, 3.5, 8, 3.2) + rc(5, 9.3, 5, 3.2)), al_ch:AL('M8 2v12', rc(3, 3.5, 10, 3.2) + rc(4.5, 9.3, 7, 3.2)), al_r:AL('M13.5 2v12', rc(3, 3.5, 8, 3.2) + rc(6, 9.3, 5, 3.2)),
   al_t:AL('M2 2.5h12', rc(3.5, 5, 3.2, 8) + rc(9.3, 5, 3.2, 5)), al_cv:AL('M2 8h12', rc(3.5, 3, 3.2, 10) + rc(9.3, 4.5, 3.2, 7)), al_b:AL('M2 13.5h12', rc(3.5, 3, 3.2, 8) + rc(9.3, 6, 3.2, 5)),
   al_dh:AL('M2.5 2v12M13.5 2v12', rc(6.3, 4, 3.4, 8)), al_dv:AL('M2 2.5h12M2 13.5h12', rc(4, 6.3, 8, 3.4)),
+  fl_off:AL('', rc(2.5, 2.5, 6, 4.5) + rc(7.5, 9, 6, 4.5)), fl_v:AL('M5.5 8h5', rc(3, 2, 10, 4) + rc(3, 10, 10, 4)), fl_h:AL('M8 5.5v5', rc(2, 3, 4, 10) + rc(10, 3, 4, 10)),
 });
 // escala a seleção toda (proporcional, em torno do centro do conjunto); devolve apply(f) sobre o tamanho de agora
 function beginScaleSel() {
@@ -4168,8 +4428,8 @@ function beginScaleSel() {
   const its = ls.filter(o => o._bounds); if (!its.length) return null;
   const x0 = Math.min(...its.map(o => o._bounds.x)), y0 = Math.min(...its.map(o => o._bounds.y));
   const cx = (x0 + Math.max(...its.map(o => o._bounds.x + o._bounds.w))) / 2, cy = (y0 + Math.max(...its.map(o => o._bounds.y + o._bounds.h))) / 2;
-  const items = its.map(o => ({ o, s0:size0(o), ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2 }));
-  return f => { for (const q of items) { scaleAny(q.o, q.s0, f); setPos(q.o, +((cx + (q.ox - cx) * f) / W()).toFixed(4), +((cy + (q.oy - cy) * f) / H()).toFixed(4)); } needs = true; };
+  const items = its.map(o => ({ o, s0:size0(o), ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2 })), fl = flowScale(ls);
+  return f => { for (const q of items) { scaleAny(q.o, q.s0, f); setPos(q.o, +((cx + (q.ox - cx) * f) / W()).toFixed(4), +((cy + (q.oy - cy) * f) / H()).toFixed(4)); } fl(f); needs = true; };
 }
 function scaleBar() {
   const rng = h('input', { type:'range', min:25, max:300, step:1, value:100, 'aria-label':'Escala da seleção' }), out = h('output', { text:'100%' });
@@ -4194,9 +4454,289 @@ function alignBar() {
     h('div', { class:'row' }, [
       h('button', { class:'btn small', text:'Agrupar', title:'Agrupar (Ctrl+G)', disabled:ls.length < 2 || oneGrp || null, onclick:groupSel }),
       ls.some(l => l.grp) ? h('button', { class:'btn small', text:'Desagrupar', title:'Desagrupar (Ctrl+Shift+G)', onclick:ungroupSel }) : null,
+      n > 1 ? h('button', { class:'btn small', text:'Layout automático', title:'Agrupar em fila, com o mesmo espaço entre eles (Shift+A)', onclick:flowToggle }) : null,
       ls.length > 1 ? h('span', { class:'hint', text:`${ls.length} selecionados` }) : null,
     ]),
   ]);
+}
+
+/* ------------ layout automático: painel, atalho e palco (a conta fica em flowSolve, perto de placeOf) ------------ */
+function setFlow(gid, F) {
+  pushUndo();
+  const g = gmeta(gid, true);
+  if (F) { g.flow = F; S.layers.forEach(l => { if (l.grp === gid) delete l.fsz; }); } // a âncora sai de como está agora
+  else delete g.flow; // as posições já estão gravadas (pushUndo): tudo fica onde estava
+  changed({ props:true });
+}
+function flowOn(gid, dir) {
+  const F = flowGuess(gid, dir); if (!F) return;
+  setFlow(gid, F);
+  toast(`Layout automático ${F.dir === 'h' ? 'em linha' : 'em coluna'}, ${F.gap}px entre os itens`, 3600, UNDO_ACT);
+}
+// Shift + A (e o botão): seleção solta vira um grupo com layout; num grupo, liga ou desliga
+function flowToggle() {
+  const L0 = selL(); if (!L0 || L0.type === 'bg') { frameToggle(); return; }
+  const gid = wholeGroup();
+  if (gid) { if (flowOf(gid)) { setFlow(gid, null); toast('Layout automático desligado. Os itens ficaram onde estavam', 3600, UNDO_ACT); } else flowOn(gid); return; }
+  const ls = pickedLayers().filter(l => !NOBOX(l));
+  if (new Set(ls.map(l => l.grp || l.id)).size < 2) { toast('Selecione dois ou mais elementos (ou um grupo) para o layout automático'); return; }
+  groupSel();
+  const g = wholeGroup(); if (g) flowOn(g);
+}
+// painel: grupo inteiro selecionado = o layout dele; um item de um grupo com layout = "fora do layout"
+function flowSec() {
+  const gid = wholeGroup();
+  if (gid) { const sec = flowGroupSec(gid); if (S.flow) sec.append(frameOutCheck(gmeta(gid, true), 'free', 'g-' + gid)); return sec; }
+  const L = selL(); if (!L || L.type === 'bg' || pickedLayers().length !== 1) return null;
+  if (flowOf(L.grp)) return flowItemSec(L);
+  if (S.flow && !L.grp) return h('section', { class:'sec' }, [h('h3', {}, ['Layout do quadro', h('small', { text:'coluna' })]), frameOutCheck(L, 'flowFree', L.id),
+    h('p', { class:'hint', text:L.flowFree ? 'Fica onde você deixar; os outros não guardam lugar para ele.' : 'Arraste (ou use ↑ ↓) para trocar de lugar na coluna. O espaço fica no painel do quadro (clique no vazio).' })]);
+  return null;
+}
+// fora da coluna do quadro: o elemento solto (L.flowFree) ou o grupo inteiro (S.groups[gid].free)
+function frameOutCheck(o, k, idk) {
+  const id = 'f-' + idk + '-frameout', inp = h('input', { type:'checkbox', id, checked:!!o[k] });
+  inp.addEventListener('change', () => { pushUndo(); o[k] = inp.checked || undefined; changed({ props:true }); });
+  return h('label', { class:'check', for:id }, [inp, k === 'free' ? 'Fora do layout do quadro' : 'Fora do layout (fica onde você deixar)']);
+}
+// a fila agora, no formato aberto (o painel não espera o próximo quadro)
+function flowNow(gid) { return flowOf(gid) ? flowLayout(false, RT.drag && RT.drag.flow === gid ? RT.drag : null).groups.get(gid) || null : null; }
+// grupo inteiro com layout selecionado: a caixa da seleção é o frame (as alças mudam o tamanho dele, não escalam o que está dentro)
+function flowFrameSel() {
+  const gid = !playing && wholeGroup(); if (!gid || !flowOf(gid) || !freePicked().length) return null;
+  const r = flowNow(gid); if (!r) return null;
+  const b = r.box; return { x:b.x0, y:b.y0, w:b.x1 - b.x0, h:b.y1 - b.y0, ls:freePicked(), gid };
+}
+// puxa a alça do frame: o lado puxado vira tamanho fixo (o oposto fica parado; Alt = o centro) e o conteúdo se alinha dentro
+// menor tamanho do frame: o do conteúdo (px do formato aberto) => { w, h }
+function flowMin(F, its) {
+  const v = F.dir !== 'h', kk = its.reduce((n, i) => n + i.k, 0) / its.length;
+  const tot = its.reduce((n, i) => n + (v ? i.h : i.w), 0) + (F.auto ? 0 : (F.gap ?? 24) * kk * (its.length - 1)), cr = Math.max(...its.map(i => v ? i.w : i.h));
+  return v ? { w:cr, h:tot } : { w:tot, h:cr };
+}
+function flowResize(D, ex, ey, alt) {
+  const F = flowOf(D.gid), its = F ? flowItems(D.gid) : []; if (!its.length) return;
+  const b = { ...D.B0 }, kk = its.reduce((n, i) => n + i.k, 0) / its.length, lim = flowMin(F, its);
+  const pull = (e, k0, k1, d, mn) => { // nunca menor que o conteúdo
+    if (alt) { const c = (b[k0] + b[k1]) / 2, hw = Math.max(mn / 2, Math.abs(e - c)); b[k0] = c - hw; b[k1] = c + hw; }
+    else if (d > 0) b[k1] = Math.max(b[k0] + mn, e); else b[k0] = Math.min(b[k1] - mn, e);
+  };
+  if (D.hx) { pull(ex, 'x0', 'x1', D.hx, lim.w); F.w = Math.round((b.x1 - b.x0) / kk); }
+  if (D.hy) { pull(ey, 'y0', 'y1', D.hy, lim.h); F.h = Math.round((b.y1 - b.y0) / kk); }
+  for (const q of flowSolve(F, its, null, null, b).rects) setPos(q.L, +(q.cx / W()).toFixed(5), +(q.cy / H()).toFixed(5));
+}
+function flowGroupSec(gid) {
+  const F = flowOf(gid), v = !F || F.dir !== 'h';
+  const set = patch => {
+    pushUndo();
+    // frame com tamanho fixo: alinhar, lado fixo e Auto rearrumam o conteúdo dentro dele (o frame não sai do lugar)
+    const keep = F && (F.w != null || F.h != null) && ['align', 'pin', 'auto'].some(k => k in patch) && flowNow(gid);
+    Object.assign(flowOf(gid), patch);
+    if (keep) for (const q of flowSolve(flowOf(gid), flowItems(gid), null, null, keep.box).rects) setPos(q.L, +(q.cx / W()).toFixed(5), +(q.cy / H()).toFixed(5));
+    changed({ props:true });
+  };
+  const tog = (on, t, ic, fn) => h('button', { type:'button', class:'icon-btn', 'aria-pressed':String(!!on), title:t, 'aria-label':t, html:ic, onclick:fn });
+  const sec = h('section', { class:'sec flow' }, [
+    h('h3', {}, ['Layout automático', h('small', { text:F ? (v ? 'em coluna' : 'em linha') : 'Shift+A' })]),
+    h('div', { class:'alrow' }, [
+      tog(!F, 'Livre: cada item fica onde você deixar', ICONS.fl_off, () => { if (F) setFlow(gid, null); }),
+      tog(F && v, 'Em coluna: um embaixo do outro', ICONS.fl_v, () => { if (!F) flowOn(gid, 'v'); else if (!v) set({ dir:'v' }); }),
+      tog(F && !v, 'Em linha: um ao lado do outro', ICONS.fl_h, () => { if (!F) flowOn(gid, 'h'); else if (v) set({ dir:'h' }); }),
+    ]),
+  ]);
+  if (!F) { sec.append(h('p', { class:'hint', text:'Fila com o mesmo espaço entre os itens: mudar o tamanho de um empurra os outros. As animações continuam por cima.' })); return sec; }
+  const autoB = h('button', { type:'button', class:'btn small flow-auto', 'aria-pressed':String(!!F.auto), text:'Auto',
+    title:F.auto ? 'Voltar ao espaço em número' : 'Auto: o primeiro e o último ficam onde estão e os outros se espalham entre eles',
+    onclick:() => { const r = flowNow(gid); set(F.auto ? { auto:false, gap:Math.max(0, Math.round(r ? r.gap / (r.kk || 1) : F.gap ?? 24)) } : { auto:true }); } });
+  let gapF;
+  if (F.auto) {
+    const r = flowNow(gid);
+    gapF = field('Espaço', h('div', { class:'rng' }, [h('span', { class:'hint', text:'espalhado' }), h('span', { class:'flow-num', text:r ? Math.round(r.gap / (r.kk || 1)) + 'px' : '' })]));
+  } else gapF = rangeF(new Proxy(F, { get:(t, k) => k === 'id' ? 'flow-' + gid : t[k] }), 'gap', 'Espaço', 0, 400, 1, n => Math.round(n) + 'px');
+  gapF.classList.add('flowgap'); gapF.append(autoB);
+  const al = v ? [['start', 'al_l', 'À esquerda'], ['center', 'al_ch', 'No centro'], ['end', 'al_r', 'À direita']] : [['start', 'al_t', 'Em cima'], ['center', 'al_cv', 'No meio'], ['end', 'al_b', 'Embaixo']];
+  const pins = v ? [['start', 'Em cima'], ['center', 'No meio'], ['end', 'Embaixo']] : [['start', 'Esquerda'], ['center', 'Meio'], ['end', 'Direita']];
+  // tamanho do frame: abraça o conteúdo ou fixo (puxar a alça no palco também deixa fixo)
+  const sizeRow = (k, label) => {
+    const minOf = () => { const its = flowItems(gid), m = its.length ? flowMin(F, its) : { w:8, h:8 }, kk = its.length ? its.reduce((n, i) => n + i.k, 0) / its.length : 1; return Math.ceil((k === 'w' ? m.w : m.h) / kk); };
+    const hug = F[k] == null, cur = () => { const r = flowNow(gid); return r ? Math.round((k === 'w' ? r.box.x1 - r.box.x0 : r.box.y1 - r.box.y0) / (r.kk || 1)) : 200; };
+    const f = hug ? field(label, h('div', { class:'rng' }, [h('span', { class:'hint', text:'abraça o conteúdo' }), h('span', { class:'flow-num', text:cur() + 'px' })]))
+      : rangeF(new Proxy(F, { get:(t, kk) => kk === 'id' ? 'flow-' + gid : t[kk] }), k, label, minOf(), 2400, 1, n => Math.round(n) + 'px');
+    f.classList.add('flowgap');
+    f.append(h('button', { type:'button', class:'btn small flow-auto', 'aria-pressed':String(hug), text:'Abraçar',
+      title:hug ? 'Fixar o tamanho atual (ou puxe a alça no palco)' : 'Voltar a abraçar o conteúdo', onclick:() => set({ [k]:hug ? cur() : undefined }) }));
+    return f;
+  };
+  sec.append(...[gapF, sizeRow('w', 'Largura'), sizeRow('h', 'Altura'),
+    field('Alinhar', h('div', { class:'alrow' }, al.map(([k, ic, t]) => tog((F.align || 'center') === k, `Alinhar ${t.toLowerCase()}`, ICONS[ic], () => set({ align:k }))))),
+    F.auto ? null : (() => { const f = field('Fixo', h('div', { class:'segs tight', role:'group', 'aria-label':'Lado fixo' }, pins.map(([k, t]) => h('button', { type:'button', 'aria-pressed':String((F.pin || 'start') === k), text:t, onclick:() => set({ pin:k }) }))));
+      f.title = 'Quando um item cresce (texto maior, outra variação), este lado fica parado e o resto se ajusta'; return f; })(),
+    h('p', { class:'hint', text:F.auto ? 'Os itens se espalham por todo o frame. Puxe as alças no palco para mudar o tamanho dele.'
+      : 'No palco: as alças mudam o tamanho do frame e o espaço rosa muda o espaço. Para trocar a ordem, Ctrl + clique num item e arraste (ou use as setas).' })].filter(Boolean));
+  return sec;
+}
+function flowItemSec(L) {
+  const id = fid(L, 'flowFree'), inp = h('input', { type:'checkbox', id, checked:!!L.flowFree });
+  inp.addEventListener('change', () => { pushUndo(); L.flowFree = inp.checked || undefined; changed({ props:true }); });
+  return h('section', { class:'sec' }, [
+    h('h3', {}, ['Layout automático', h('small', { text:groupName(L.grp) })]),
+    h('label', { class:'check', for:id }, [inp, 'Fora do layout (fica onde você deixar)']),
+    h('p', { class:'hint', text:L.flowFree ? 'Continua no grupo e anima junto, mas não ocupa lugar na fila.' : 'Arraste (ou use as setas) para trocar de lugar na fila. O espaço e o alinhamento são do grupo.' }),
+  ]);
+}
+// arrastar um item sozinho (Ctrl + clique) de um grupo com layout: ele segue o mouse, os outros abrem espaço, e ao soltar entra na fila
+function flowGrab(D) {
+  const L = D.L, mv = [L, ...(D.others || []).map(q => q.o)];
+  if (inFlow(L) && !flowWhole(L.grp, mv)) { D.flow = L.grp; D.flowL = L.id; D.fz = flowSolve(flowOf(L.grp), flowItems(L.grp), null).fz; return; }
+  // coluna do quadro: o bloco arrastado segue o mouse, os outros abrem espaço; só continua junto da linha em que já estava
+  if (!S.flow || !RT.frameIds || !RT.frameIds.has(L.id)) return;
+  D.flowB = new Set(mv.filter(o => RT.frameIds.has(o.id)).map(o => o.id));
+  const row = RT.frameRows && RT.frameRows.rows.find(r => r.bs.some(b => b.ms.some(m => m.L === L)));
+  D.mates = new Set(row ? row.bs.filter(b => !b.ms.some(m => D.flowB.has(m.L.id))).map(b => b.key) : []);
+}
+// ↑ ↓ num bloco da coluna do quadro (elemento solto ou grupo inteiro): passa para o outro lado da linha vizinha que aparece junto
+function frameStep(ls, d) {
+  const fr = S.flow && RT.frameRows; if (!fr) return false;
+  const row = fr.rows.find(r => r.bs.some(b => b.ms.some(m => m.L === ls[0]))), bl = row && row.bs.find(b => b.ms.some(m => m.L === ls[0]));
+  if (!bl || !bl.ms.every(m => ls.includes(m.L)) || !ls.every(l => bl.ms.some(m => m.L === l))) return false;
+  const meets = (a, b) => a.some(([a0, a1]) => b.some(([b0, b1]) => Math.min(a1, b1) - Math.max(a0, b0) > .01));
+  const nb = [...fr.rows].filter(r => r !== row && meets(r.sp, row.sp) && Math.sign(r.Y - row.Y) === Math.sign(d)).sort((p, q) => Math.abs(p.Y - row.Y) - Math.abs(q.Y - row.Y))[0];
+  if (!nb) return true;
+  pushUndo();
+  const dl = ((nb.rt0 + nb.rb0) / 2 - (bl.rt + bl.rb) / 2 + Math.sign(d)) / H();
+  for (const m of bl.ms) { const p = placeRaw(m.L); setPos(m.L, null, p.y + dl); }
+  frameCommit({ flowB:new Set(bl.ms.map(m => m.L.id)), mates:new Set() }); changed();
+  return true;
+}
+// grava a fila na nova ordem com a âncora de antes (senão o item que estava fora do lugar puxaria a fila inteira)
+function flowCommit(gid, fz) {
+  if (!flowOf(gid)) return;
+  const R = flowLayout(false, { flow:gid, fz });
+  for (const L of S.layers) { const q = L.grp === gid && R.pos.get(L.id); if (q) setPos(L, +(q.cx / W()).toFixed(5), +(q.cy / H()).toFixed(5)); }
+}
+// bloco solto na coluna do quadro: entra no lugar dele (sem se juntar com quem ele encostou, a não ser a linha em que já estava)
+function frameCommit(D) {
+  const R = flowLayout(false, D);
+  for (const L of S.layers) { const q = R.frame && R.frame.ids.has(L.id) && R.pos.get(L.id); if (q) setPos(L, +(q.cx / W()).toFixed(5), +(q.cy / H()).toFixed(5)); }
+}
+// setas num item sozinho: troca de lugar com o vizinho (no eixo da fila); no outro eixo quem manda é o alinhamento do grupo
+function flowStep(L, dx, dy) {
+  const F = flowOf(L.grp), v = F.dir !== 'h', d = Math.sign(v ? dy : dx);
+  const r = RT.flowRects && RT.flowRects.get(L.grp), j = r ? r.rects.findIndex(q => q.L === L) : -1, n = j >= 0 && r.rects[j + d];
+  if (!d) { toast(`Está no layout automático: ${v ? '↑ ↓' : '← →'} trocam de lugar`); return; }
+  if (!n) return;
+  pushUndo();
+  const fz = { ...flowSolve(F, flowItems(L.grp), null).fz, all:true }, q = placeRaw(n.L), c = (v ? q.y : q.x) + d * .001; // passa para o outro lado do vizinho
+  setPos(L, v ? null : c, v ? c : null); flowCommit(L.grp, fz); changed();
+}
+// escalar o grupo inteiro (alça de canto, "Tamanho da seleção"): o espaço e o tamanho guardado acompanham.
+// Fora do principal a escala é só daquele formato e já entra na conta pelo k
+function flowScale(ls) {
+  if (fmtOwn()) return () => {};
+  const st = [...new Set(ls.map(l => l.grp))].filter(g => flowOf(g) && flowWhole(g, ls))
+    .map(g => ({ F:flowOf(g), gap:flowOf(g).gap ?? 24, w:flowOf(g).w, h:flowOf(g).h, ms:S.layers.filter(o => o.grp === g && o.fsz).map(o => [o, o.fsz]) }));
+  return f => { for (const s of st) { s.F.gap = +(s.gap * f).toFixed(1); if (s.w != null) s.F.w = Math.round(s.w * f); if (s.h != null) s.F.h = Math.round(s.h * f); for (const [o, z] of s.ms) o.fsz = [z[0] * f, z[1] * f]; } };
+}
+// os espaços da fila no palco (como no Figma): com o grupo ou um item dele selecionado, faixas rosadas com o valor
+function flowGaps() {
+  const L = selL(); if (playing) return [];
+  if ((!L || L.type === 'bg') && S.flow) return frameGaps();
+  if (!L || !flowOf(L.grp) || !RT.flowRects) return [];
+  const r = RT.flowRects.get(L.grp); if (!r || r.rects.length < 2 || !(wholeGroup() === L.grp || pickedLayers().length === 1)) return [];
+  const F = flowOf(L.grp), out = [];
+  for (let j = 1; j < r.rects.length; j++) {
+    const a = r.rects[j - 1], b = r.rects[j], [A, Z, B, C] = r.v ? ['cy', 'h', 'cx', 'w'] : ['cx', 'w', 'cy', 'h'];
+    const s0 = a[A] + a[Z] / 2, s1 = b[A] - b[Z] / 2;
+    let c0 = Math.max(a[B] - a[C] / 2, b[B] - b[C] / 2), c1 = Math.min(a[B] + a[C] / 2, b[B] + b[C] / 2);
+    if (c1 - c0 < 40) { c0 = Math.min(a[B] - a[C] / 2, b[B] - b[C] / 2); c1 = Math.max(a[B] + a[C] / 2, b[B] + b[C] / 2); }
+    out.push({ gid:L.grp, v:r.v, s0, s1, c0, c1, n:Math.round(F.auto ? r.gap / (r.kk || 1) : F.gap ?? 24) });
+  }
+  return out;
+}
+// espaços da coluna do quadro (nada selecionado): entre as linhas que estão na tela agora
+function frameGaps() {
+  const fr = RT.frameRows; if (!fr || !fr.rows.length) return [];
+  const on = fr.rows.filter(r => r.sp.some(([a, b]) => T >= a - 1e-6 && T <= b + 1e-6)).sort((p, q) => p.Y - q.Y), out = [];
+  for (let j = 1; j < on.length; j++) {
+    const a = on[j - 1], b = on[j], s0 = a.Y + a.H, s1 = b.Y; if (s1 < s0 - 1) continue;
+    let c0 = Math.max(a.cl, b.cl) + 0, c1 = Math.min(a.cr, b.cr);
+    c0 += (a.dx + b.dx) / 2; c1 += (a.dx + b.dx) / 2;
+    if (c1 - c0 < 40) { c0 = Math.min(a.cl + a.dx, b.cl + b.dx); c1 = Math.max(a.cr + a.dx, b.cr + b.dx); }
+    out.push({ gid:null, v:true, s0, s1, c0, c1, n:Math.round(S.flow.auto ? fr.gaps.get(b) ?? s1 - s0 : S.flow.gap ?? 24) });
+  }
+  return out;
+}
+// Shift + A sem nada selecionado (e o painel do quadro): liga ou desliga a coluna do quadro
+function frameToggle() {
+  if (S.flow) { pushUndo(); delete S.flow; changed({ props:true }); toast('Layout do quadro desligado. Tudo ficou onde estava', 3600, UNDO_ACT); return; }
+  // espaço, lado fixo e alinhamento saem de como está: conta uma vez com espaço 0 só para achar as linhas
+  pushUndo();
+  S.flow = { gap:0, auto:false, pin:'start', align:'keep' };
+  const fr = flowLayout(false).frame; delete S.flow;
+  if (!fr || !fr.rows.length) { toast('Nada no quadro para organizar ainda'); return; }
+  const rows = [...fr.rows].sort((p, q) => p.rt0 - q.rt0), gs = [], meets = (a, b) => a.some(([a0, a1]) => b.some(([b0, b1]) => Math.min(a1, b1) - Math.max(a0, b0) > .01));
+  for (let j = 1; j < rows.length; j++) { const k = [...rows.slice(0, j)].reverse().find(r => meets(r.sp, rows[j].sp)); if (k) gs.push(rows[j].ct - (k.ct + k.H)); }
+  const pos = gs.filter(g => g > 0).sort((p, q) => p - q), M = marginBox() || { x0:0, y0:0, x1:W(), y1:H() };
+  const top = Math.min(...rows.map(r => r.ct)), bot = Math.max(...rows.map(r => r.ct + r.H)), mid = ((top + bot) / 2 - M.y0) / (M.y1 - M.y0);
+  const cen = rows.every(r => Math.abs((r.cl + r.cr) / 2 - (M.x0 + M.x1) / 2) < 10);
+  S.flow = { gap:pos.length ? Math.round(pos[pos.length >> 1]) : 40, auto:false, pin:mid < .4 ? 'start' : mid > .6 ? 'end' : 'center', align:cen ? 'center' : 'keep' };
+  changed({ props:true });
+  toast(`Layout do quadro: coluna com ${S.flow.gap}px entre os blocos`, 3600, UNDO_ACT);
+}
+// painel com nada selecionado (o quadro): a coluna de tudo
+function frameFlowSec() {
+  const F = S.flow;
+  const set = patch => { pushUndo(); Object.assign(S.flow, patch); changed({ props:true }); };
+  const tog = (on, t, ic, fn) => h('button', { type:'button', class:'icon-btn', 'aria-pressed':String(!!on), title:t, 'aria-label':t, html:ic, onclick:fn });
+  const sec = h('section', { class:'sec flow' }, [
+    h('h3', {}, ['Layout do quadro', h('small', { text:F ? 'tudo em coluna' : 'Shift+A' })]),
+    h('div', { class:'alrow' }, [
+      tog(!F, 'Livre: cada elemento fica onde você deixar', ICONS.fl_off, () => { if (F) frameToggle(); }),
+      tog(F, 'Em coluna: tudo um embaixo do outro, com o mesmo espaço', ICONS.fl_v, () => { if (!F) frameToggle(); }),
+    ]),
+  ]);
+  if (!F) { sec.append(h('p', { class:'hint', text:'Tudo no quadro em coluna, com o mesmo espaço: grupos contam como um bloco, a margem é o respiro e quem não aparece junto não se empurra.' })); return sec; }
+  const autoB = h('button', { type:'button', class:'btn small flow-auto', 'aria-pressed':String(!!F.auto), text:'Auto', title:F.auto ? 'Voltar ao espaço em número' : 'Auto: espalha de margem a margem',
+    onclick:() => set({ auto:!F.auto }) });
+  const gapF = F.auto ? field('Espaço', h('div', { class:'rng' }, [h('span', { class:'hint', text:'de margem a margem' })]))
+    : rangeF(new Proxy(F, { get:(t, k) => k === 'id' ? 'frameflow' : t[k] }), 'gap', 'Espaço', 0, 600, 1, n => Math.round(n) + 'px');
+  gapF.classList.add('flowgap'); gapF.append(autoB);
+  const seg = (label, k, opts, title) => { const f = field(label, h('div', { class:'segs tight', role:'group', 'aria-label':label }, opts.map(([v, t]) => h('button', { type:'button', 'aria-pressed':String((F[k] || opts[0][0]) === v), text:t, onclick:() => set({ [k]:v }) })))); if (title) f.title = title; return f; };
+  sec.append(...[gapF,
+    F.auto ? null : seg('Fica', 'pin', [['start', 'Em cima'], ['center', 'No meio'], ['end', 'Embaixo']], 'Onde a coluna encosta dentro da margem'),
+    seg('Horizontal', 'align', [['keep', 'Manter'], ['start', 'Esquerda'], ['center', 'Centro'], ['end', 'Direita']], 'Manter: cada um fica onde você deixou na horizontal'),
+    h('p', { class:'hint', text:'Grupos contam como um bloco; texto em cima de foto continua em cima dela; foto que sangra pela borda fica de fora. Quem não aparece junto não se empurra. Arraste um elemento para trocar de lugar.' })].filter(Boolean));
+  return sec;
+}
+function flowGapAt(pt) {
+  const px = W() / (cv.getBoundingClientRect().width || 1), m = 6 * px;
+  return flowGaps().find(g => { const a = g.v ? pt.y : pt.x, c = g.v ? pt.x : pt.y, mid = (g.s0 + g.s1) / 2, hw = Math.max(Math.abs(g.s1 - g.s0) / 2, m);
+    return a >= mid - hw && a <= mid + hw && c >= g.c0 && c <= g.c1; }) || null;
+}
+// arrastar o espaço: muda o espaço do grupo (sai do Auto)
+function startGapDrag(ev, pt, g) {
+  pushUndo();
+  RT.drag = { mode:'gap', L:selL(), g, pt0:pt, gap0:g.n };
+  cv.setPointerCapture(ev.pointerId);
+}
+function gapDrag(D, pt) {
+  const F = D.g.gid ? flowOf(D.g.gid) : S.flow; if (!F) return;
+  F.auto = false; F.gap = Math.max(0, Math.round(D.gap0 + (D.g.v ? pt.y - D.pt0.y : pt.x - D.pt0.x)));
+}
+function drawFlowGaps(ctx, px) {
+  for (const g of flowGaps()) {
+    const [x, y, w, hh] = g.v ? [g.c0, g.s0, g.c1 - g.c0, g.s1 - g.s0] : [g.s0, g.c0, g.s1 - g.s0, g.c1 - g.c0];
+    const hot = RT.drag && RT.drag.mode === 'gap' && RT.drag.g.gid === g.gid;
+    ctx.fillStyle = hot ? 'rgba(255,92,163,.26)' : 'rgba(255,92,163,.14)'; ctx.fillRect(x, y, w, hh);
+    ctx.strokeStyle = 'rgba(255,92,163,.95)'; ctx.lineWidth = 1.5 * px; ctx.setLineDash([]);
+    const mx = x + w / 2, my = y + hh / 2, k = 8 * px; ctx.beginPath();
+    if (g.v) { ctx.moveTo(mx - k, my); ctx.lineTo(mx + k, my); } else { ctx.moveTo(mx, my - k); ctx.lineTo(mx, my + k); }
+    ctx.stroke();
+    const t = String(g.n); ctx.font = `600 ${10.5 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(t).width + 10 * px, th = 16 * px, tx = g.v ? mx + k + 4 * px + tw / 2 : mx, ty = g.v ? my : my - k - 4 * px - th / 2;
+    ctx.fillStyle = '#FF5CA3'; rrect(ctx, tx - tw / 2, ty - th / 2, tw, th, 4 * px); ctx.fill();
+    ctx.fillStyle = '#1B0710'; ctx.fillText(t, tx, ty + .5 * px);
+  }
 }
 
 // arquivo vazio: o formato escolhido vira o principal. Com conteúdo, o principal fica onde estava e este se reorganiza a partir dele
@@ -5414,9 +5954,10 @@ function renderProps() {
   ]);
   if (L.type !== 'bg' && !NOBOX(L)) box.append(alignBar());
   if (L.type !== 'bg' && !NOBOX(L) && pickedLayers().length > 1) box.append(scaleBar());
+  { const fs = L.type !== 'bg' && !NOBOX(L) && flowSec(); if (fs) box.append(fs); }
   box.append(head);
 
-  if (L.type === 'bg') { box.append(bgProps(L)); return; }
+  if (L.type === 'bg') { box.append(frameFlowSec(), bgProps(L)); return; }
   if (NOBOX(L)) { box.append(...camFxProps(L)); return; } // câmera e transição: só preset, ritmo e tempo
 
   const tabs = h('div', { class:'tabs', role:'tablist' }, [['anim', 'Animação'], ['style', 'Conteúdo e estilo']].map(([k, t]) =>
@@ -5512,7 +6053,13 @@ function styleProps(L) {
       rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true }),
       rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
       rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
-      rangeF(L, 'maxW', 'Largura máx.', .1, 1, .01, v => Math.round(v * 100) + '%', { layout:true }),
+      (() => { // largura: abraça o texto (quebra na largura máx.) ou fixa (a caixa tem essa largura; alça lateral no palco)
+        const f = rangeF(L, 'maxW', L.fixW ? 'Largura' : 'Largura máx.', .1, 1, .01, v => Math.round(v * 100) + '%', { layout:true });
+        f.classList.add('flowgap');
+        f.append(h('button', { type:'button', class:'btn small flow-auto', 'aria-pressed':String(!L.fixW), text:'Abraçar', title:L.fixW ? 'Voltar a abraçar o texto (a caixa fica do tamanho da linha mais longa)' : 'Fixar a largura da caixa (ou puxe a lateral no palco)',
+          onclick:() => { pushUndo(); const v = !L.fixW; for (const o of peersOf(L)) o.fixW = v || undefined; RT.layout.clear(); changed({ props:true }); } }));
+        return f;
+      })(),
       segF(L, 'align', 'Alinhamento', [['left', 'Esq.'], ['center', 'Centro'], ['right', 'Dir.']]),
       h('div', { class:'checks' }, [checkF(L, 'upper', 'Caixa alta'), checkF(L, 'italic', 'Itálico')]),
       h('h3', { text:'Aparência' }),
@@ -5683,6 +6230,8 @@ let nudgeT = null;
 function nudge(dx, dy) {
   const all = pickedLayers(), ls = all.filter(l => !l.locked), L = ls.includes(selL()) ? selL() : ls[0];
   if (!L) { if (all.length && !nudgeT) lockedNote(all); return; }
+  if (ls.length === 1 && inFlow(L) && !flowWhole(L.grp, ls)) { flowStep(L, dx, dy); return; } // item na fila: troca de lugar
+  if (dy && !dx && frameStep(ls, dy)) return; // bloco na coluna do quadro: troca de lugar
   if (!nudgeT) pushUndo();
   clearTimeout(nudgeT); nudgeT = setTimeout(() => { nudgeT = null; }, 700);
   const p = posOf(L); let x = p.x + dx / W(), y = p.y + dy / H();
@@ -5771,6 +6320,7 @@ document.addEventListener('keydown', e => {
   }
   if (e.code === 'Comma' || e.code === 'Period') { e.preventDefault(); stepFrames((e.code === 'Comma' ? -1 : 1) * (e.shiftKey ? fps() : 1)); return; }
   if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); pause(); T = e.key === 'Home' ? 0 : lastFrame(); RT.userSeek = true; needs = true; return; }
+  if (k === 'a' && e.shiftKey) { e.preventDefault(); flowToggle(); return; }
   if (k === 'i' || k === 'o') { e.preventDefault(); markAt(k === 'i' ? 'start' : 'end'); return; }
   if (e.key === 'Enter' && el && (e.target === document.body || e.target === cv)) { e.preventDefault(); editText(L); }
 });
@@ -5780,7 +6330,7 @@ const KEYS = [
   ['Tempo do elemento', [['I', 'Entra na agulha'], ['O', 'Sai na agulha'], ['Clique duplo na barra', 'Leva a agulha até ele'], ['Shift ao arrastar', 'Desliga o ímã da timeline'], ['Esc ao arrastar', 'Cancela']]],
   ['Palco', [['← ↑ → ↓', 'Move 1 px (Shift: 10 px)'], ['Arrastar no vazio', 'Seleciona por área'], ['Shift + clique', 'Soma ou tira da seleção'], ['Ctrl + clique', 'Escolhe um item dentro do grupo'], ['Clique duplo / Enter', 'Edita o texto'], ['Ctrl ao arrastar', 'Desliga as guias'], ['Alt + arrastar imagem', 'Move a imagem na máscara'], ['Roda na imagem', 'Zoom na máscara'], ['Alças (8 pontos)', 'Cantos escalam; lados mudam largura, altura ou quebra do texto'], ['Alt ao puxar a alça', 'Escala a partir do centro'], ['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco']]],
   ['Editar', [['Ctrl + Z', 'Desfazer'], ['Ctrl + Shift + Z', 'Refazer'], ['Ctrl + C / X / V', 'Copiar, recortar, colar (vale entre arquivos)'], ['Ctrl + D', 'Duplicar'], ['Delete', 'Apagar'], ['Ctrl + A', 'Selecionar tudo'], ['Esc', 'Tirar a seleção / sair do texto'], ['/', 'Buscar animação']]],
-  ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear']]],
+  ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Shift + A', 'Layout automático (sem nada selecionado: o quadro todo)'], ['Arrastar o espaço rosa', 'Muda o espaço do layout'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear']]],
   ['Arquivo', [['Ctrl + S', 'Salvar agora (já salva sozinho)'], ['Ctrl + Shift + S', 'Salvar cópia'], ['Ctrl + Shift + E', 'Exportar MP4'], ['Ctrl + V', 'Colar imagem ou SVG'], ['?', 'Este painel']]],
 ];
 function showKeys(on) {
