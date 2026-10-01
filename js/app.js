@@ -240,7 +240,7 @@ const IDLE = { none:'Sem animação', float:'Flutuar', breathe:'Respirar', sway:
 const IDLE_BY = { text:['none','float','breathe','sway','pulse'], logo:['none','shine','breathe','float','sway','pulse'], cta:['none','pulse','shine','breathe','sway','float'], image:['none','float','breathe','sway','shine','pulse'],
                  shape:['none','float','breathe','sway','spin','pulse','shine'] };
 for (const t in IDLE_BY) IDLE_BY[t].push(...['shine','float3d','bounce','wiggle','glow','glitch','spin'].filter(k => !IDLE_BY[t].includes(k)));
-const SHAPE_KINDS = { rect:'Retângulo', ellipse:'Círculo', triangle:'Triângulo', polygon:'Polígono', star:'Estrela', line:'Linha', custom:'Vetor SVG' };
+const SHAPE_KINDS = { rect:'Retângulo', ellipse:'Círculo', triangle:'Triângulo', polygon:'Polígono', star:'Estrela', line:'Linha', custom:'Vetor' };
 const BG_MODES = { mesh:'Gradiente vivo', linear:'Linear girando', spot:'Holofote', solid:'Sólido', image:'Imagem' };
 
 const FORMATS = { '1x1':{w:1080,h:1080,label:'1:1'}, '4x5':{w:1080,h:1350,label:'4:5'}, '3x4':{w:1080,h:1440,label:'3:4'}, '9x16':{w:1080,h:1920,label:'9:16'} };
@@ -535,7 +535,7 @@ const size0 = o => ({ size:o.size, mh:o.mh, padX:o.padX, padY:o.padY, fs:fOf(o).
   mw:o.type === 'text' && (o.fixW || layoutText(o, o.upper ? o.text.toUpperCase() : o.text).nLines > 1) ? wrapW(o) : null });
 function scaleAny(L, s0, f) {
   if (!fmtOwn()) return scaleLayer(L, s0, f);
-  const s = +clamp(s0.fs * f, .05, 8).toFixed(4); setFmt(L, { s }); return s / s0.fs; // a escala que valeu de fato
+  const s = +clamp(s0.fs * f, .05, L.type === 'text' || L.type === 'cta' ? 8 : Infinity).toFixed(4); setFmt(L, { s }); return s / s0.fs; // a escala que valeu de fato
 }
 const ownPos = L => S.format !== baseFmt() && !!(L.fpos && L.fpos[S.format]);
 function resetPos(ls) {
@@ -722,7 +722,14 @@ function frameSolve(base, Hf, M, pos, sizes, D) {
     bl.rt = mn(bl.ms, m => m.it.cy - m.it.h0 / 2); bl.rb = mx(bl.ms, m => m.it.cy + m.it.h0 / 2); // guardado (estável)
     bl.ct = mn(bl.ms, m => m.cy - m.it.h / 2); bl.cb = mx(bl.ms, m => m.cy + m.it.h / 2); // agora
     bl.cl = mn(bl.ms, m => m.cx - m.it.w / 2); bl.cr = mx(bl.ms, m => m.cx + m.it.w / 2);
+    bl.pic = bl.ms.some(m => m.L.type === 'image' || m.L.type === 'shape');
   }
+  // mesma linha só quem está lado a lado (não se cruza na horizontal) ou em cima de foto/forma (metade da altura ou mais).
+  // Texto, logo e botão que só se encostam empilham: antes viravam uma linha rígida e continuavam sobrepostos, era preciso afastar à mão
+  const together = (p, q) => {
+    if (Math.min(p.cr, q.cr) - Math.max(p.cl, q.cl) < 2) return true;
+    return (p.pic || q.pic) && Math.min(p.rb, q.rb) - Math.max(p.rt, q.rt) >= .5 * Math.min(p.rb - p.rt, q.rb - q.rt);
+  };
   // linhas: blocos que se sobrepõem na vertical E aparecem na tela juntos (texto em cima da foto, coisas lado a lado).
   // Só sobrepor não basta: num arquivo trabalhado a cena 2 ocupa o lugar da cena 1 e, emendando em cadeia, o quadro inteiro virava
   // uma linha só (nada para espaçar, nada se mexia). O bloco arrastado só fica na linha em que já estava (D.mates), senão vira linha própria
@@ -730,7 +737,7 @@ function frameSolve(base, Hf, M, pos, sizes, D) {
   const up0 = free.map((_, j) => j), rt0 = j => { while (up0[j] !== j) j = up0[j] = up0[up0[j]]; return j; };
   for (let a = 0; a < free.length; a++) for (let b = a + 1; b < free.length; b++) {
     const p = free[a], q = free[b];
-    if (p.rt < q.rb - 1 && q.rt < p.rb - 1 && meets0(p.sp, q.sp)) up0[rt0(b)] = rt0(a);
+    if (p.rt < q.rb - 1 && q.rt < p.rb - 1 && meets0(p.sp, q.sp) && together(p, q)) up0[rt0(b)] = rt0(a);
   }
   const byRoot = new Map();
   free.forEach((bl, j) => { const k = rt0(j); let r = byRoot.get(k); if (!r) { r = { bs:[], rt:bl.rt, rb:bl.rb }; byRoot.set(k, r); rows.push(r); } r.bs.push(bl); r.rt = Math.min(r.rt, bl.rt); r.rb = Math.max(r.rb, bl.rb); });
@@ -1856,7 +1863,7 @@ function gwin(gid) {
 // presets do grupo: os de imagem (qualquer elemento serve: o grupo é uma imagem do conjunto)
 const G_KEYS = { in:BLOCK_IN.image, out:BLOCK_OUT.image, idle:IDLE_BY.image };
 // sombra, opacidade ou mesclagem do grupo inteiro (S.groups[gid].shadow / opacity / blend): o conjunto é desenhado junto, como na animação do grupo
-const gStyleOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.shadow && g.shadow !== 'none') || (g.opacity ?? 1) < 1 || !!blendOf(g)) && gleaves(gid).length > 1; };
+const gStyleOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.shadow && g.shadow !== 'none') || (g.opacity ?? 1) < 1 || !!blendOf(g) || blurOn(g)) && gleaves(gid).length > 1; };
 const gAnimOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.in || 'cut') !== 'cut' || (g.out || 'cut') !== 'cut' || (g.idle || 'none') !== 'none') && gleaves(gid).length > 1; };
 // o grupo como uma camada de tempo (start/end do conjunto + a animação dele): serve para `phase`, `idleState`, `spdOf`, `intOf` e para a barra
 function gpseudo(gid) {
@@ -2423,6 +2430,149 @@ function drawText(ctx, L, t, R) {
 }
 
 /* ============================================================
+   Ajustes de imagem (exposição, contraste, cor, detalhes)
+   ============================================================ */
+// L.aExp, L.aCon… (−1..1, ausente = 0; os de min 0 só vão para um lado). As contas rodam num shader WebGL2 (`adjGL`) e a foto
+// ajustada fica num canvas por camada (`ADJC`), refeito só quando a foto ou um valor muda (vídeo: a cada quadro). Até ADJ_MAX px
+// no lado maior. Vinheta: com máscara é desenhada no palco, por cima da máscara (`adjVignette`), senão o recorte escondia parte dela.
+const ADJ = [
+  ['Luz', [['aExp', 'Exposição'], ['aCon', 'Contraste'], ['aHi', 'Realces'], ['aSh', 'Sombras'], ['aWh', 'Brancos'], ['aBl', 'Pretos']]],
+  ['Cor', [['aTemp', 'Temperatura'], ['aTint', 'Tonalidade'], ['aSat', 'Saturação'], ['aVib', 'Vibração'], ['aHue', 'Matiz']]],
+  ['Detalhes', [['aSharp', 'Nitidez', 0], ['aFade', 'Desbotar', 0], ['aVig', 'Vinheta'], ['aGrain', 'Granulado', 0]]],
+];
+const ADJ_K = ADJ.flatMap(g => g[1].map(a => a[0]));
+const ADJ_MAX = 3200;
+const LOOKS = {
+  none:['Original', {}],
+  vivid:['Vivo', { aVib:.45, aCon:.15, aSat:.08 }],
+  warm:['Quente', { aTemp:.35, aVib:.12, aExp:.04 }],
+  cool:['Frio', { aTemp:-.32, aTint:.04, aSat:-.06 }],
+  soft:['Suave', { aCon:-.2, aHi:-.25, aSh:.25, aFade:.15 }],
+  drama:['Dramático', { aCon:.35, aHi:-.45, aSh:-.15, aSat:-.15, aVig:.35, aSharp:.3 }],
+  film:['Filme', { aCon:.18, aSat:-.12, aFade:.22, aTemp:.08, aVig:.25, aGrain:.18 }],
+  vintage:['Vintage', { aFade:.45, aTemp:.22, aSat:-.25, aCon:-.08, aVig:.3, aGrain:.25 }],
+  bw:['P&B', { aSat:-1, aCon:.18 }],
+  noir:['Noir', { aSat:-1, aCon:.45, aBl:-.3, aVig:.4, aGrain:.2 }],
+};
+const adjOn = L => L.type === 'image' && ADJ_K.some(k => L[k]);
+let AGL = null;
+function adjGL() {
+  if (AGL !== null) return AGL;
+  AGL = false;
+  const cv = document.createElement('canvas'), gl = cv.getContext('webgl2', { alpha:true, premultipliedAlpha:true, antialias:false });
+  if (!gl) return false;
+  const VS = `#version 300 es
+in vec2 p; out vec2 v; void main() { v = p * .5 + .5; gl_Position = vec4(p, 0., 1.); }`;
+  const FS = `#version 300 es
+precision highp float;
+uniform sampler2D u_img; uniform vec2 u_px; uniform float u_gs;
+uniform float ${ADJ_K.map(k => 'u_' + k).join(', ')};
+in vec2 v; out vec4 o;
+const vec3 LW = vec3(.2126, .7152, .0722);
+float hash(vec2 q) { return fract(sin(dot(q, vec2(12.9898, 78.233))) * 43758.5453); }
+void main() {
+  vec4 c = texture(u_img, v);
+  vec3 col = c.rgb;
+  if (u_aSharp > 0.) { // máscara de nitidez; vizinhos pesados pelo alfa (sem halo na borda de recorte)
+    vec4 n1 = texture(u_img, v + vec2(u_px.x, 0.)), n2 = texture(u_img, v - vec2(u_px.x, 0.)), n3 = texture(u_img, v + vec2(0., u_px.y)), n4 = texture(u_img, v - vec2(0., u_px.y));
+    float sa = n1.a + n2.a + n3.a + n4.a;
+    vec3 b = sa > 1e-4 ? (n1.rgb * n1.a + n2.rgb * n2.a + n3.rgb * n3.a + n4.rgb * n4.a) / sa : col;
+    col += (col - b) * u_aSharp * 2.5;
+  }
+  // exposição e balanço de branco em luz linear
+  vec3 lin = pow(max(col, 0.), vec3(2.2));
+  lin *= vec3(1. + u_aTemp * .4 + u_aTint * .08, 1. - u_aTint * .25, 1. - u_aTemp * .4 + u_aTint * .08) * exp2(u_aExp * 2.);
+  col = pow(max(lin, 0.), vec3(1. / 2.2));
+  float l = dot(col, LW);
+  col += u_aSh * .28 * (1. - smoothstep(0., .55, l)) + u_aHi * .28 * smoothstep(.45, 1., l)
+       + u_aWh * .22 * smoothstep(.55, 1., l) + u_aBl * .18 * (1. - smoothstep(0., .3, l));
+  col = (col - .5) * (u_aCon >= 0. ? 1. + u_aCon * .9 : 1. + u_aCon * .7) + .5;
+  l = dot(col, LW);
+  float mx = max(col.r, max(col.g, col.b)), mn = min(col.r, min(col.g, col.b));
+  col = mix(vec3(l), col, max(0., 1. + u_aSat) * max(0., 1. + u_aVib * (1. - clamp((mx - mn) * 1.6, 0., 1.)) * 1.1));
+  if (u_aHue != 0.) { // gira o matiz no espaço YIQ (mantém o brilho)
+    float a = u_aHue * 3.14159265, cs = cos(a), sn = sin(a);
+    float Y = dot(col, vec3(.299, .587, .114)), I = dot(col, vec3(.596, -.274, -.322)), Q = dot(col, vec3(.211, -.523, .312));
+    float I2 = I * cs - Q * sn, Q2 = I * sn + Q * cs;
+    col = vec3(Y + .956 * I2 + .621 * Q2, Y - .272 * I2 - .647 * Q2, Y - 1.106 * I2 + 1.703 * Q2);
+  }
+  col = col * (1. - u_aFade * .22) + u_aFade * .1;
+  if (u_aVig != 0.) {
+    float m = smoothstep(.35, 1., length((v - .5) * 2.) * .7071) * abs(u_aVig) * .9;
+    col = mix(col, vec3(u_aVig > 0. ? 0. : 1.), m);
+  }
+  if (u_aGrain > 0.) col += (hash(floor(v / u_px / u_gs)) - .5) * u_aGrain * .35;
+  col = clamp(col, 0., 1.);
+  o = vec4(col * c.a, c.a);
+}`;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  try {
+    const pr = gl.createProgram();
+    gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(pr);
+    if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+    gl.useProgram(pr);
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(pr, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    const u = { px:gl.getUniformLocation(pr, 'u_px'), gs:gl.getUniformLocation(pr, 'u_gs') };
+    for (const k of ADJ_K) u[k] = gl.getUniformLocation(pr, 'u_' + k);
+    cv.addEventListener('webglcontextlost', () => { AGL = null; ADJC.clear(); needs = true; });
+    AGL = { cv, gl, pr, u, tex, src:null, max:gl.getParameter(gl.MAX_TEXTURE_SIZE) };
+  } catch (e) { console.warn('Ajustes de imagem:', e); }
+  return AGL;
+}
+const ADJC = new Map(); // id da camada → { key, cv }
+function adjImg(L, img) {
+  if (!img || !adjOn(L)) return img;
+  const vid = img.tagName === 'VIDEO';
+  if (vid && img.readyState < 2) return img;
+  const iw = img.naturalWidth, ih = img.naturalHeight; if (!iw || !ih) return img;
+  const fit = !masked(L);
+  const key = (vid ? 'v' + img.currentTime + '|' + RT.frameNo : L.src) + '|' + fit + '|' + ADJ_K.map(k => L[k] || 0).join(',');
+  let e = ADJC.get(L.id);
+  if (e && e.key === key) return e.cv;
+  const A = adjGL(); if (!A) return img;
+  const s = Math.min(1, ADJ_MAX / Math.max(iw, ih)), w = Math.max(1, Math.round(iw * s)), hh = Math.max(1, Math.round(ih * s));
+  const gl = A.gl;
+  if (A.cv.width !== w || A.cv.height !== hh) { A.cv.width = w; A.cv.height = hh; }
+  gl.viewport(0, 0, w, hh);
+  gl.bindTexture(gl.TEXTURE_2D, A.tex);
+  if (vid || A.src !== img) {
+    let el = img;
+    if (Math.max(iw, ih) > A.max) { el = document.createElement('canvas'); el.width = w; el.height = hh; el.getContext('2d').drawImage(img, 0, 0, w, hh); }
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, el);
+    const mip = s < .7 && el === img; // reduzindo muito: mipmap, senão serrilha
+    if (mip) gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mip ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
+    A.src = vid ? null : img;
+  }
+  gl.useProgram(A.pr);
+  for (const k of ADJ_K) gl.uniform1f(A.u[k], k === 'aVig' && !fit ? 0 : L[k] || 0);
+  gl.uniform2f(A.u.px, 1 / w, 1 / hh); gl.uniform1f(A.u.gs, Math.max(1, Math.max(w, hh) / 1400));
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  if (!e) {
+    for (const id of ADJC.keys()) if (!S.layers.some(o => o.id === id)) ADJC.delete(id);
+    e = { cv:document.createElement('canvas') }; ADJC.set(L.id, e);
+  }
+  if (e.cv.width !== w || e.cv.height !== hh) { e.cv.width = w; e.cv.height = hh; }
+  const c = e.cv.getContext('2d'); c.clearRect(0, 0, w, hh); c.drawImage(A.cv, 0, 0);
+  e.cv.naturalWidth = iw; e.cv.naturalHeight = ih; e.key = key; // quem desenha usa as medidas da foto original
+  return e.cv;
+}
+// vinheta na máscara (elipse do tamanho dela, mesma curva do shader); v < 0 = clareia
+function adjVignette(ctx, v, w, hh) {
+  ctx.save(); ctx.scale(w / 2, hh / 2);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, Math.SQRT2), c = v > 0 ? '0,0,0' : '255,255,255', a = Math.abs(v) * .9;
+  for (let i = 0; i <= 10; i++) { const o = .35 + .065 * i, q = (o - .35) / .65; g.addColorStop(o, `rgba(${c},${(a * q * q * (3 - 2 * q)).toFixed(3)})`); }
+  g.addColorStop(0, `rgba(${c},0)`);
+  ctx.fillStyle = g; ctx.fillRect(-1, -1, 2, 2); ctx.restore();
+}
+
+/* ============================================================
    Blocos: logo, botão, imagem
    ============================================================ */
 function blockGeom(L) {
@@ -2591,7 +2741,9 @@ function drawBlockContent(ctx, L, G, info, R) {
       ctx.clip();
       const pn = panOf(L), iw = G.img.naturalWidth, ih = G.img.naturalHeight, k = Math.max(G.w / iw, G.h / ih) * pn.zoom; // enquadramento do formato aberto
       const dw = iw * k, dh = ih * k;
-      ctx.drawImage(G.img, -dw / 2 + pn.ix * G.w, -dh / 2 + pn.iy * G.h, dw, dh); ctx.restore();
+      ctx.drawImage(adjImg(L, G.img), -dw / 2 + pn.ix * G.w, -dh / 2 + pn.iy * G.h, dw, dh);
+      if (L.aVig && masked(L)) adjVignette(ctx, L.aVig, G.w, G.h);
+      ctx.restore();
       drawDevice(ctx, L, G); // moldura de celular ou navegador em volta da máscara
     } else if (!R.export) {
       ctx.save(); rrect(ctx, -G.w / 2, -G.h / 2, G.w, G.h, L.radius || 0);
@@ -2779,11 +2931,22 @@ const sinIO = u => .5 - .5 * Math.cos(Math.PI * clamp(u));
 const hashId = s => { let x = 7; for (const c of String(s)) x = (x * 31 + c.charCodeAt(0)) % 100003; return x; };
 // telas de apoio do tamanho do quadro: uma por uso e por tamanho
 // 0 câmera · 1 camada à parte (sombra, mesclagem) · 2 e 3 sombra longa · 4 desfoque de movimento (exportação) · 5 sombra + mesclagem · 6 transição com mesclagem · 7 grupo animado
+// pad = margem em px em volta do quadro (c._pad): o que passa da borda continua existindo e entra no desfoque e na sombra
+// (sem ela o desfoque de um elemento que sangra pela borda clareava perto da borda, como se ele acabasse ali)
 const FBUF = new Map();
-function frameBuf(ref, slot) {
-  const k = `${slot}:${ref.width}x${ref.height}`; let c = FBUF.get(k);
-  if (!c) { if (FBUF.size > 20) FBUF.clear(); c = document.createElement('canvas'); c.width = ref.width; c.height = ref.height; FBUF.set(k, c); }
+const padOf = c => c._pad || 0;
+function frameBuf(ref, slot, pad = 0) {
+  const w = ref.width - 2 * padOf(ref), hh = ref.height - 2 * padOf(ref);
+  const k = `${slot}:${w}x${hh}+${pad}`; let c = FBUF.get(k);
+  if (!c) { if (FBUF.size > 40) FBUF.clear(); c = document.createElement('canvas'); c.width = w + pad * 2; c.height = hh + pad * 2; c._pad = pad; FBUF.set(k, c); }
   return c;
+}
+// margem que a sombra e o desfoque da camada precisam (px da tela, arredondada para poucas telas diferentes)
+function fxPad(L, sh, rs, w, hh) {
+  if (L.type === 'bg') return 0; // o fundo não passa do quadro (o desfoque dele já desenha um pouco maior)
+  let p = (L.lblur || 0) * rs * 3;
+  if (sh) { const k = shadowK(L) * rs; p += sh.long ? 28 * Math.max(.75, 3.4 * k) : ((sh.blur || 0) + Math.max(Math.abs(sh.x || 0), Math.abs(sh.y || 0))) * k; }
+  return p < 1 ? 0 : Math.min(Math.ceil(p / 32) * 32, Math.ceil(Math.max(w, hh) / 2));
 }
 
 /* ------------ mesclagem (blend mode): como a camada se mistura com o que está atrás dela.
@@ -2946,11 +3109,11 @@ const shadowColor = (L, sh) => hexA(L.shColor || autoShadowHex(L, L.shadow), sh.
 // a sombra cresce com o elemento (texto pequeno, sombra curta)
 const shadowK = L => { const b = L._bounds; return b ? clamp(Math.sqrt(Math.min(b.w, b.h) / 180), .45, 1.6) : 1; };
 function drawShadowed(tc, src, L, sh, rs) {
-  const k = shadowK(L) * rs;
-  tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0);
+  const k = shadowK(L) * rs, o = padOf(tc.canvas) - padOf(src);
+  tc.save(); tc.setTransform(1, 0, 0, 1, o, o);
   if (sh.long) {
     // silhueta tingida, empilhada na diagonal numa tela à parte e aplicada com transparência
-    const tint = frameBuf(src, 2), x = tint.getContext('2d'), ext = frameBuf(src, 3), y = ext.getContext('2d');
+    const tint = frameBuf(src, 2, padOf(src)), x = tint.getContext('2d'), ext = frameBuf(src, 3, padOf(src)), y = ext.getContext('2d');
     x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-over'; x.clearRect(0, 0, tint.width, tint.height); x.drawImage(src, 0, 0);
     x.globalCompositeOperation = 'source-in'; x.fillStyle = L.shColor || '#000000'; x.fillRect(0, 0, tint.width, tint.height); x.globalCompositeOperation = 'source-over';
     y.setTransform(1, 0, 0, 1, 0, 0); y.clearRect(0, 0, ext.width, ext.height);
@@ -2963,25 +3126,72 @@ function drawShadowed(tc, src, L, sh, rs) {
   tc.drawImage(src, 0, 0);
   tc.restore();
 }
+/* ------------ desfoque (como no Figma): L.lblur = da camada (ela inteira, com a sombra, fica borrada), L.bblur = do fundo
+   (vidro: o que já está no quadro atrás dela é borrado no formato dela). Valores em px do vídeo (largura 1080) ------------ */
+const BLURS = {
+  lblur: [[0, 'Nenhum'], [3, 'Leve'], [10, 'Médio'], [28, 'Forte']],
+  bblur: [[0, 'Nenhum'], [8, 'Leve'], [20, 'Vidro'], [44, 'Fosco']],
+};
+const blurOn = L => (L.lblur || 0) > 0 || (L.type !== 'bg' && (L.bblur || 0) > 0);
+// borra o que já está em tc (o quadro até aqui) e põe de volta só onde a camada (src) existe
+function backBlur(tc, src, b, lb = 0) {
+  const m = frameBuf(src, 'bb', padOf(src)), c = m.getContext('2d'), o = padOf(src) - padOf(tc.canvas);
+  c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 1; c.filter = 'none'; c.globalCompositeOperation = 'source-over'; c.clearRect(0, 0, m.width, m.height);
+  // a forma da camada com o alfa reforçado: vidro com preenchimento quase transparente ainda desfoca tudo atrás
+  for (let i = 0; i < 6; i++) c.drawImage(src, 0, 0);
+  // um pouco maior que o quadro, para a borda da tela não escurecer o desfoque
+  const w = tc.canvas.width, hh = tc.canvas.height, k = 1 + b * 3 / Math.min(w, hh);
+  c.globalCompositeOperation = 'source-in'; c.filter = `blur(${b.toFixed(2)}px)`;
+  c.drawImage(tc.canvas, o - (k - 1) * w / 2, o - (k - 1) * hh / 2, w * k, hh * k);
+  c.filter = 'none'; c.globalCompositeOperation = 'source-over';
+  // com desfoque da camada, a borda do vidro também borra: o fundo desfocado se dissolve no quadro em vez de cortar em linha seca
+  if (lb > .2 && padOf(m)) clampEdges(m);
+  tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1; tc.filter = lb > .2 ? `blur(${lb.toFixed(2)}px)` : 'none'; tc.globalCompositeOperation = 'source-over';
+  tc.drawImage(m, -o, -o); tc.restore();
+}
+// estica a última linha/coluna do quadro pela margem da tela: o desfoque continua a camada além da borda do quadro
+// (sem isso, o que encosta ou passa da borda clareava perto dela)
+function clampEdges(cv) {
+  const p = padOf(cv), fw = cv.width - 2 * p, fh = cv.height - 2 * p, x = cv.getContext('2d');
+  x.save(); x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.filter = 'none'; x.globalCompositeOperation = 'source-over'; x.imageSmoothingEnabled = false;
+  x.clearRect(0, 0, cv.width, p); x.clearRect(0, p + fh, cv.width, p); x.clearRect(0, p, p, fh); x.clearRect(p + fw, p, p, fh);
+  x.drawImage(cv, p, p, fw, 1, p, 0, fw, p); x.drawImage(cv, p, p + fh - 1, fw, 1, p, p + fh, fw, p);
+  x.drawImage(cv, p, p, 1, fh, 0, p, p, fh); x.drawImage(cv, p + fw - 1, p, 1, fh, p + fw, p, p, fh);
+  x.drawImage(cv, p, p, 1, 1, 0, 0, p, p); x.drawImage(cv, p + fw - 1, p, 1, 1, p + fw, 0, p, p);
+  x.drawImage(cv, p, p + fh - 1, 1, 1, 0, p + fh, p, p); x.drawImage(cv, p + fw - 1, p + fh - 1, 1, 1, p + fw, p + fh, p, p);
+  x.restore();
+}
+// devolve ao quadro a camada pronta (src, em pixels): desfoque do fundo atrás, sombra, desfoque da camada e mesclagem
+function composeOnto(tc, src, L, sh, bm, rs) {
+  const lb = (L.lblur || 0) * rs, bb = L.type === 'bg' ? 0 : (L.bblur || 0) * rs;
+  if (bb > .2) backBlur(tc, src, bb, lb);
+  if (sh && !bm && lb <= .2) { drawShadowed(tc, src, L, sh, rs); return; }
+  // a sombra mistura e borra junto com a camada (como no CSS e no Figma): primeiro camada + sombra, depois o modo e o desfoque
+  let out = src;
+  if (sh) {
+    out = frameBuf(src, 5, padOf(src)); const oc = out.getContext('2d');
+    oc.setTransform(1, 0, 0, 1, 0, 0); oc.clearRect(0, 0, out.width, out.height);
+    drawShadowed(oc, src, L, sh, rs);
+  }
+  if (lb > .2 && padOf(out)) clampEdges(out);
+  const w = out.width, hh = out.height, k = L.type === 'bg' && lb > .2 ? 1 + lb * 3 / Math.min(w, hh) : 1; // o fundo borrado não mostra borda
+  const o = padOf(tc.canvas) - padOf(out);
+  tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1;
+  tc.globalCompositeOperation = bm || 'source-over'; tc.filter = lb > .2 ? `blur(${lb.toFixed(2)}px)` : 'none';
+  tc.drawImage(out, o - (k - 1) * w / 2, o - (k - 1) * hh / 2, w * k, hh * k);
+  tc.restore();
+}
 function drawLayerFx(tc, L, t, R, cam, depth, one) {
   const sh = L.type !== 'bg' && L.shadow && L.shadow !== 'none' ? SHADOWS[L.shadow] : null, bm = blendOf(L);
   const back = L.type === 'image' && L.move && L.move !== 'none' ? imageMotion(L, t) : null;
   try {
-    if (!sh && !bm) { tc.save(); applyCam(tc, cam, L, depth); one(tc, L); tc.restore(); return; }
+    if (!sh && !bm && !blurOn(L)) { tc.save(); applyCam(tc, cam, L, depth); one(tc, L); tc.restore(); return; }
     if (!phase(L, t)) return;
-    // sombra e mesclagem pedem a camada inteira pronta, à parte
-    const src = frameBuf(tc.canvas, 1), lc = src.getContext('2d');
+    // sombra, mesclagem e desfoque pedem a camada inteira pronta, à parte
+    const P = fxPad(L, sh, R.rs, tc.canvas.width, tc.canvas.height), src = frameBuf(tc.canvas, 1, P), lc = src.getContext('2d');
     lc.setTransform(1, 0, 0, 1, 0, 0); lc.clearRect(0, 0, src.width, src.height);
-    lc.setTransform(R.rs, 0, 0, R.rs, 0, 0); applyCam(lc, cam, L, depth); one(lc, L);
-    if (!bm) { drawShadowed(tc, src, L, sh, R.rs); return; }
-    // a sombra mistura junto com a camada (como no CSS e no Figma): primeiro camada + sombra, depois o modo
-    let out = src;
-    if (sh) {
-      out = frameBuf(src, 5); const oc = out.getContext('2d');
-      oc.setTransform(1, 0, 0, 1, 0, 0); oc.clearRect(0, 0, out.width, out.height);
-      drawShadowed(oc, src, L, sh, R.rs);
-    }
-    blendOnto(tc, out, bm);
+    lc.setTransform(R.rs, 0, 0, R.rs, P, P); applyCam(lc, cam, L, depth); one(lc, L);
+    composeOnto(tc, src, L, sh, bm, R.rs);
   } finally { if (back) Object.assign(L, back); }
 }
 
@@ -3015,30 +3225,29 @@ function drawItems(c, mem, top, G, els, t, R, cam, one, depth) {
   }
 }
 function drawGroup(tc, gid, gp, els, t, R, cam, one, G, depth = 0) {
-  const mem = els.filter(l => l.grp && ginside(l.grp, gid)), buf = frameBuf(tc.canvas, 7 + depth), bc = buf.getContext('2d');
-  bc.setTransform(1, 0, 0, 1, 0, 0); bc.globalAlpha = 1; bc.filter = 'none'; bc.globalCompositeOperation = 'source-over';
-  bc.clearRect(0, 0, buf.width, buf.height); bc.setTransform(R.rs, 0, 0, R.rs, 0, 0);
-  drawItems(bc, mem, gid, G, els, t, R, cam, one, depth);
-  const B = groupBox(gid, mem);
-  const blit = (c, x, y) => c.drawImage(buf, 0, 0, buf.width, buf.height, x, y, W(), H());
   // sombra, opacidade e mesclagem do grupo: o conjunto (já animado) vai para uma tela à parte e só então volta ao quadro, com a sombra do grupo
   // por fora de tudo (a sombra de cada item já está no conjunto). Sem nada disso, desenha direto em tc.
   const gm = gmeta(gid) || {}, gsh = gm.shadow && gm.shadow !== 'none' ? SHADOWS[gm.shadow] : null, gbm = blendOf(gm), gop = gm.opacity ?? 1;
-  const out = gsh || gbm || gop < 1 ? frameBuf(tc.canvas, 1) : null, dst = out ? out.getContext('2d') : tc;
+  const gL = { shadow:gm.shadow, shColor:gm.shColor, lblur:gm.lblur, bblur:gm.bblur, type:'group', _bounds:RT.gBox.get(gid)?.b };
+  // com sombra ou desfoque, o conjunto é desenhado com margem em volta do quadro (o que passa da borda entra no efeito)
+  const gpad = gsh || blurOn(gm) ? fxPad(gL, gsh, R.rs, tc.canvas.width, tc.canvas.height) : 0;
+  const mem = els.filter(l => l.grp && ginside(l.grp, gid)), buf = frameBuf(tc.canvas, 7 + depth, gpad), bc = buf.getContext('2d');
+  bc.setTransform(1, 0, 0, 1, 0, 0); bc.globalAlpha = 1; bc.filter = 'none'; bc.globalCompositeOperation = 'source-over';
+  bc.clearRect(0, 0, buf.width, buf.height); bc.setTransform(R.rs, 0, 0, R.rs, gpad, gpad);
+  drawItems(bc, mem, gid, G, els, t, R, cam, one, depth);
+  const B = groupBox(gid, mem); gL._bounds = B;
+  const pu = gpad * W() / (buf.width - 2 * gpad); // a margem em unidades do quadro
+  const blit = (c, x, y) => c.drawImage(buf, 0, 0, buf.width, buf.height, x - pu, y - pu, W() + 2 * pu, H() + 2 * pu);
+  const out = gsh || gbm || gop < 1 || blurOn(gm) ? frameBuf(tc.canvas, 1, gpad) : null, dst = out ? out.getContext('2d') : tc;
   if (out) {
     dst.setTransform(1, 0, 0, 1, 0, 0); dst.globalAlpha = 1; dst.filter = 'none'; dst.globalCompositeOperation = 'source-over';
-    dst.clearRect(0, 0, out.width, out.height); dst.setTransform(R.rs, 0, 0, R.rs, 0, 0); dst.globalAlpha = gop;
+    dst.clearRect(0, 0, out.width, out.height); dst.setTransform(R.rs, 0, 0, R.rs, gpad, gpad); dst.globalAlpha = gop;
   }
   const done = () => {
     tc.filter = 'none'; tc.globalAlpha = 1; tc.globalCompositeOperation = 'source-over';
     if (!out) return;
     dst.setTransform(1, 0, 0, 1, 0, 0); dst.globalAlpha = 1;
-    const pl = { shadow:gm.shadow, shColor:gm.shColor, type:'group', _bounds:B };
-    let o = out;
-    if (gsh && gbm) { o = frameBuf(out, 5); const oc = o.getContext('2d'); oc.setTransform(1, 0, 0, 1, 0, 0); oc.clearRect(0, 0, o.width, o.height); drawShadowed(oc, out, pl, gsh, R.rs); }
-    if (gbm) blendOnto(tc, o, gbm);
-    else if (gsh) drawShadowed(tc, out, pl, gsh, R.rs);
-    else { tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.drawImage(out, 0, 0); tc.restore(); }
+    composeOnto(tc, out, gL, gsh, gbm, R.rs);
   };
   if (!B) { dst.save(); blit(dst, 0, 0); dst.restore(); done(); return; }
   const ph = phase(gp, t), w = B.w + 48, hh = B.h + 48, cx = B.x + B.w / 2, cy = B.y + B.h / 2;
@@ -3309,12 +3518,13 @@ function drawOverlays() {
     const p = 14, uv = visRect(ub, L); ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
     ctx.strokeRect(uv.x - p, uv.y - p, uv.w + p * 2, uv.h + p * 2); ctx.setLineDash([]);
     handlesOf(L).forEach(hdl);
-  } else if (!playing && L && L.type !== 'bg' && L._bounds && L.visible) {
+  } else if (!playing && L && L.type !== 'bg' && L._bounds && L.visible && !RT.vec) {
     const ph = phase(L, T);
     if (ph) {
       const b = visB(L), p = 14;
       ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
-      ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
+      if (rotOf(L)) { const q = quadOf(L, p); ctx.beginPath(); q.forEach((v, i) => i ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y)); ctx.closePath(); ctx.stroke(); } // forma girada: a caixa gira junto
+      else ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
       ctx.setLineDash([]);
       handlesOf(L).forEach(hdl);
     }
@@ -3331,6 +3541,13 @@ function drawOverlays() {
     ctx.beginPath(); ctx.moveTo(cx - hw, 0); ctx.lineTo(cx - hw, H()); ctx.moveTo(cx + hw, 0); ctx.lineTo(cx + hw, H()); ctx.stroke(); ctx.setLineDash([]);
   }
   const px = W() / (cv.getBoundingClientRect().width || 1); // 1 px da tela em unidades do vídeo
+  if (RT.drag && RT.drag.mode === 'rot' && RT.drag.show != null && RT.drag.L._bounds) { // ângulo enquanto gira
+    const c = camFwd(camOf(RT.drag.L), boxC(RT.drag.L._bounds)), txt = Math.round(RT.drag.show * 10) / 10 + '°';
+    ctx.font = `600 ${12 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(txt).width + 14 * px, th = 20 * px;
+    ctx.fillStyle = '#F2B632'; rrect(ctx, c.x - tw / 2, c.y - th / 2, tw, th, 4 * px); ctx.fill();
+    ctx.fillStyle = '#1B1403'; ctx.fillText(txt, c.x, c.y + px * .5);
+  }
   // passar o mouse (no palco, na lista ou na timeline): contorno fino e o nome, para saber quem vai ser clicado
   const hv = !playing && !RT.drag && RT.hover && !isPicked(RT.hover) ? S.layers.find(l => l.id === RT.hover) : null;
   if (hv && hv.type !== 'bg' && hv.visible && hv._bounds && phase(hv, T)) {
@@ -3360,6 +3577,7 @@ function drawOverlays() {
     ctx.fillStyle = 'rgba(242,182,50,.08)'; ctx.fillRect(r.x, r.y, r.w, r.h);
     ctx.setLineDash([]); ctx.lineWidth = 1 * px; ctx.strokeStyle = 'rgba(242,182,50,.9)'; ctx.strokeRect(r.x, r.y, r.w, r.h);
   }
+  drawPenTool(ctx); // caneta e edição de pontos
   ctx.restore();
 }
 // aviso no palco: a camada selecionada não aparece neste momento (ou está oculta), com o atalho para resolver
@@ -3367,7 +3585,9 @@ function updStageHint() {
   const el = $('#stageHint'), L = selL(), els = S.layers.filter(l => l.type !== 'bg');
   let msg = null, act = null;
   if (!playing && !RT.exporting) {
-    if (!els.length) { msg = 'Arquivo vazio. Arraste uma imagem para cá ou'; act = ['Adicionar título', () => addLayer(ADD_KINDS[0].mk(S.brand, S.brand.fonts))]; }
+    if (RT.pen) { msg = RT.pen.pts.length < 2 ? 'Caneta: clique cria um ponto, arrastar cria uma curva' : 'Clique no primeiro ponto para fechar · Enter termina aberta · Backspace tira o último'; act = [RT.pen.pts.length < 2 ? 'Cancelar' : 'Concluir', () => penToolFinish(false)]; }
+    else if (RT.vec) { msg = 'Pontos: arraste pontos e alças · clique na linha cria ponto · Alt + clique: curva/canto · Delete apaga'; act = ['Concluir', vecExit]; }
+    else if (!els.length) { msg = 'Arquivo vazio. Arraste uma imagem para cá ou'; act = ['Adicionar título', () => addLayer(ADD_KINDS[0].mk(S.brand, S.brand.fonts))]; }
     else if (L && L.type !== 'bg' && !L.visible) { msg = `Camada oculta: ${L.name}`; act = ['Mostrar', () => { pushUndo(); L.visible = true; changed({ layers:true }); }]; }
     else if (L && L.type !== 'bg' && !phase(L, T)) { msg = T < L.start ? `${L.name} ainda não apareceu neste momento (entra em ${fmtSec(L.start)})` : `${L.name} já saiu neste momento (sai em ${fmtSec(L.end ?? S.duration)})`; act = ['Ver no palco', () => seekLayer(L)]; }
   }
@@ -3463,6 +3683,12 @@ function hitTest(pt) {
   for (let i = S.layers.length - 1; i >= 0; i--) {
     const L = S.layers[i]; if (!L.visible || L.locked || L.type === 'bg' || !L._bounds) continue;
     if (!phase(L, T)) continue;
+    const a = rotOf(L);
+    if (a) { // forma girada: testa no espaço dela, sem o giro
+      const q = rotPt(camInv(camOf(L), pt), boxC(L._bounds), -a), b = L._bounds, p = 16;
+      if (q.x >= b.x - p && q.x <= b.x + b.w + p && q.y >= b.y - p && q.y <= b.y + b.h + p) return L;
+      continue;
+    }
     const b = visB(L), p = 16;
     if (pt.x >= b.x - p && pt.x <= b.x + b.w + p && pt.y >= b.y - p && pt.y <= b.y + b.h + p) return L;
   }
@@ -3472,6 +3698,9 @@ function hitTest(pt) {
 const hRad = () => 11 * W() / (cv.getBoundingClientRect().width || 1);
 const masked = L => L.type === 'image' && (L.mask === 'rect' || L.mask === 'circle');
 const resizable = L => masked(L) || L.type === 'shape' && L.kind !== 'custom' && L.kind !== 'line';
+// largura (size) e altura (mh) de forma/imagem não têm teto (pedido do usuário: esticar o quanto quiser além da borda;
+// os buffers de efeito já se limitam sozinhos em rasterFx)
+const SZ_MAX = Infinity, MH_MAX = Infinity;
 // caixa que envolve toda a seleção (grupo ou vários), só das camadas que estão na tela agora
 function selUnion() {
   const fb = flowFrameSel(); if (fb) return fb; // grupo com layout: a caixa é o frame dele
@@ -3482,23 +3711,58 @@ function selUnion() {
 // Oito alças em todo elemento (e na seleção de vários): canto = escala tudo de uma vez a partir do canto oposto; lado = depende do tipo
 // (imagem com máscara e forma: só largura ou só altura; texto: largura de quebra nas laterais; linha: comprimento e espessura; o resto escala).
 // Alt ao arrastar escala a partir do centro. [hx, hy] = para que lado a alça puxa.
+// rotação (só forma tem): L.rot em graus, em torno do centro. A caixa da seleção e as alças giram junto
+const rotOf = L => L && L.type === 'shape' && L.rot ? L.rot * Math.PI / 180 : 0;
+const boxC = b => ({ x:b.x + b.w / 2, y:b.y + b.h / 2 });
+const rotPt = (p, c, a) => { const co = Math.cos(a), si = Math.sin(a), x = p.x - c.x, y = p.y - c.y; return { x:c.x + x * co - y * si, y:c.y + x * si + y * co }; };
+// contorno da camada (com folga p) no que se vê na tela: quatro cantos, já com o giro e a câmera
+const quadOf = (L, p) => { const b = L._bounds, a = rotOf(L), c = boxC(b), cm = camOf(L);
+  return [[b.x - p, b.y - p], [b.x + b.w + p, b.y - p], [b.x + b.w + p, b.y + b.h + p], [b.x - p, b.y + b.h + p]].map(([x, y]) => camFwd(cm, a ? rotPt({ x, y }, c, a) : { x, y })); };
+const ROT_ARC = 'M5 12a7 7 0 0 1 12-4.9M19 12a7 7 0 0 1-12 4.9';
+const ROT_CUR = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="' + ROT_ARC + '" fill="none" stroke="#101115" stroke-width="4.2" stroke-linecap="round"/><path d="' + ROT_ARC + '" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><path d="M13.5 3.5l4.2 3.3-4.9 1.8zM10.5 20.5l-4.2-3.3 4.9-1.8z" fill="#fff" stroke="#101115" stroke-width="1.2" stroke-linejoin="round"/></svg>') + '") 12 12, alias';
 const HDIR = { nw:[-1, -1], n:[0, -1], ne:[1, -1], e:[1, 0], se:[1, 1], s:[0, 1], sw:[-1, 1], w:[-1, 0] };
 const HCUR = { nw:'nwse-resize', se:'nwse-resize', ne:'nesw-resize', sw:'nesw-resize', n:'ns-resize', s:'ns-resize', e:'ew-resize', w:'ew-resize' };
 function handlesOf(L) {
   const ub = playing ? null : selUnion(), p = 14;
+  if (RT.pen || RT.vec) return []; // caneta e edição de pontos: sem alças de escala
   if (!ub && (!L || L.type === 'bg' || L.locked || !L._bounds || !L.visible || playing || !phase(L, T))) return [];
   const b = ub || L._bounds, x0 = b.x - p, y0 = b.y - p, x1 = b.x + b.w + p, y1 = b.y + b.h + p, mx = b.x + b.w / 2, my = b.y + b.h / 2;
   const at = { nw:[x0, y0], n:[mx, y0], ne:[x1, y0], e:[x1, my], se:[x1, y1], s:[mx, y1], sw:[x0, y1], w:[x0, my] };
   const min = hRad() * 1.9; // alça de lado que encostaria nas de canto some (elemento pequeno no zoom baixo)
   // padrão: só o canto escala; o lado só existe onde muda outra coisa (frame: tamanho; texto: largura da caixa; máscara, forma e linha: largura ou altura)
   const sideOk = k => { const [kx, ky] = HDIR[k]; if (kx && ky) return true; if (ub) return !!ub.gid; if (L.type === 'text') return ky === 0; return resizable(L) || (L.type === 'shape' && L.kind === 'line'); };
-  const cm = camOf(L); // x/y = onde a alça aparece na tela; lx/ly = o mesmo ponto no espaço da camada (as contas de escala partem dele)
+  const cm = camOf(L), ra = ub ? 0 : rotOf(L), rc = { x:mx, y:my }; // x/y = onde a alça aparece na tela (com giro e câmera); lx/ly = o mesmo ponto no espaço da camada, sem giro (as contas de escala partem dele)
   return Object.keys(HDIR).filter(sideOk).filter(k => !(HDIR[k][0] === 0 && b.w / 2 + p < min) && !(HDIR[k][1] === 0 && b.h / 2 + p < min))
-    .map(k => { const v = camFwd(cm, { x:at[k][0], y:at[k][1] }); return { k, hx:HDIR[k][0], hy:HDIR[k][1], x:v.x, y:v.y, lx:at[k][0], ly:at[k][1], grp:!!ub }; });
+    .map(k => { const v = camFwd(cm, ra ? rotPt({ x:at[k][0], y:at[k][1] }, rc, ra) : { x:at[k][0], y:at[k][1] }); return { k, hx:HDIR[k][0], hy:HDIR[k][1], x:v.x, y:v.y, lx:at[k][0], ly:at[k][1], grp:!!ub }; });
 }
 function handleAt(pt) {
   const r = hRad() * 1.3, d = q => Math.hypot(pt.x - q.x, pt.y - q.y);
-  return handlesOf(selL()).filter(q => Math.abs(pt.x - q.x) <= r && Math.abs(pt.y - q.y) <= r).sort((a, b) => d(a) - d(b))[0] || null;
+  const hs = handlesOf(selL()), hit = hs.filter(q => Math.abs(pt.x - q.x) <= r && Math.abs(pt.y - q.y) <= r).sort((a, b) => d(a) - d(b))[0];
+  if (hit) return hit;
+  // forma: logo fora de uma quina (como no Figma) gira
+  const L = selL(), cs = L && L.type === 'shape' && !L.locked && !playing && pickedLayers().length === 1 ? hs.filter(q => q.hx && q.hy) : [];
+  if (cs.length) {
+    const rr = hRad() * 3.6, q = cs.filter(c => d(c) <= rr).sort((a, b) => d(a) - d(b))[0];
+    if (q) { // dentro da caixa continua sendo mover
+      const l = rotPt(camInv(camOf(L), pt), boxC(L._bounds), -rotOf(L)), b = L._bounds, p = 14;
+      if (l.x < b.x - p || l.x > b.x + b.w + p || l.y < b.y - p || l.y > b.y + b.h + p) return { k:'rot', rot:true, hx:0, hy:0, x:q.x, y:q.y };
+    }
+  }
+  return null;
+}
+// gira a forma em torno do centro: Shift trava de 15 em 15°
+function startRotate(ev, pt) {
+  const L = selL(), c = boxC(L._bounds), cm = camOf(L); pushUndo();
+  const p0 = cm ? camInv(cm, pt) : pt;
+  RT.drag = { L, mode:'rot', C:c, a0:Math.atan2(p0.y - c.y, p0.x - c.x), r0:L.rot || 0 };
+  cv.setPointerCapture(ev.pointerId);
+}
+function rotateTo(D, pt, ev) {
+  let r = D.r0 + (Math.atan2(pt.y - D.C.y, pt.x - D.C.x) - D.a0) * 180 / Math.PI;
+  if (ev.shiftKey) r = Math.round(r / 15) * 15;
+  r = ((r + 180) % 360 + 360) % 360 - 180; r = Math.round(r * 10) / 10;
+  D.L.rot = r; D.show = r;
+  const i = document.getElementById(fid(D.L, 'rot')); if (i) { i.value = r; const o = i.parentElement.querySelector('.num'); if (o && document.activeElement !== o) o.value = Math.round(r) + '°'; }
 }
 // devolve a escala que valeu de fato (os limites e o arredondamento do tamanho podem segurar um pouco)
 function scaleLayer(L, s0, f) {
@@ -3508,15 +3772,18 @@ function scaleLayer(L, s0, f) {
     return L.size / s0.size;
   }
   if (L.type === 'cta') { L.size = Math.round(clamp(s0.size * f, 8, 200)); L.padX = Math.round(s0.padX * f); L.padY = Math.round(s0.padY * f); return L.size / s0.size; }
-  L.size = clamp(s0.size * f, .03, 1.6); if (s0.mh != null) L.mh = clamp(s0.mh * f, .03, 2.6);
+  L.size = clamp(s0.size * f, .03, SZ_MAX); if (s0.mh != null) L.mh = clamp(s0.mh * f, .03, MH_MAX);
   return L.size / s0.size;
 }
 // começa a puxar uma alça (vale no quadro e na mesa em volta dele)
 function startResize(ev, pt, hd) {
   const grp = hd.grp, L = selL(), b = grp ? selUnion() : L._bounds; if (!b) return;
-  const cm = camOf(L); if (cm) { pt = camInv(cm, pt); hd = { ...hd, x:hd.lx, y:hd.ly }; } // tudo no espaço da camada
+  const cm = camOf(L), ra = grp ? 0 : rotOf(L), cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  if (cm) pt = camInv(cm, pt);
+  if (ra) pt = rotPt(pt, { x:cx, y:cy }, -ra); // tudo no espaço da camada, sem o giro da forma
+  if (cm || ra) hd = { ...hd, x:hd.lx, y:hd.ly };
   pushUndo();
-  const cx = b.x + b.w / 2, cy = b.y + b.h / 2, { hx, hy } = hd;
+  const { hx, hy } = hd;
   let how = 'uni'; // uni = escala tudo; wid/hei = só largura/altura; tw = largura de quebra do texto; thick = espessura da linha
   if (!grp) {
     if (resizable(L)) how = hy === 0 ? 'wid' : hx === 0 ? 'hei' : 'uni';
@@ -3525,13 +3792,15 @@ function startResize(ev, pt, hd) {
     if (resizable(L) && L.mh == null) L.mh = (S.format === baseFmt() ? b.h : blockGeom(L).h) / W(); // fora do principal a altura na tela pode estar esticada
   }
   const items = (grp ? freePicked().filter(o => o._bounds) : [L]).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y, ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2, s0:{ ...size0(o), strokeW:o.strokeW } }; });
-  RT.drag = { L, mode:'rs', how, hx, hy, pt0:pt, items, off:{ x:pt.x - hd.x, y:pt.y - hd.y }, b0:{ w:b.w, h:b.h }, C:{ x:cx, y:cy }, g0:grp ? null : geomNow(L),
+  RT.drag = { L, mode:'rs', how, hx, hy, pt0:pt, rotA:ra, items, off:{ x:pt.x - hd.x, y:pt.y - hd.y }, b0:{ w:b.w, h:b.h }, C:{ x:cx, y:cy }, g0:grp ? null : geomNow(L),
     A:{ x:cx - hx * b.w / 2, y:cy - hy * b.h / 2 }, H0:{ x:cx + hx * b.w / 2, y:cy + hy * b.h / 2 }, s0:items[0].s0, k:b.k || 1, bw:b.w / (b.k || 1),
     fl:grp ? flowScale(items.map(q => q.o)) : null, fg:grp && b.gid || null }; // grupo com layout: o espaço (e o frame) escala junto
   // frame do grupo com layout: os lados mudam o tamanho dele; os cantos escalam tudo junto (como antes)
   if (b.gid && (hx === 0 || hy === 0)) Object.assign(RT.drag, { how:'frame', gid:b.gid, B0:{ x0:b.x, y0:b.y, x1:b.x + b.w, y1:b.y + b.h } }); // alça do frame: muda o tamanho dele
   cv.setPointerCapture(ev.pointerId);
 }
+// deslocamento do centro calculado no espaço da forma (sem giro) -> na tela
+const rotV = (D, dx, dy) => D.rotA ? rotPt({ x:dx, y:dy }, { x:0, y:0 }, D.rotA) : { x:dx, y:dy };
 // puxa a alça: o lado oposto fica parado (Alt: o centro fica parado)
 function resizeTo(D, pt, ev) {
   const p = 14, { hx, hy, L } = D, alt = ev.altKey, q0 = D.items[0], span = alt ? 2 : 1;
@@ -3549,15 +3818,17 @@ function resizeTo(D, pt, ev) {
     // fora do formato principal a máscara muda só neste formato (fpos ww/hh, px do bloco antes da escala)
     if (D.how === 'wid') {
       let aw; // largura que valeu de fato
-      if (fmtOwn()) { aw = clamp(span * dist, 8, W() * 3); setFmt(L, { ww:+(D.g0.w * aw / D.b0.w).toFixed(2) }); }
-      else { L.size = clamp(D.s0.size * Math.max(8, span * dist) / D.b0.w, .03, 1.6); aw = D.b0.w * L.size / D.s0.size; }
-      setPos(L, +(q0.x0 + ((alt ? 0 : A.x + hx * aw / 2 - D.C.x)) / W()).toFixed(4), null);
+      if (fmtOwn()) { aw = clamp(span * dist, 8, W() * SZ_MAX); setFmt(L, { ww:+(D.g0.w * aw / D.b0.w).toFixed(2) }); }
+      else { L.size = clamp(D.s0.size * Math.max(8, span * dist) / D.b0.w, .03, SZ_MAX); aw = D.b0.w * L.size / D.s0.size; }
+      const v = rotV(D, alt ? 0 : A.x + hx * aw / 2 - D.C.x, 0); // o centro anda no espaço da forma; com giro, na diagonal
+      setPos(L, +(q0.x0 + v.x / W()).toFixed(4), D.rotA ? +(q0.y0 + v.y / H()).toFixed(4) : null);
     } else {
       let ah;
-      if (D.how === 'hei' && fmtOwn()) { ah = clamp(span * dist, 8, W() * 3); setFmt(L, { hh:+(D.g0.h * ah / D.b0.h).toFixed(2) }); }
-      else if (D.how === 'hei') { L.mh = clamp(D.s0.mh * Math.max(8, span * dist) / D.b0.h, .03, 2.6); ah = D.b0.h * L.mh / D.s0.mh; }
+      if (D.how === 'hei' && fmtOwn()) { ah = clamp(span * dist, 8, W() * MH_MAX); setFmt(L, { hh:+(D.g0.h * ah / D.b0.h).toFixed(2) }); }
+      else if (D.how === 'hei') { L.mh = clamp(D.s0.mh * Math.max(8, span * dist) / D.b0.h, .03, MH_MAX); ah = D.b0.h * L.mh / D.s0.mh; }
       else { const s = Math.max(4, D.s0.strokeW || 8); L.strokeW = clamp(Math.round(s * Math.max(2, span * dist) / D.b0.h), 1, 80); ah = D.b0.h * Math.max(4, L.strokeW) / s; }
-      setPos(L, null, +(q0.y0 + ((alt ? 0 : A.y + hy * ah / 2 - D.C.y)) / H()).toFixed(4));
+      const v = rotV(D, 0, alt ? 0 : A.y + hy * ah / 2 - D.C.y);
+      setPos(L, D.rotA ? +(q0.x0 + v.x / W()).toFixed(4) : null, +(q0.y0 + v.y / H()).toFixed(4));
     }
     return;
   }
@@ -3566,10 +3837,11 @@ function resizeTo(D, pt, ev) {
   const put = f => {
     for (const q of D.items) {
       const a = scaleAny(q.o, q.s0, f);
-      setPos(q.o, +(q.x0 + (A.x + (q.ox - A.x) * a - q.ox) / W()).toFixed(5), +(q.y0 + (A.y + (q.oy - A.y) * a - q.oy) / H()).toFixed(5));
+      const v = rotV(D, A.x + (q.ox - A.x) * a - q.ox, A.y + (q.oy - A.y) * a - q.oy);
+      setPos(q.o, +(q.x0 + v.x / W()).toFixed(5), +(q.y0 + v.y / H()).toFixed(5));
     }
     if (D.fl) D.fl(f);
-    return rsPin(D, alt);
+    return D.rotA ? 0 : rsPin(D, alt); // forma girada não tem margem: a quina oposta já fica parada pela conta acima
   };
   // encostou na margem (texto, logo e botão não passam dela): para de crescer em vez de ser empurrado para dentro
   let fz = f;
@@ -3607,7 +3879,7 @@ cv.addEventListener('pointerdown', ev => {
   if (ev.button === 1) { panStage(ev); return; }
   if (ev.button === 2) return; // botão direito abre o menu (contextmenu)
   let pt = stagePt(ev), hd = handleAt(pt);
-  if (hd) { startResize(ev, pt, hd); return; }
+  if (hd) { hd.rot ? startRotate(ev, pt) : startResize(ev, pt, hd); return; }
   const gp = flowGapAt(pt); if (gp) { startGapDrag(ev, pt, gp); return; } // espaço do layout automático
   const L = hitTest(pt);
   if (!L) { marquee(ev); return; }
@@ -3654,15 +3926,17 @@ cv.addEventListener('pointermove', ev => {
   if (!RT.drag) {
     if (RT.marq) return;
     const hd = handleAt(pt), gp = !hd && flowGapAt(pt), ht = !gp && hitTest(pt);
-    cv.style.cursor = hd ? HCUR[hd.k] : gp ? (gp.v ? 'row-resize' : 'col-resize') : ht ? (ev.altKey && ht.type === 'image' ? 'all-scroll' : 'move') : '';
+    cv.style.cursor = hd ? (hd.rot ? ROT_CUR : HCUR[hd.k]) : gp ? (gp.v ? 'row-resize' : 'col-resize') : ht ? (ev.altKey && ht.type === 'image' ? 'all-scroll' : 'move') : '';
     setHover(hd || gp ? null : ht && ht.id);
     const gk = gp && !gp.gid ? Math.round(gp.s0) : null; if (RT.gapHot !== gk) { RT.gapHot = gk; needs = true; } // espaço do quadro só aparece com o mouse em cima
     return;
   }
   const D = RT.drag, L = D.L;
-  if (D.mode === 'rs' || D.mode === 'pan' || D.mode === 'move') pt = camInv(camOf(D.mode === 'rs' ? selL() : L), pt);
+  if (D.mode === 'rs' || D.mode === 'pan' || D.mode === 'move' || D.mode === 'rot') pt = camInv(camOf(D.mode === 'rs' ? selL() : L), pt);
+  if (D.mode === 'rs' && D.rotA) pt = rotPt(pt, D.C, -D.rotA); // alça de forma girada: a conta é no espaço dela
   if (D.tap && Math.hypot(ev.clientX - D.pxy[0], ev.clientY - D.pxy[1]) > 3) D.tap = false;
   if (D.mode === 'gap') gapDrag(D, pt);
+  else if (D.mode === 'rot') rotateTo(D, pt, ev);
   else if (D.mode === 'rs') resizeTo(D, pt, ev); // largura de quebra do texto ('tw'): parte da largura real do bloco (não da máx.), senão o começo do arrasto não faz nada; +1 px para não quebrar no empate
   else if (D.mode === 'pan') setPan(L, clamp(D.ix0 + (pt.x - D.pt0.x) / D.bw, -2, 2), clamp(D.iy0 + (pt.y - D.pt0.y) / D.bh, -2, 2));
   else {
@@ -3712,6 +3986,7 @@ function drillSelect(L) {
   RT.picks = new Set(gleaves(next).map(l => l.id)); RT.selected = L.id; renderLayers(); renderProps(); needs = true;
 }
 cv.addEventListener('dblclick', ev => {
+  if (RT.pen || RT.vec) return; // caneta e edição de pontos tratam o clique sozinhas
   const L = hitTest(stagePt(ev)); if (!L) return;
   if (L.grp && pickedLayers().length > 1) { drillSelect(L); return; }
   editText(L);
@@ -3726,13 +4001,314 @@ $('#stageBox').addEventListener('pointerdown', e => {
   if (e.button === 1) { panStage(e); return; }
   if (e.button !== 0 || onScrollbar(e)) return;
   const pt = stagePt(e), hd = handleAt(pt);
-  if (hd) { startResize(e, pt, hd); return; }
+  if (hd) { hd.rot ? startRotate(e, pt) : startResize(e, pt, hd); return; }
   marquee(e);
 });
 $('#stageBox').addEventListener('pointermove', e => {
   if (RT.drag || RT.marq || e.target.closest('#cv') || e.target.closest('#stageHint')) return;
-  const hd = handleAt(stagePt(e)); $('#stageBox').style.cursor = hd ? HCUR[hd.k] : '';
+  const hd = handleAt(stagePt(e)); $('#stageBox').style.cursor = hd ? (hd.rot ? ROT_CUR : HCUR[hd.k]) : '';
 });
+/* ------------ caneta (P) e edição de pontos do vetor ------------ */
+// A caneta desenha uma forma "Vetor" (kind 'custom'): o d continua sendo a verdade do desenho e `L.vec` guarda os pontos para editar,
+// [{ pts:[{ x, y, ix, iy, ox, oy }], closed }] no espaço do d (alça de entrada i, de saída o; alça em cima do ponto = sem alça).
+// `L.vecD` = o d que saiu deles: se o d for trocado à mão no painel, os pontos são lidos de novo dele (`vecOf`/`vecParse`; arco não entra).
+// Criando (`RT.pen`) os pontos ficam no espaço do quadro e só viram camada no fim; editando (`RT.vec`) o resto da forma fica parado na tela
+// (`vecApply` refaz tamanho e posição pela caixa nova do d).
+const PEN_C = '#F2B632', vr2 = v => Math.round(v * 100) / 100;
+const hasH = (a, w) => Math.abs(a[w + 'x'] - a.x) + Math.abs(a[w + 'y'] - a.y) > .01;
+const vecPt = (x, y) => ({ x, y, ix:x, iy:y, ox:x, oy:y });
+const pxU = () => W() / (cv.getBoundingClientRect().width || 1); // 1 px da tela em unidades do vídeo
+function snap45(a, p) { const r = Math.hypot(p.x - a.x, p.y - a.y), g = Math.round(Math.atan2(p.y - a.y, p.x - a.x) / (Math.PI / 4)) * Math.PI / 4; return { x:a.x + Math.cos(g) * r, y:a.y + Math.sin(g) * r }; }
+const bezAt = (a, b, t) => { const u = 1 - t; return { x:u * u * u * a.x + 3 * u * u * t * a.ox + 3 * u * t * t * b.ix + t * t * t * b.x, y:u * u * u * a.y + 3 * u * u * t * a.oy + 3 * u * t * t * b.iy + t * t * t * b.y }; };
+function vecD(paths) {
+  const seg = (a, b) => hasH(a, 'o') || hasH(b, 'i') ? `C${vr2(a.ox)} ${vr2(a.oy)} ${vr2(b.ix)} ${vr2(b.iy)} ${vr2(b.x)} ${vr2(b.y)}` : `L${vr2(b.x)} ${vr2(b.y)}`;
+  let d = '';
+  for (const sp of paths) {
+    const P = sp.pts; if (!P.length) continue;
+    d += `M${vr2(P[0].x)} ${vr2(P[0].y)}`;
+    for (let i = 1; i < P.length; i++) d += seg(P[i - 1], P[i]);
+    if (sp.closed && P.length > 1) { const s = seg(P[P.length - 1], P[0]); d += (s[0] === 'L' ? '' : s) + 'Z'; }
+  }
+  return d;
+}
+// d do SVG -> pontos (M L H V C S Q T Z, absolutos e relativos; quadrática vira cúbica). Arco (A) devolve null
+function vecParse(d) {
+  const tk = String(d || '').match(/[a-zA-Z]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) || [], isN = s => s != null && !/[a-zA-Z]/.test(s);
+  const paths = []; let sp = null, cx = 0, cy = 0, sx = 0, sy = 0, cmd = '', i = 0, lc = null, lq = null;
+  const n = () => +tk[i++];
+  while (i < tk.length) {
+    if (!isN(tk[i])) cmd = tk[i++];
+    const C = cmd.toUpperCase(), rel = cmd !== C, ox = rel ? cx : 0, oy = rel ? cy : 0;
+    if (C === 'Z') {
+      if (sp && sp.pts.length > 1) { const P = sp.pts, a = P[P.length - 1], b = P[0]; sp.closed = true; if (Math.hypot(a.x - b.x, a.y - b.y) < .01) { b.ix = a.ix; b.iy = a.iy; P.pop(); } }
+      cx = sx; cy = sy; sp = null; lc = lq = null; cmd = ''; continue;
+    }
+    if (!C || !isN(tk[i])) return null;
+    if (C === 'M') { cx = sx = n() + ox; cy = sy = n() + oy; sp = { pts:[vecPt(cx, cy)], closed:false }; paths.push(sp); cmd = rel ? 'l' : 'L'; lc = lq = null; continue; }
+    if (!sp) { sp = { pts:[vecPt(cx, cy)], closed:false }; paths.push(sp); }
+    let x = cx, y = cy, c1 = null, c2 = null;
+    if (C === 'L') { x = n() + ox; y = n() + oy; }
+    else if (C === 'H') x = n() + ox;
+    else if (C === 'V') y = n() + oy;
+    else if (C === 'C' || C === 'S') { c1 = C === 'C' ? [n() + ox, n() + oy] : lc ? [2 * cx - lc[0], 2 * cy - lc[1]] : [cx, cy]; c2 = [n() + ox, n() + oy]; x = n() + ox; y = n() + oy; }
+    else if (C === 'Q' || C === 'T') { const q = C === 'Q' ? [n() + ox, n() + oy] : lq ? [2 * cx - lq[0], 2 * cy - lq[1]] : [cx, cy]; x = n() + ox; y = n() + oy; c1 = [cx + (q[0] - cx) * 2 / 3, cy + (q[1] - cy) * 2 / 3]; c2 = [x + (q[0] - x) * 2 / 3, y + (q[1] - y) * 2 / 3]; lq = q; }
+    else return null;
+    lc = C === 'C' || C === 'S' ? c2 : null; if (C !== 'Q' && C !== 'T') lq = null;
+    const P = sp.pts, a = P[P.length - 1], q = vecPt(x, y);
+    if (c1) { a.ox = c1[0]; a.oy = c1[1]; q.ix = c2[0]; q.iy = c2[1]; }
+    P.push(q); cx = x; cy = y;
+  }
+  const ok = paths.filter(p => p.pts.length > 1);
+  return ok.length && ok.every(p => p.pts.every(q => [q.x, q.y, q.ix, q.iy, q.ox, q.oy].every(Number.isFinite))) ? ok : null;
+}
+function vecOf(L) {
+  if (!L || L.type !== 'shape' || L.kind !== 'custom') return null;
+  if (!L.vec || L.vecD !== L.d) { const p = vecParse(L.d); if (!p) return null; L.vec = p; L.vecD = L.d; }
+  return L.vec;
+}
+// espaço do d -> tela (posição, escala do formato, rotação e câmera) e de volta
+function vecMap(L) {
+  const G = geomNow(L), b = G && G.cust; if (!b) return null;
+  const pl = placeOf(L), a = (L.rot || 0) * Math.PI / 180;
+  return { s:G.w / b.w * pl.k, k:pl.k, co:Math.cos(a), si:Math.sin(a), ax:pl.x * W(), ay:pl.y * H(), bx:b.x + b.w / 2, by:b.y + b.h / 2, cam:camOf(L) };
+}
+const vecFwd = (M, x, y) => { const u = (x - M.bx) * M.s, v = (y - M.by) * M.s; return camFwd(M.cam, { x:M.ax + u * M.co - v * M.si, y:M.ay + u * M.si + v * M.co }); };
+function vecInv(M, p) { p = camInv(M.cam, p); const u = (p.x - M.ax) / M.s, v = (p.y - M.ay) / M.s; return { x:M.bx + (u * M.co + v * M.si), y:M.by + (-u * M.si + v * M.co) }; }
+// grava o d novo; tamanho e centro acompanham a caixa nova, então o que não foi mexido fica onde estava na tela
+function vecApply(L, M) {
+  const d = vecD(L.vec); if (!d) return;
+  L.d = L.vecD = d; if (CUST.size > 400) CUST.clear();
+  const b = customBox(d), bx = b.x + b.w / 2, by = b.y + b.h / 2, u = (bx - M.bx) * M.s, v = (by - M.by) * M.s;
+  M.ax += u * M.co - v * M.si; M.ay += u * M.si + v * M.co; M.bx = bx; M.by = by;
+  L.size = b.w * M.s / (M.k || 1) / W();
+  setPos(L, M.ax / W(), M.ay / H()); needs = true;
+}
+function stageMode() { const b = $('#stageBox'); b.classList.toggle('pen', !!RT.pen); setHover(null); needs = true; }
+function penToolStart() { vecExit(); pause(); RT.pen = { pts:[], cur:null }; stageMode(); }
+function penToolCancel() { if (!RT.pen) return; RT.pen = null; stageMode(); }
+function penToolFinish(close) {
+  const P = RT.pen; penToolCancel(); if (!P || P.pts.length < 2) return;
+  const sp = { pts:P.pts, closed:!!close }, d = vecD([sp]), b = customBox(d);
+  // fechada: preenchimento como as outras formas; aberta: só o traço
+  addLayer(mkShape({ name:'Vetor', kind:'custom', d, vec:[sp], vecD:d, size:b.w / W(), in:'draw', inDur:BP.draw.dur, fill:!!close }), { x:(b.x + b.w / 2) / W(), y:(b.y + b.h / 2) / H() });
+}
+// clique = ponto de canto; arrastar = curva (alças simétricas; Alt solta a de entrada); Shift = 45°.
+// Clicar no primeiro ponto fecha; clicar de novo no último (ou clique duplo) termina aberta
+function penToolDown(e) {
+  const P = RT.pen, px = pxU(), pts = P.pts, last = pts[pts.length - 1], raw = stagePt(e);
+  const close = pts.length >= 2 && Math.hypot(raw.x - pts[0].x, raw.y - pts[0].y) <= 9 * px;
+  if (!close && last && Math.hypot(raw.x - last.x, raw.y - last.y) <= 6 * px) { if (pts.length >= 2) penToolFinish(false); return; }
+  const pt = e.shiftKey && last ? snap45(last, raw) : raw, q = close ? pts[0] : vecPt(pt.x, pt.y);
+  if (!close) pts.push(q);
+  const x0 = e.clientX, y0 = e.clientY; let moved = false;
+  const mv = ev => {
+    if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return;
+    moved = true; P.cur = null;
+    const hh = ev.shiftKey ? snap45(q, stagePt(ev)) : stagePt(ev);
+    if (close) { q.ix = 2 * q.x - hh.x; q.iy = 2 * q.y - hh.y; if (!ev.altKey) { q.ox = hh.x; q.oy = hh.y; } }
+    else { q.ox = hh.x; q.oy = hh.y; if (!ev.altKey) { q.ix = 2 * q.x - hh.x; q.iy = 2 * q.y - hh.y; } }
+    needs = true;
+  };
+  const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); if (close) penToolFinish(true); needs = true; };
+  addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  needs = true;
+}
+// edição de pontos: clique duplo num vetor, Enter ou "Editar pontos" no painel
+function vecEdit(L) {
+  if (!L || L.type !== 'shape' || L.kind !== 'custom') return false;
+  if (lockedNote(L)) return true;
+  if (!vecOf(L)) { toast('Este caminho tem arcos (comando A) e não dá para editar ponto a ponto. Desenhe com a caneta (P).', 4500); return true; }
+  penToolCancel();
+  if (RT.selected !== L.id || pickedLayers().length > 1) select(L.id, true);
+  const ph = phase(L, T); if (!ph || ph.mode !== 'hold') seekLayer(L);
+  RT.vec = { id:L.id, sel:null }; stageMode(); return true;
+}
+function vecExit() { if (!RT.vec) return; RT.vec = null; stageMode(); }
+// a camada em edição (sai sozinho se ela sumiu, foi trocada ou deixou de ser vetor)
+function vecL() {
+  const V = RT.vec; if (!V) return null;
+  const L = S.layers.find(l => l.id === V.id);
+  if (!L || RT.selected !== L.id || !L.visible || L.locked || !vecOf(L)) { vecExit(); return null; }
+  return L;
+}
+const vecSel = L => { const s = RT.vec && RT.vec.sel, sp = s && L.vec[s.si]; return sp && sp.pts[s.pi] ? s : null; };
+// alças à vista: as do ponto escolhido e as dos vizinhos que encostam nele (como no Figma)
+function vecKnobs(L, M) {
+  const s = vecSel(L), out = []; if (!s) return out;
+  const sp = L.vec[s.si], n = sp.pts.length;
+  const at = (pi, w) => {
+    const q = sp.pts[pi]; if (!q || !hasH(q, w) || (!sp.closed && ((w === 'i' && pi === 0) || (w === 'o' && pi === n - 1)))) return;
+    const a = vecFwd(M, q.x, q.y), b = vecFwd(M, q[w + 'x'], q[w + 'y']); out.push({ kind:'h', si:s.si, pi, w, ax:a.x, ay:a.y, x:b.x, y:b.y });
+  };
+  const prev = s.pi > 0 ? s.pi - 1 : sp.closed ? n - 1 : -1, next = s.pi < n - 1 ? s.pi + 1 : sp.closed ? 0 : -1;
+  at(s.pi, 'i'); at(s.pi, 'o'); if (prev >= 0 && prev !== s.pi) at(prev, 'o'); if (next >= 0 && next !== s.pi) at(next, 'i');
+  return out;
+}
+// o que está sob o cursor: alça, ponto ou trecho da linha (com o t do ponto mais perto)
+function vecHit(L, M, pt) {
+  const r = 7 * pxU(), d = (x, y) => Math.hypot(pt.x - x, pt.y - y);
+  for (const k of vecKnobs(L, M)) if (d(k.x, k.y) <= r) return k;
+  for (let si = 0; si < L.vec.length; si++) for (let pi = 0; pi < L.vec[si].pts.length; pi++) {
+    const q = L.vec[si].pts[pi], a = vecFwd(M, q.x, q.y); if (d(a.x, a.y) <= r) return { kind:'p', si, pi };
+  }
+  let best = null;
+  L.vec.forEach((sp, si) => {
+    const P = sp.pts, n = P.length, m = sp.closed ? n : n - 1;
+    for (let j = 0; j < m; j++) {
+      const a = P[j], b = P[(j + 1) % n]; let p0 = vecFwd(M, a.x, a.y), t0 = 0;
+      for (let k = 1; k <= 48; k++) {
+        const t1 = k / 48, q = bezAt(a, b, t1), p1 = vecFwd(M, q.x, q.y), vx = p1.x - p0.x, vy = p1.y - p0.y;
+        const u = clamp(((pt.x - p0.x) * vx + (pt.y - p0.y) * vy) / (vx * vx + vy * vy || 1)), dd = d(p0.x + vx * u, p0.y + vy * u);
+        if (dd <= r && (!best || dd < best.dd)) best = { kind:'seg', si, pi:j, t:t0 + (t1 - t0) * u, dd };
+        p0 = p1; t0 = t1;
+      }
+    }
+  });
+  return best && best.t > .01 && best.t < .99 ? best : null;
+}
+// ponto novo no meio de um trecho, sem mudar o desenho (de Casteljau)
+function vecSplit(L, hit) {
+  const P = L.vec[hit.si].pts, a = P[hit.pi], b = P[(hit.pi + 1) % P.length], t = hit.t;
+  let q;
+  if (!hasH(a, 'o') && !hasH(b, 'i')) q = vecPt(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+  else {
+    const lp = (p, r) => ({ x:p.x + (r.x - p.x) * t, y:p.y + (r.y - p.y) * t });
+    const p01 = lp(a, { x:a.ox, y:a.oy }), p12 = lp({ x:a.ox, y:a.oy }, { x:b.ix, y:b.iy }), p23 = lp({ x:b.ix, y:b.iy }, b), p012 = lp(p01, p12), p123 = lp(p12, p23), m = lp(p012, p123);
+    a.ox = p01.x; a.oy = p01.y; b.ix = p23.x; b.iy = p23.y;
+    q = { x:m.x, y:m.y, ix:p012.x, iy:p012.y, ox:p123.x, oy:p123.y };
+  }
+  P.splice(hit.pi + 1, 0, q);
+}
+// Alt + clique no ponto: curva vira canto (tira as alças) e canto vira curva (alças na direção dos vizinhos)
+function vecToggle(L, si, pi) {
+  const sp = L.vec[si], P = sp.pts, n = P.length, q = P[pi];
+  if (hasH(q, 'i') || hasH(q, 'o')) { q.ix = q.ox = q.x; q.iy = q.oy = q.y; return; }
+  const pr = P[pi > 0 ? pi - 1 : sp.closed ? n - 1 : pi], nx = P[pi < n - 1 ? pi + 1 : sp.closed ? 0 : pi];
+  let dx = nx.x - pr.x, dy = nx.y - pr.y; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l;
+  const li = Math.hypot(q.x - pr.x, q.y - pr.y) / 3, lo = Math.hypot(nx.x - q.x, nx.y - q.y) / 3;
+  q.ix = q.x - dx * li; q.iy = q.y - dy * li; q.ox = q.x + dx * lo; q.oy = q.y + dy * lo;
+}
+// arrastar ponto (leva as alças; Shift trava o eixo; Alt puxa alças novas), alça (a oposta alinhada continua alinhada; Alt solta) ou trecho (cria ponto e arrasta)
+function vecDown(e, L, M, hit) {
+  let undone = false; const once = () => { if (!undone) { pushUndo(); undone = true; } };
+  if (hit.kind === 'seg') { once(); vecSplit(L, hit); vecApply(L, M); hit = { kind:'p', si:hit.si, pi:hit.pi + 1 }; }
+  if (hit.kind === 'p') RT.vec.sel = { si:hit.si, pi:hit.pi };
+  const q = L.vec[hit.si].pts[hit.pi], st = { ...q }, alt = e.altKey, x0 = e.clientX, y0 = e.clientY;
+  const w = hit.w, opp = w && (w === 'i' ? 'o' : 'i');
+  const ang = k => Math.atan2(q[k + 'y'] - q.y, q[k + 'x'] - q.x);
+  const lined = !!opp && hasH(q, opp) && Math.abs(Math.abs(Math.atan2(Math.sin(ang(w) - ang(opp)), Math.cos(ang(w) - ang(opp)))) - Math.PI) < .07;
+  const oppLen = opp ? Math.hypot(q[opp + 'x'] - q.x, q[opp + 'y'] - q.y) : 0;
+  let moved = false;
+  const mv = ev => {
+    if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return;
+    moved = true; once();
+    let p = stagePt(ev);
+    if (hit.kind === 'p' && !alt) {
+      const p0 = vecFwd(M, st.x, st.y); if (ev.shiftKey) { if (Math.abs(p.x - p0.x) > Math.abs(p.y - p0.y)) p.y = p0.y; else p.x = p0.x; }
+      const g = vecInv(M, p), dx = g.x - st.x, dy = g.y - st.y;
+      Object.assign(q, { x:st.x + dx, y:st.y + dy, ix:st.ix + dx, iy:st.iy + dy, ox:st.ox + dx, oy:st.oy + dy });
+    } else if (hit.kind === 'p') {
+      if (ev.shiftKey) p = snap45(vecFwd(M, q.x, q.y), p);
+      const g = vecInv(M, p); q.ox = g.x; q.oy = g.y; q.ix = 2 * q.x - g.x; q.iy = 2 * q.y - g.y;
+    } else {
+      if (ev.shiftKey) p = snap45(vecFwd(M, q.x, q.y), p);
+      const g = vecInv(M, p); q[w + 'x'] = g.x; q[w + 'y'] = g.y;
+      if (lined && !ev.altKey) { const a = Math.atan2(g.y - q.y, g.x - q.x) + Math.PI; q[opp + 'x'] = q.x + Math.cos(a) * oppLen; q[opp + 'y'] = q.y + Math.sin(a) * oppLen; }
+    }
+    vecApply(L, M);
+  };
+  const up = () => {
+    removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+    if (!moved && hit.kind === 'p' && alt) { once(); vecToggle(L, hit.si, hit.pi); vecApply(L, M); }
+    if (undone) changed({ props:true }); needs = true;
+  };
+  addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  needs = true;
+}
+function vecDelete(L) {
+  const s = vecSel(L); if (!s) return;
+  if (L.vec.reduce((a, p) => a + p.pts.length, 0) <= 2) { vecExit(); deleteLayer(L); return; }
+  const M = vecMap(L); pushUndo();
+  const sp = L.vec[s.si]; sp.pts.splice(s.pi, 1); if (sp.pts.length < 2) L.vec.splice(s.si, 1);
+  RT.vec.sel = null; vecApply(L, M); changed({ props:true });
+}
+let vecNT = null;
+function vecNudge(L, dx, dy) {
+  const s = vecSel(L); if (!s) return;
+  if (!vecNT) pushUndo(); clearTimeout(vecNT); vecNT = setTimeout(() => { vecNT = null; }, 700);
+  const q = L.vec[s.si].pts[s.pi], M = vecMap(L), a = vecFwd(M, q.x, q.y), g = vecInv(M, { x:a.x + dx, y:a.y + dy }), ddx = g.x - q.x, ddy = g.y - q.y;
+  q.x += ddx; q.y += ddy; q.ix += ddx; q.iy += ddy; q.ox += ddx; q.oy += ddy;
+  vecApply(L, M); changed();
+}
+// overlay (#ov, espaço do vídeo): caminho, pontos e alças
+function drawPenTool(ctx) {
+  if (playing || (!RT.pen && !RT.vec)) return;
+  const px = pxU(), lw = 1.5 * px;
+  const anchor = (x, y, on, big) => { const r = (big ? 5.5 : 3.5) * px; ctx.beginPath(); ctx.rect(x - r, y - r, r * 2, r * 2); ctx.fillStyle = on ? PEN_C : '#fff'; ctx.fill(); ctx.lineWidth = lw; ctx.strokeStyle = PEN_C; ctx.stroke(); };
+  const knob = (ax, ay, x, y) => {
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(x, y); ctx.lineWidth = px; ctx.strokeStyle = PEN_C; ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, 3 * px, 0, TAU); ctx.fillStyle = '#fff'; ctx.fill(); ctx.lineWidth = lw; ctx.stroke();
+  };
+  const trace = (pts, closed, f) => {
+    const p = new Path2D(); if (!pts.length) return p;
+    const a0 = f(pts[0].x, pts[0].y); p.moveTo(a0.x, a0.y);
+    const seg = (a, b) => { const c1 = f(a.ox, a.oy), c2 = f(b.ix, b.iy), e = f(b.x, b.y); p.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, e.x, e.y); };
+    for (let i = 1; i < pts.length; i++) seg(pts[i - 1], pts[i]);
+    if (closed && pts.length > 1) { seg(pts[pts.length - 1], pts[0]); p.closePath(); }
+    return p;
+  };
+  ctx.save(); ctx.setLineDash([]); ctx.lineWidth = lw; ctx.strokeStyle = PEN_C;
+  if (RT.pen) {
+    const P = RT.pen, pts = P.pts, last = pts[pts.length - 1], id = (x, y) => ({ x, y });
+    const hot = !!P.cur && pts.length >= 2 && Math.hypot(P.cur.x - pts[0].x, P.cur.y - pts[0].y) <= 9 * px;
+    ctx.stroke(trace(pts, false, id));
+    if (last && P.cur) { // o próximo trecho, até o cursor
+      const e = hot ? pts[0] : P.shift ? snap45(last, P.cur) : P.cur;
+      ctx.globalAlpha = .55; ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.bezierCurveTo(last.ox, last.oy, hot ? e.ix : e.x, hot ? e.iy : e.y, e.x, e.y); ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    pts.forEach((q, i) => anchor(q.x, q.y, i === pts.length - 1, i === 0 && hot));
+    for (const q of [pts[0], last]) if (q) { if (hasH(q, 'i') && q !== pts[0]) knob(q.x, q.y, q.ix, q.iy); if (hasH(q, 'o') && (q === last || pts.length === 1)) knob(q.x, q.y, q.ox, q.oy); }
+  }
+  const L = vecL(), M = L && vecMap(L);
+  if (M) {
+    const f = (x, y) => vecFwd(M, x, y), s = vecSel(L);
+    L.vec.forEach(sp => ctx.stroke(trace(sp.pts, sp.closed, f)));
+    for (const k of vecKnobs(L, M)) knob(k.ax, k.ay, k.x, k.y);
+    L.vec.forEach((sp, si) => sp.pts.forEach((q, pi) => { const a = f(q.x, q.y); anchor(a.x, a.y, !!s && s.si === si && s.pi === pi); }));
+  }
+  ctx.restore();
+}
+// pega antes do palco (na fase de captura): a mão (espaço) continua valendo, o botão do meio continua arrastando
+$('#stageBox').addEventListener('pointerdown', e => {
+  if (!(RT.pen || RT.vec) || RT.hand || e.button !== 0 || onScrollbar(e) || e.target.closest('#stageHint')) return;
+  if (RT.pen) { e.stopPropagation(); e.preventDefault(); penToolDown(e); return; }
+  const L = vecL(), M = L && vecMap(L), hit = M && vecHit(L, M, stagePt(e));
+  if (!hit) { vecExit(); return; } // clique fora: sai da edição e o clique segue normal (seleciona outro, área, solta)
+  e.stopPropagation(); e.preventDefault(); vecDown(e, L, M, hit);
+}, true);
+$('#stageBox').addEventListener('pointermove', e => {
+  if (!(RT.pen || RT.vec) || RT.hand) return;
+  e.stopPropagation();
+  if (RT.pen) { RT.pen.cur = stagePt(e); RT.pen.shift = e.shiftKey; needs = true; return; }
+  const L = vecL(), M = L && vecMap(L), hit = M && vecHit(L, M, stagePt(e)), c = !hit ? '' : hit.kind === 'seg' ? 'copy' : 'move';
+  cv.style.cursor = c; $('#stageBox').style.cursor = c;
+}, true);
+addEventListener('keydown', e => {
+  if (!(RT.pen || RT.vec) || typingIn(e.target) || overlayOpen()) return;
+  const k = e.key, kl = k.toLowerCase(), mod = e.ctrlKey || e.metaKey; let ok = true;
+  if (RT.pen) {
+    if (k === 'Escape' || k === 'Enter' || (kl === 'p' && !mod)) penToolFinish(false);
+    else if (k === 'Backspace' || k === 'Delete' || (mod && kl === 'z' && !e.shiftKey)) { RT.pen.pts.pop(); if (!RT.pen.pts.length) penToolCancel(); needs = true; }
+    else ok = false;
+  } else {
+    const L = vecL(); if (!L) return;
+    if (k === 'Escape' || k === 'Enter') vecExit();
+    else if (k === 'Backspace' || k === 'Delete') vecDelete(L);
+    else if (k.startsWith('Arrow') && vecSel(L)) { const s = e.shiftKey ? 10 : 1; vecNudge(L, ((k === 'ArrowRight') - (k === 'ArrowLeft')) * s, ((k === 'ArrowDown') - (k === 'ArrowUp')) * s); }
+    else ok = false;
+  }
+  if (ok) { e.preventDefault(); e.stopPropagation(); }
+}, true);
 function selectBg() { const bg = S.layers.find(l => l.type === 'bg'); if (bg) select(bg.id); }
 function setHover(id) { id = id || null; if (RT.hover !== id) { RT.hover = id; needs = true; } }
 // camadas na tela que encostam no retângulo (um grupo entra inteiro)
@@ -3764,6 +4340,7 @@ function marquee(ev) {
 // abre a edição do texto (clique duplo no palco ou Enter): aba de conteúdo, texto todo selecionado
 function editText(L) {
   if (!L || L.type === 'bg') return;
+  if (vecEdit(L)) return; // vetor: edita os pontos
   if (lockedNote(L)) return;
   if (propTab !== 'style') { propTab = 'style'; renderProps(); }
   if (L.type !== 'text' && L.type !== 'cta') return;
@@ -4989,12 +5566,15 @@ function frameToggle() {
   S.flow = { gap:0, auto:false, pin:'start', align:'keep' };
   const fr = flowLayout(false).frame; delete S.flow;
   if (!fr || !fr.rows.length) { toast('Nada no quadro para organizar ainda'); return; }
-  const rows = [...fr.rows].sort((p, q) => p.rt0 - q.rt0), gs = [], meets = (a, b) => a.some(([a0, a1]) => b.some(([b0, b1]) => Math.min(a1, b1) - Math.max(a0, b0) > .01));
+  // na ordem da coluna (o meio de cada linha): pelo topo, um texto sobreposto ao de cima media o espaço até o vizinho errado
+  const rows = [...fr.rows].sort((p, q) => p.ord - q.ord), gs = [], meets = (a, b) => a.some(([a0, a1]) => b.some(([b0, b1]) => Math.min(a1, b1) - Math.max(a0, b0) > .01));
   for (let j = 1; j < rows.length; j++) { const k = [...rows.slice(0, j)].reverse().find(r => meets(r.sp, rows[j].sp)); if (k) gs.push(rows[j].ct - (k.ct + k.H)); }
   const pos = gs.filter(g => g > 0).sort((p, q) => p - q), M = marginBox() || { x0:0, y0:0, x1:W(), y1:H() };
   const top = Math.min(...rows.map(r => r.ct)), bot = Math.max(...rows.map(r => r.ct + r.H)), mid = ((top + bot) / 2 - M.y0) / (M.y1 - M.y0);
-  const cen = rows.every(r => Math.abs((r.cl + r.cr) / 2 - (M.x0 + M.x1) / 2) < 10);
-  S.flow = { gap:pos.length ? Math.round(pos[pos.length >> 1]) : 40, auto:false, pin:mid < .4 ? 'start' : mid > .6 ? 'end' : 'center', align:cen ? 'center' : 'keep' };
+  // na horizontal: quase no centro (ou quase encostado numa margem) já conta; com 10px de tolerância um botão um pouco torto deixava tudo em "Manter" e era preciso alinhar à mão
+  const tol = (M.x1 - M.x0) * .06, near = f => rows.every(r => Math.abs(f(r)) < tol);
+  const align = near(r => (r.cl + r.cr - M.x0 - M.x1) / 2) ? 'center' : near(r => r.cl - M.x0) ? 'start' : near(r => r.cr - M.x1) ? 'end' : 'keep';
+  S.flow = { gap:pos.length ? Math.round(pos[pos.length >> 1]) : 40, auto:false, pin:mid < .4 ? 'start' : mid > .6 ? 'end' : 'center', align };
   changed({ props:true });
   toast(`Layout do quadro: coluna com ${S.flow.gap}px entre os blocos`, 3600, UNDO_ACT);
 }
@@ -5865,7 +6445,7 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
   const apply = () => {
     const raw = parseFloat(out.value.replace(',', '.').replace(/[^\d.-]/g, ''));
     if (isFinite(raw)) {
-      let v = clamp(raw / scale, min, max); if (step >= 1) v = Math.round(v);
+      let v = clamp(raw / scale, min, opts.cap ?? max); if (step >= 1) v = Math.round(v); // cap: digitado pode passar do fim da barra
       if (v !== val()) { pushUndo(); set(v); inp.value = v; if (opts.after) opts.after(); }
     }
     out.value = fmt(val());
@@ -5877,7 +6457,7 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
       e.preventDefault();
       const cur = parseFloat(out.value.replace(',', '.')); if (!isFinite(cur)) return;
       const d = step * scale * (e.shiftKey ? 10 : 1) * (e.key === 'ArrowUp' ? 1 : -1);
-      out.value = String(+(clamp((cur + d) / scale, min, max) * scale).toFixed(4)).replace('.', ',');
+      out.value = String(+(clamp((cur + d) / scale, min, opts.cap ?? max) * scale).toFixed(4)).replace('.', ',');
       const v = clamp((cur + d) / scale, min, max); if (v !== val()) { pushUndo(); set(v); inp.value = v; }
     }
   });
@@ -6460,7 +7040,7 @@ function groupStyleSecs(gid) {
   if (G.shadow && G.shadow !== 'none') sh.append(colorF(G, 'shColor', 'Cor da sombra'));
   return [h('section', { class:'sec' }, [h('h3', { text:'Aparência do grupo' }),
     h('p', { class:'hint', text:'Vale para o conjunto inteiro, sem mexer nos itens. Cada item pode ter a própria sombra por dentro.' }),
-    rangeF(G, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'), ...blendF(G)]), sh];
+    rangeF(G, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'), ...blendF(G)]), sh, blurSec(G, true)];
 }
 function syncPosFields(L) {
   const p = posOf(L);
@@ -6560,9 +7140,10 @@ function styleProps(L) {
     put(h('h3', { text:'Forma' }),
       segF(L, 'kind', 'Tipo', Object.entries(SHAPE_KINDS)),
       k === 'custom' ? textF(L, 'd', 'Caminho SVG (atributo d do <path>)', true) : null,
-      k === 'custom' ? h('p', { class:'hint', text:'Cole o d de qualquer path (Figma, Illustrator, Inkscape). Ele é vetorial: escala sem perder qualidade e "Desenhar traço" percorre o contorno.' }) : null,
-      rangeF(L, 'size', k === 'line' || k === 'custom' ? 'Tamanho' : 'Largura', .03, 1.6, .005, pct),
-      resizable(L) ? rangeF(L, 'mh', 'Altura', .03, 2.6, .005, pct) : null,
+      k === 'custom' ? h('div', { class:'row' }, [h('button', { class:'btn small', text:'Editar pontos', onclick:() => vecEdit(L) }), h('button', { class:'btn small', text:'Desenhar outra', onclick:penToolStart })]) : null,
+      k === 'custom' ? h('p', { class:'hint', text:'Desenhe com a caneta (P) ou cole o d de qualquer path (Figma, Illustrator, Inkscape). Clique duplo no palco edita os pontos. Ele é vetorial: escala sem perder qualidade e "Desenhar traço" percorre o contorno.' }) : null,
+      rangeF(L, 'size', k === 'line' || k === 'custom' ? 'Tamanho' : 'Largura', .03, 1.6, .005, pct, { cap:SZ_MAX }),
+      resizable(L) ? rangeF(L, 'mh', 'Altura', .03, 2.6, .005, pct, { cap:MH_MAX }) : null,
       k === 'rect' ? rangeF(L, 'radius', 'Cantos', 0, 600, 1, px) : null,
       k === 'polygon' || k === 'star' ? rangeF(L, 'points', 'Pontas', 3, 12, 1, v => String(Math.round(v))) : null,
       k === 'star' ? rangeF(L, 'inner', 'Profundidade', .1, .95, .01, pct) : null,
@@ -6600,8 +7181,8 @@ function styleProps(L) {
       cutoutF(L),
       h('h3', { text:'Máscara' }),
       field('Forma', maskSeg, null),
-      rangeF(L, 'size', masked(L) ? 'Largura' : 'Tamanho', .03, 1.6, .005, pct),
-      masked(L) ? rangeF(L, 'mh', 'Altura', .03, 2.6, .005, pct) : null,
+      rangeF(L, 'size', masked(L) ? 'Largura' : 'Tamanho', .03, 1.6, .005, pct, { cap:SZ_MAX }),
+      masked(L) ? rangeF(L, 'mh', 'Altura', .03, 2.6, .005, pct, { cap:MH_MAX }) : null,
       L.mask !== 'circle' ? rangeF(L, 'radius', 'Cantos', 0, 600, 1, px) : null,
       h('h3', { text:'Imagem dentro da máscara' }),
       rangeF(L, 'zoom', 'Zoom', .2, 5, .01, v => v.toFixed(2) + '×'),
@@ -6768,6 +7349,7 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Comma' || e.code === 'Period') { e.preventDefault(); stepFrames((e.code === 'Comma' ? -1 : 1) * (e.shiftKey ? fps() : 1)); return; }
   if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); pause(); T = e.key === 'Home' ? 0 : lastFrame(); RT.userSeek = true; needs = true; return; }
   if (k === 'a' && e.shiftKey) { e.preventDefault(); flowToggle(); return; }
+  if (k === 'p' && !e.shiftKey) { e.preventDefault(); penToolStart(); return; }
   if (k === 'i' || k === 'o') { e.preventDefault(); markAt(k === 'i' ? 'start' : 'end'); return; }
   if (e.key === 'Enter' && el && (e.target === document.body || e.target === cv)) { e.preventDefault(); editText(L); }
 });
@@ -6775,7 +7357,7 @@ document.addEventListener('keydown', e => {
 const KEYS = [
   ['Tocar', [['Espaço', 'Tocar e pausar'], [', .', 'Um quadro para trás / para frente'], ['Shift + , .', 'Um segundo para trás / para frente'], ['← →', 'Quadro a quadro, com nada selecionado'], ['Home End', 'Início / último quadro']]],
   ['Tempo do elemento', [['I', 'Entra na agulha'], ['O', 'Sai na agulha'], ['Clique duplo na barra', 'Leva a agulha até ele'], ['Shift ao arrastar', 'Desliga o ímã da timeline'], ['Esc ao arrastar', 'Cancela']]],
-  ['Palco', [['← ↑ → ↓', 'Move 1 px (Shift: 10 px)'], ['Arrastar no vazio', 'Seleciona por área'], ['Shift + clique', 'Soma ou tira da seleção'], ['Ctrl + clique', 'Escolhe um item dentro do grupo'], ['Clique duplo / Enter', 'Edita o texto'], ['Ctrl ao arrastar', 'Desliga as guias'], ['Alt + arrastar imagem', 'Move a imagem na máscara'], ['Roda na imagem', 'Zoom na máscara'], ['Alças (8 pontos)', 'Cantos escalam; lados mudam largura, altura ou quebra do texto'], ['Alt ao puxar a alça', 'Escala a partir do centro'], ['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco']]],
+  ['Palco', [['← ↑ → ↓', 'Move 1 px (Shift: 10 px)'], ['Arrastar no vazio', 'Seleciona por área'], ['Shift + clique', 'Soma ou tira da seleção'], ['Ctrl + clique', 'Escolhe um item dentro do grupo'], ['Clique duplo / Enter', 'Edita o texto'], ['Ctrl ao arrastar', 'Desliga as guias'], ['Alt + arrastar imagem', 'Move a imagem na máscara'], ['Roda na imagem', 'Zoom na máscara'], ['Alças (8 pontos)', 'Cantos escalam; lados mudam largura, altura ou quebra do texto'], ['Alt ao puxar a alça', 'Escala a partir do centro'], ['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco'], ['P', 'Caneta: clique cria ponto, arrastar cria curva, Enter termina'], ['Clique duplo no vetor', 'Edita os pontos (Alt + clique: curva/canto)']]],
   ['Editar', [['Ctrl + Z', 'Desfazer'], ['Ctrl + Shift + Z', 'Refazer'], ['Ctrl + C / X / V', 'Copiar, recortar, colar (vale entre arquivos)'], ['Ctrl + D', 'Duplicar'], ['Delete', 'Apagar'], ['Ctrl + A', 'Selecionar tudo'], ['Esc', 'Tirar a seleção / sair do texto'], ['/', 'Buscar animação']]],
   ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Shift + A', 'Layout automático (sem nada selecionado: o quadro todo)'], ['Arrastar o espaço rosa', 'Muda o espaço do layout'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear']]],
   ['Arquivo', [['Ctrl + S', 'Salvar agora (já salva sozinho)'], ['Ctrl + Shift + S', 'Salvar cópia'], ['Ctrl + Shift + E', 'Exportar MP4'], ['Ctrl + V', 'Colar imagem ou SVG'], ['?', 'Este painel']]],
@@ -6807,6 +7389,7 @@ const ADD_KINDS = [
   { id:'logo', label:'Logo', gl:'<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="7.5"/><path d="M5 11c2-5 6-5 8 0"/></svg>', mk:() => { const pen = RT.logo && RT.logo.pen; const alone = !S.layers.some(l => l.type !== 'bg'); return mkLogo(alone ? 'logo' : 'logoSmall', { y:alone ? .42 : .12, size:alone ? .36 : .14, in:pen ? 'handwrite' : 'spring', inDur:pen ? BP.handwrite.dur : BP.spring.dur, idle:'shine' }); } },
   { id:'svg', label:'SVG', gl:'<b style="font:700 10px var(--f-mono)">&lt;/&gt;</b>', mk:null },
   { id:'shape', label:'Forma', gl:'<svg width="20" height="18" viewBox="0 0 20 18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="6" width="10" height="10" rx="2"/><circle cx="13" cy="6" r="5"/></svg>', mk:() => mkShape({ y:.5 }) },
+  { id:'pen', label:'Caneta', gl:'<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M9 1.5l5 7-5 8-5-8z"/><circle cx="9" cy="9" r="1.3"/><path d="M9 1.5v6.2"/></svg>', add:penToolStart },
   { id:'cta', label:'Botão', gl:'<span style="border:1.5px solid currentColor;border-radius:9px;padding:1px 7px;font-size:10px;font-weight:700">ir</span>', mk:() => mkCta({ y:.74, in:'pop', idle:'pulse' }) },
 ];
 // momento: onde você deixou a agulha (se a moveu de propósito), senão logo depois do último elemento
@@ -7037,9 +7620,32 @@ function autoShadowHex(L, key) {
   if (key === 'glow') return own || B[2];
   return '#000000';
 }
+// ajustes da foto (exposição, cor…): filtros prontos + barras; vale para todas as imagens selecionadas
+function adjSec(L) {
+  const peers = peersOf(L);
+  for (const o of peers) for (const k of ADJ_K) if (o[k] == null) o[k] = 0;
+  const same = vals => ADJ_K.every(k => (L[k] || 0) === (vals[k] || 0));
+  const set = vals => { pushUndo(); for (const o of peers) for (const k of ADJ_K) o[k] = vals[k] || 0; changed({ props:true }); };
+  const sec = h('section', { class:'sec' }, [h('h3', { text:'Ajustes' }),
+    h('div', { class:'chips' }, Object.entries(LOOKS).map(([v, [t, vals]]) => h('button', { class:'chip', 'aria-pressed':String(same(vals)), title:t, onclick:() => set(vals) }, [h('span', { text:t })])))]);
+  const num = v => Math.round((v || 0) * 100);
+  for (const [g, list] of ADJ) {
+    sec.append(h('h3', { text:g }));
+    for (const [k, label, min = -1] of list) {
+      const f = rangeF(L, k, label, min, 1, .01, num);
+      // clique duplo na barra volta ao zero
+      f.querySelector('input[type=range]').addEventListener('dblclick', () => { pushUndo(); for (const o of peers) o[k] = 0; changed({ props:true }); });
+      sec.append(f);
+    }
+  }
+  sec.append(h('div', { class:'row' }, [h('button', { class:'btn small', text:'Redefinir ajustes', disabled:same({}), onclick:() => set({}) })]),
+    h('p', { class:'hint', text:adjGL() ? 'Clique duplo numa barra volta ao zero. Vale também para vídeo.' : 'Este navegador não tem WebGL2: os ajustes não aparecem.' }));
+  return sec;
+}
 function styleExtras(L) {
   const out = [];
   if (L.type === 'image') {
+    out.push(adjSec(L));
     const sec = h('section', { class:'sec' }, [h('h3', { text:'Moldura' }),
       chipPick(L, 'device', Object.entries(DEVICES), (v, o) => {
         if (v === 'phone') { o.mask = 'rect'; o.mh = +(o.size * 2.05).toFixed(4); o.radius = Math.round(o.size * W() * .12); o.zoom = 1; o.ix = 0; o.iy = 0; }
@@ -7061,7 +7667,22 @@ function styleExtras(L) {
     if (L.shadow && L.shadow !== 'none') sec.append(colorF(L, 'shColor', 'Cor da sombra'));
     out.push(sec);
   }
+  if (!NOBOX(L)) out.push(blurSec(L));
   return out;
+}
+// desfoque da camada e do fundo (vidro): presets rápidos + valor livre em px
+function blurSec(L, grp) {
+  const row = k => {
+    const cur = L[k] ??= 0;
+    const chips = h('div', { class:'chips' }, BLURS[k].map(([v, t]) => h('button', { class:'chip', 'aria-pressed':String(cur === v), title:v ? `${t}: ${v} px` : t, onclick:() => {
+      pushUndo(); for (const o of peersOf(L)) o[k] = v; changed(); renderProps();
+    } }, [h('span', { text:t })])));
+    return [rangeF(L, k, k === 'lblur' ? 'Da camada' : 'Do fundo', 0, 800, 1, v => Math.round(v || 0) + ' px', { after:renderProps }), chips];
+  };
+  const sec = h('section', { class:'sec' }, [h('h3', { text:grp ? 'Desfoque do grupo' : 'Desfoque' }), ...row('lblur')]);
+  if (L.type !== 'bg') sec.append(...row('bblur'),
+    h('p', { class:'hint', text:'Borra o que está atrás, no formato do elemento. Com preenchimento meio transparente, vira vidro.' }));
+  return sec;
 }
 
 /* ------------ adicionar: câmera, transição, vídeo e preço de/por ------------ */

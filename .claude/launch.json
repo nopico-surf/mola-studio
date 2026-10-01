@@ -77,6 +77,39 @@
         "3006"
       ],
       "port": 3006
+    },
+    {
+      "name": "mola-8",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3007"
+      ],
+      "port": 3007
+    },
+    {
+      "name": "mola-9",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3008"
+      ],
+      "port": 3008
+    },
+    {
+      "name": "mola-pen",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3019"
+      ],
+      "port": 3019
     }
   ]
 }

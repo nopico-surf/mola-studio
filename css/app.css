@@ -89,7 +89,8 @@ input.sw-lbl:focus{color:var(--fg)}
 .swwrap:hover .sw-del{display:grid}
 .sw-add{width:100%;height:var(--ctl);border-radius:5px;border:1.5px dashed var(--line-2);background:transparent;color:var(--muted);font-size:11px;line-height:1;padding:0}
 .sw-add:hover{color:var(--fg);border-color:var(--muted)}
-.pg-new{align-self:flex-start}
+.btn.small.pg-new{align-self:stretch;width:100%;height:var(--ctl);justify-content:center;border:1px solid var(--line-2);color:var(--fg);margin:4px 0 8px}
+.btn.small.pg-new:hover{border-color:var(--muted)}
 
 .row{display:flex;gap:6px;align-items:center;min-width:0}
 .row > *{min-width:0}
@@ -579,4 +580,5 @@ input[type=range]{accent-color:var(--accent)}
 .sec-head .tabs button{color:color-mix(in srgb,var(--tc) 75%,var(--fg))}
 .sec-head .tabs button:hover{background:color-mix(in srgb,var(--tc) 18%,transparent)}
 .sec-head .tabs button[aria-selected="true"]{background:var(--tc);color:var(--bg);font-weight:700}
+#stageBox.pen,#stageBox.pen #cv{cursor:crosshair!important}
 #stageBox.hand,#stageBox.hand #cv{cursor:grab!important}
