@@ -507,6 +507,10 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .stage-hint span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stage-hint button{flex:none;border:0;background:var(--accent);color:var(--accent-ink);font-weight:600;font-size:11px;height:22px;padding:0 10px;border-radius:999px}
 .stage-hint button:hover{filter:brightness(1.08)}
+.stage-hint .hseg{flex:none;display:flex;gap:2px;padding:2px;border-radius:999px;background:var(--raised)}
+.stage-hint .hseg button{background:transparent;color:var(--muted);font-weight:500;height:18px;padding:0 9px}
+.stage-hint .hseg button:hover{color:var(--fg);filter:none}
+.stage-hint .hseg button[aria-pressed="true"]{background:var(--line-2);color:var(--fg)}
 .sec h3 .see{margin-left:auto;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border-radius:var(--r);border:1px solid var(--line-2);background:transparent;color:var(--muted);font-size:11px;font-weight:600}
 .sec h3 .see svg{width:9px;height:9px}
 .sec h3 .see:hover{color:var(--accent-ink);background:var(--accent);border-color:var(--accent)}

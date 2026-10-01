@@ -3583,18 +3583,30 @@ function drawOverlays() {
 // aviso no palco: a camada selecionada não aparece neste momento (ou está oculta), com o atalho para resolver
 function updStageHint() {
   const el = $('#stageHint'), L = selL(), els = S.layers.filter(l => l.type !== 'bg');
-  let msg = null, act = null;
+  let msg = null, act = null, tools = null;
   if (!playing && !RT.exporting) {
-    if (RT.pen) { msg = RT.pen.pts.length < 2 ? 'Caneta: clique cria um ponto, arrastar cria uma curva' : 'Clique no primeiro ponto para fechar · Enter termina aberta · Backspace tira o último'; act = [RT.pen.pts.length < 2 ? 'Cancelar' : 'Concluir', () => penToolFinish(false)]; }
-    else if (RT.vec) { msg = 'Pontos: arraste pontos e alças · clique na linha cria ponto · Alt + clique: curva/canto · Delete apaga'; act = ['Concluir', vecExit]; }
+    if (RT.pen) {
+      const n = RT.pen.pts.length;
+      msg = PEN_MODE === 'free' ? 'Arraste para desenhar. Soltar perto do começo fecha a forma'
+        : n >= 2 ? 'Clique no 1º ponto para fechar · Enter termina · Backspace tira o último'
+        : PEN_MODE === 'smooth' ? 'Cada clique cria um ponto e a linha passa curva por eles (Alt + clique: canto)' : 'Clique cria um canto, clicar e arrastar cria uma curva';
+      act = [n < 2 ? 'Cancelar' : 'Concluir', () => penToolFinish(false)];
+      tools = PEN_MODES.map(([v, t]) => [t, PEN_MODE === v, () => setPenMode(v)]);
+    } else if (RT.vec) {
+      msg = 'Arraste a linha para curvar · clique nela cria ponto · clique duplo no ponto: curva/canto · Delete apaga'; act = ['Concluir', vecExit];
+      const Lv = vecL(), s = Lv && vecSel(Lv);
+      if (s) { const q = Lv.vec[s.si].pts[s.pi], cur = hasH(q, 'i') || hasH(q, 'o'); tools = [['Canto', !cur, () => vecSetType(Lv, false)], ['Curva', cur, () => vecSetType(Lv, true)]]; }
+    }
     else if (!els.length) { msg = 'Arquivo vazio. Arraste uma imagem para cá ou'; act = ['Adicionar título', () => addLayer(ADD_KINDS[0].mk(S.brand, S.brand.fonts))]; }
     else if (L && L.type !== 'bg' && !L.visible) { msg = `Camada oculta: ${L.name}`; act = ['Mostrar', () => { pushUndo(); L.visible = true; changed({ layers:true }); }]; }
     else if (L && L.type !== 'bg' && !phase(L, T)) { msg = T < L.start ? `${L.name} ainda não apareceu neste momento (entra em ${fmtSec(L.start)})` : `${L.name} já saiu neste momento (sai em ${fmtSec(L.end ?? S.duration)})`; act = ['Ver no palco', () => seekLayer(L)]; }
   }
-  const key = msg ? (L && L.id) + msg : '';
+  const key = msg ? (L && L.id) + msg + (tools ? tools.map(t => t[0] + t[1]).join() : '') : '';
   if (el._k === key) return; el._k = key;
   el.hidden = !msg; el.innerHTML = '';
-  if (msg) el.append(h('span', { text:msg }), h('button', { type:'button', text:act[0], onclick:act[1] }));
+  if (msg) el.append(h('span', { text:msg }),
+    tools ? h('div', { class:'hseg', role:'group' }, tools.map(([t, on, fn]) => h('button', { type:'button', 'aria-pressed':String(on), text:t, onclick:() => { fn(); el._k = ''; needs = true; } }))) : null,
+    h('button', { type:'button', text:act[0], onclick:act[1] }));
 }
 let lastNow = performance.now();
 function tick(now) {
@@ -4084,10 +4096,16 @@ function vecApply(L, M) {
   setPos(L, M.ax / W(), M.ay / H()); needs = true;
 }
 function stageMode() { const b = $('#stageBox'); b.classList.toggle('pen', !!RT.pen); setHover(null); needs = true; }
-function penToolStart() { vecExit(); pause(); RT.pen = { pts:[], cur:null }; stageMode(); }
+// modos: 'pen' = clique é canto e arrastar é curva; 'smooth' = cada clique é um ponto suave (a linha passa curva por eles);
+// 'free' = mão livre (arrastar desenha, vira poucos pontos suaves). Fica guardado neste navegador, como os favoritos
+const PEN_MODES = [['pen', 'Caneta'], ['smooth', 'Curvas'], ['free', 'Mão livre']];
+let PEN_MODE = (() => { try { return localStorage.getItem('mola-pen-mode') || 'pen'; } catch (e) { return 'pen'; } })();
+function setPenMode(m) { PEN_MODE = m; try { localStorage.setItem('mola-pen-mode', m); } catch (e) {} needs = true; }
+function penToolStart(mode) { vecExit(); pause(); if (mode) setPenMode(mode); RT.pen = { pts:[], cur:null }; stageMode(); }
 function penToolCancel() { if (!RT.pen) return; RT.pen = null; stageMode(); }
 function penToolFinish(close) {
   const P = RT.pen; penToolCancel(); if (!P || P.pts.length < 2) return;
+  autoH(P.pts, !!close); P.pts.forEach(q => delete q.a);
   const sp = { pts:P.pts, closed:!!close }, d = vecD([sp]), b = customBox(d);
   // fechada: preenchimento como as outras formas; aberta: só o traço
   addLayer(mkShape({ name:'Vetor', kind:'custom', d, vec:[sp], vecD:d, size:b.w / W(), in:'draw', inDur:BP.draw.dur, fill:!!close }), { x:(b.x + b.w / 2) / W(), y:(b.y + b.h / 2) / H() });
@@ -4095,33 +4113,117 @@ function penToolFinish(close) {
 // clique = ponto de canto; arrastar = curva (alças simétricas; Alt solta a de entrada); Shift = 45°.
 // Clicar no primeiro ponto fecha; clicar de novo no último (ou clique duplo) termina aberta
 function penToolDown(e) {
+  if (PEN_MODE === 'free') { penFreeDown(e); return; }
   const P = RT.pen, px = pxU(), pts = P.pts, last = pts[pts.length - 1], raw = stagePt(e);
   const close = pts.length >= 2 && Math.hypot(raw.x - pts[0].x, raw.y - pts[0].y) <= 9 * px;
   if (!close && last && Math.hypot(raw.x - last.x, raw.y - last.y) <= 6 * px) { if (pts.length >= 2) penToolFinish(false); return; }
   const pt = e.shiftKey && last ? snap45(last, raw) : raw, q = close ? pts[0] : vecPt(pt.x, pt.y);
-  if (!close) pts.push(q);
+  if (!close) { if (PEN_MODE === 'smooth' && !e.altKey) q.a = 1; pts.push(q); autoH(pts, false); } // Curvas: ponto suave (Alt = canto)
   const x0 = e.clientX, y0 = e.clientY; let moved = false;
   const mv = ev => {
     if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return;
-    moved = true; P.cur = null;
+    moved = true; P.cur = null; delete q.a; // arrastou: as alças são as do arrasto
     const hh = ev.shiftKey ? snap45(q, stagePt(ev)) : stagePt(ev);
     if (close) { q.ix = 2 * q.x - hh.x; q.iy = 2 * q.y - hh.y; if (!ev.altKey) { q.ox = hh.x; q.oy = hh.y; } }
     else { q.ox = hh.x; q.oy = hh.y; if (!ev.altKey) { q.ix = 2 * q.x - hh.x; q.iy = 2 * q.y - hh.y; } }
-    needs = true;
+    autoH(pts, false); needs = true;
   };
   const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); if (close) penToolFinish(true); needs = true; };
   addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   needs = true;
 }
+// alças automáticas (pontos com q.a): na direção do vizinho de trás para o da frente, 1/3 da distância até cada um
+function smoothPt(q, pr, nx) {
+  if (pr === q && nx === q) { q.ix = q.ox = q.x; q.iy = q.oy = q.y; return; }
+  let dx = nx.x - pr.x, dy = nx.y - pr.y; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l;
+  const li = Math.hypot(q.x - pr.x, q.y - pr.y) / 3, lo = Math.hypot(nx.x - q.x, nx.y - q.y) / 3;
+  q.ix = q.x - dx * li; q.iy = q.y - dy * li; q.ox = q.x + dx * lo; q.oy = q.y + dy * lo;
+}
+function autoH(pts, closed) {
+  const n = pts.length;
+  pts.forEach((q, i) => { if (q.a) smoothPt(q, pts[i > 0 ? i - 1 : closed ? n - 1 : i], pts[i < n - 1 ? i + 1 : closed ? 0 : i]); });
+}
+// simplifica a linha da mão livre (Ramer-Douglas-Peucker): fica só o ponto que se afasta mais que eps
+function rdp(pts, eps) {
+  if (pts.length < 3) return pts.slice();
+  const keep = new Uint8Array(pts.length), st = [[0, pts.length - 1]]; keep[0] = keep[pts.length - 1] = 1;
+  while (st.length) {
+    const [a, b] = st.pop(), A = pts[a], B = pts[b], dx = B.x - A.x, dy = B.y - A.y, l = Math.hypot(dx, dy); let md = 0, mi = -1;
+    for (let i = a + 1; i < b; i++) { const d = l > 1e-6 ? Math.abs((pts[i].x - A.x) * dy - (pts[i].y - A.y) * dx) / l : Math.hypot(pts[i].x - A.x, pts[i].y - A.y); if (d > md) { md = d; mi = i; } }
+    if (md > eps) { keep[mi] = 1; st.push([a, mi], [mi, b]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+// mão livre: arrastar desenha; ao soltar vira poucos pontos suaves (curva fechada se terminar perto do começo; virada forte fica canto)
+function penFreeDown(e) {
+  const P = RT.pen, raw = [stagePt(e)]; P.raw = raw;
+  const mv = ev => { const p = stagePt(ev), l = raw[raw.length - 1]; if (Math.hypot(p.x - l.x, p.y - l.y) >= 1.5 * pxU()) { raw.push(p); needs = true; } };
+  const up = () => {
+    removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+    P.raw = null; needs = true;
+    const px = pxU(), len = raw.reduce((a, p, i) => i ? a + Math.hypot(p.x - raw[i - 1].x, p.y - raw[i - 1].y) : 0, 0);
+    if (raw.length < 3 || len < 12 * px) return;
+    const a0 = raw[0], z = raw[raw.length - 1], closed = len > 80 * px && Math.hypot(a0.x - z.x, a0.y - z.y) <= 18 * px;
+    const pts = rdp(raw, 2.5 * px); if (closed && pts.length > 3) pts.pop();
+    if (pts.length < 2) return;
+    const n = pts.length;
+    P.pts = pts.map((p, i) => {
+      const q = { ...vecPt(p.x, p.y), a:1 }, pr = pts[i > 0 ? i - 1 : closed ? n - 1 : i], nx = pts[i < n - 1 ? i + 1 : closed ? 0 : i];
+      if (pr !== p && nx !== p) { const t1 = Math.atan2(p.y - pr.y, p.x - pr.x), t2 = Math.atan2(nx.y - p.y, nx.x - p.x); if (Math.abs(Math.atan2(Math.sin(t2 - t1), Math.cos(t2 - t1))) > 1.75) delete q.a; } // virada de mais de ~100°: canto
+      return q;
+    });
+    penToolFinish(closed);
+  };
+  addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  needs = true;
+}
 // edição de pontos: clique duplo num vetor, Enter ou "Editar pontos" no painel
 function vecEdit(L) {
-  if (!L || L.type !== 'shape' || L.kind !== 'custom') return false;
+  if (!L || L.type !== 'shape') return false;
   if (lockedNote(L)) return true;
+  if (L.kind !== 'custom' && !vecConvert(L)) return true;
   if (!vecOf(L)) { toast('Este caminho tem arcos (comando A) e não dá para editar ponto a ponto. Desenhe com a caneta (P).', 4500); return true; }
   penToolCancel();
   if (RT.selected !== L.id || pickedLayers().length > 1) select(L.id, true);
   const ph = phase(L, T); if (!ph || ph.mode !== 'hold') seekLayer(L);
   RT.vec = { id:L.id, sel:null }; stageMode(); return true;
+}
+// retângulo, círculo, triângulo, polígono, estrela e linha -> pontos (no espaço da forma, centro em 0), como no Figma ao editar uma forma
+function shapePts(L, G) {
+  const w = G.w, h = G.h, k = L.kind, K = .5523;
+  const poly = pts => [{ pts:pts.map(([x, y]) => vecPt(x, y)), closed:true }];
+  if (k === 'line') return [{ pts:[vecPt(-w / 2, 0), vecPt(w / 2, 0)], closed:false }];
+  if (k === 'triangle') return poly([[0, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]]);
+  if (k === 'polygon' || k === 'star') return poly(ngon(w, h, Math.max(3, Math.round(L.points || 5)), k === 'star' ? clamp(L.inner ?? .45, .1, .95) : 0));
+  if (k === 'ellipse') {
+    const a = w / 2, b = h / 2;
+    return [{ closed:true, pts:[{ x:0, y:-b, ix:-a * K, iy:-b, ox:a * K, oy:-b }, { x:a, y:0, ix:a, iy:-b * K, ox:a, oy:b * K },
+      { x:0, y:b, ix:a * K, iy:b, ox:-a * K, oy:b }, { x:-a, y:0, ix:-a, iy:b * K, ox:-a, oy:-b * K }] }];
+  }
+  const r = Math.max(0, Math.min(L.radius || 0, w / 2, h / 2)), x0 = -w / 2, x1 = w / 2, y0 = -h / 2, y1 = h / 2, c = r * K;
+  if (r < .5) return poly([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+  const P = [], add = (x, y, ix, iy, ox, oy) => {
+    const l = P[P.length - 1];
+    if (l && Math.hypot(l.x - x, l.y - y) < .01) { l.ox = ox; l.oy = oy; return; } // canto inteiro redondo: os dois pontos viram um
+    P.push({ x, y, ix, iy, ox, oy });
+  };
+  add(x0 + r, y0, x0 + r - c, y0, x0 + r, y0); add(x1 - r, y0, x1 - r, y0, x1 - r + c, y0);
+  add(x1, y0 + r, x1, y0 + r - c, x1, y0 + r); add(x1, y1 - r, x1, y1 - r, x1, y1 - r + c);
+  add(x1 - r, y1, x1 - r + c, y1, x1 - r, y1); add(x0 + r, y1, x0 + r, y1, x0 + r - c, y1);
+  add(x0, y1 - r, x0, y1 - r + c, x0, y1 - r); add(x0, y0 + r, x0, y0 + r, x0, y0 + r - c);
+  const f = P[0], l = P[P.length - 1]; if (P.length > 1 && Math.hypot(f.x - l.x, f.y - l.y) < .01) { f.ix = l.ix; f.iy = l.iy; P.pop(); }
+  return [{ pts:P, closed:true }];
+}
+function vecConvert(L) {
+  const G = geomNow(L); if (!G) return false;
+  const pl = placeOf(L), a = (L.rot || 0) * Math.PI / 180;
+  pushUndo();
+  if (L.kind === 'line') L.fill = false; // a linha vira caminho aberto, só traço
+  L.vec = shapePts(L, G); L.kind = 'custom';
+  vecApply(L, { s:pl.k, k:pl.k, co:Math.cos(a), si:Math.sin(a), ax:pl.x * W(), ay:pl.y * H(), bx:0, by:0 });
+  changed({ props:true });
+  toast('A forma virou vetor para editar os pontos', 2600, UNDO_ACT);
+  return true;
 }
 function vecExit() { if (!RT.vec) return; RT.vec = null; stageMode(); }
 // a camada em edição (sai sozinho se ela sumiu, foi trocada ou deixou de ser vetor)
@@ -4183,46 +4285,72 @@ function vecSplit(L, hit) {
 function vecToggle(L, si, pi) {
   const sp = L.vec[si], P = sp.pts, n = P.length, q = P[pi];
   if (hasH(q, 'i') || hasH(q, 'o')) { q.ix = q.ox = q.x; q.iy = q.oy = q.y; return; }
-  const pr = P[pi > 0 ? pi - 1 : sp.closed ? n - 1 : pi], nx = P[pi < n - 1 ? pi + 1 : sp.closed ? 0 : pi];
-  let dx = nx.x - pr.x, dy = nx.y - pr.y; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l;
-  const li = Math.hypot(q.x - pr.x, q.y - pr.y) / 3, lo = Math.hypot(nx.x - q.x, nx.y - q.y) / 3;
-  q.ix = q.x - dx * li; q.iy = q.y - dy * li; q.ox = q.x + dx * lo; q.oy = q.y + dy * lo;
+  smoothPt(q, P[pi > 0 ? pi - 1 : sp.closed ? n - 1 : pi], P[pi < n - 1 ? pi + 1 : sp.closed ? 0 : pi]);
 }
+// botões Canto / Curva no aviso do palco
+function vecSetType(L, curve) {
+  const s = vecSel(L); if (!s) return;
+  const q = L.vec[s.si].pts[s.pi]; if ((hasH(q, 'i') || hasH(q, 'o')) === curve) return;
+  const M = vecMap(L); pushUndo(); vecToggle(L, s.si, s.pi); vecApply(L, M); changed();
+}
+const oppH = w => w === 'i' ? 'o' : 'i';
+// as duas alças do ponto estão alinhadas (ponto suave)? Então, mexendo numa, a outra gira junto e mantém o comprimento
+function linedH(q, w) {
+  const o = oppH(w); if (!hasH(q, w) || !hasH(q, o)) return false;
+  const a1 = Math.atan2(q[w + 'y'] - q.y, q[w + 'x'] - q.x), a2 = Math.atan2(q[o + 'y'] - q.y, q[o + 'x'] - q.x);
+  return Math.abs(Math.abs(Math.atan2(Math.sin(a1 - a2), Math.cos(a1 - a2))) - Math.PI) < .07;
+}
+function keepLined(q, w, len) { const o = oppH(w), a = Math.atan2(q[w + 'y'] - q.y, q[w + 'x'] - q.x) + Math.PI; q[o + 'x'] = q.x + Math.cos(a) * len; q[o + 'y'] = q.y + Math.sin(a) * len; }
+const hLen = (q, w) => Math.hypot(q[w + 'x'] - q.x, q[w + 'y'] - q.y);
 // arrastar ponto (leva as alças; Shift trava o eixo; Alt puxa alças novas), alça (a oposta alinhada continua alinhada; Alt solta) ou trecho (cria ponto e arrasta)
 function vecDown(e, L, M, hit) {
   let undone = false; const once = () => { if (!undone) { pushUndo(); undone = true; } };
-  if (hit.kind === 'seg') { once(); vecSplit(L, hit); vecApply(L, M); hit = { kind:'p', si:hit.si, pi:hit.pi + 1 }; }
-  if (hit.kind === 'p') RT.vec.sel = { si:hit.si, pi:hit.pi };
-  const q = L.vec[hit.si].pts[hit.pi], st = { ...q }, alt = e.altKey, x0 = e.clientX, y0 = e.clientY;
-  const w = hit.w, opp = w && (w === 'i' ? 'o' : 'i');
-  const ang = k => Math.atan2(q[k + 'y'] - q.y, q[k + 'x'] - q.x);
-  const lined = !!opp && hasH(q, opp) && Math.abs(Math.abs(Math.atan2(Math.sin(ang(w) - ang(opp)), Math.cos(ang(w) - ang(opp)))) - Math.PI) < .07;
-  const oppLen = opp ? Math.hypot(q[opp + 'x'] - q.x, q[opp + 'y'] - q.y) : 0;
-  let moved = false;
-  const mv = ev => {
+  const alt = e.altKey, x0 = e.clientX, y0 = e.clientY; let moved = false, mv, up0 = () => {};
+  if (hit.kind === 'seg') { // arrastar a linha = curvar (o ponto do trecho sob o mouse segue o mouse); só clicar = ponto novo
+    const P = L.vec[hit.si].pts, a = P[hit.pi], b = P[(hit.pi + 1) % P.length], a0 = { ...a }, b0 = { ...b }, t = hit.t, u = 1 - t;
+    const B0 = bezAt(a0, b0, t), w1 = 3 * u * u * t, w2 = 3 * u * t * t, den = w1 * w1 + w2 * w2;
+    const linA = linedH(a0, 'o'), linB = linedH(b0, 'i'), lenA = hLen(a0, 'i'), lenB = hLen(b0, 'o');
+    mv = ev => {
+      const g = vecInv(M, stagePt(ev)), dx = g.x - B0.x, dy = g.y - B0.y;
+      a.ox = a0.ox + dx * w1 / den; a.oy = a0.oy + dy * w1 / den; b.ix = b0.ix + dx * w2 / den; b.iy = b0.iy + dy * w2 / den;
+      if (!ev.altKey) { if (linA) keepLined(a, 'o', lenA); if (linB) keepLined(b, 'i', lenB); }
+    };
+    up0 = () => { if (!moved) { once(); vecSplit(L, hit); vecApply(L, M); RT.vec.sel = { si:hit.si, pi:hit.pi + 1 }; } };
+  } else {
+    if (hit.kind === 'p') RT.vec.sel = { si:hit.si, pi:hit.pi };
+    const q = L.vec[hit.si].pts[hit.pi], st = { ...q }, w = hit.w, lined = !!w && linedH(q, w), oLen = w ? hLen(q, oppH(w)) : 0;
+    mv = ev => {
+      let p = stagePt(ev);
+      if (hit.kind === 'p' && !alt) { // ponto: leva as alças junto; Shift trava o eixo
+        const p0 = vecFwd(M, st.x, st.y); if (ev.shiftKey) { if (Math.abs(p.x - p0.x) > Math.abs(p.y - p0.y)) p.y = p0.y; else p.x = p0.x; }
+        const g = vecInv(M, p), dx = g.x - st.x, dy = g.y - st.y;
+        Object.assign(q, { x:st.x + dx, y:st.y + dy, ix:st.ix + dx, iy:st.iy + dy, ox:st.ox + dx, oy:st.oy + dy });
+      } else if (hit.kind === 'p') { // Alt + arrastar o ponto: puxa alças novas, simétricas
+        if (ev.shiftKey) p = snap45(vecFwd(M, q.x, q.y), p);
+        const g = vecInv(M, p); q.ox = g.x; q.oy = g.y; q.ix = 2 * q.x - g.x; q.iy = 2 * q.y - g.y;
+      } else { // alça: a oposta alinhada continua alinhada (Alt solta)
+        if (ev.shiftKey) p = snap45(vecFwd(M, q.x, q.y), p);
+        const g = vecInv(M, p); q[w + 'x'] = g.x; q[w + 'y'] = g.y;
+        if (lined && !ev.altKey) keepLined(q, w, oLen);
+      }
+    };
+    up0 = () => {
+      if (moved || hit.kind !== 'p') return;
+      const now = performance.now(), tp = RT.vec.tap, dbl = tp && tp.si === hit.si && tp.pi === hit.pi && now - tp.t < 400;
+      RT.vec.tap = dbl ? null : { si:hit.si, pi:hit.pi, t:now };
+      if (alt || dbl) { once(); vecToggle(L, hit.si, hit.pi); vecApply(L, M); } // Alt + clique ou clique duplo: curva <-> canto
+    };
+  }
+  const move = ev => {
     if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return;
-    moved = true; once();
-    let p = stagePt(ev);
-    if (hit.kind === 'p' && !alt) {
-      const p0 = vecFwd(M, st.x, st.y); if (ev.shiftKey) { if (Math.abs(p.x - p0.x) > Math.abs(p.y - p0.y)) p.y = p0.y; else p.x = p0.x; }
-      const g = vecInv(M, p), dx = g.x - st.x, dy = g.y - st.y;
-      Object.assign(q, { x:st.x + dx, y:st.y + dy, ix:st.ix + dx, iy:st.iy + dy, ox:st.ox + dx, oy:st.oy + dy });
-    } else if (hit.kind === 'p') {
-      if (ev.shiftKey) p = snap45(vecFwd(M, q.x, q.y), p);
-      const g = vecInv(M, p); q.ox = g.x; q.oy = g.y; q.ix = 2 * q.x - g.x; q.iy = 2 * q.y - g.y;
-    } else {
-      if (ev.shiftKey) p = snap45(vecFwd(M, q.x, q.y), p);
-      const g = vecInv(M, p); q[w + 'x'] = g.x; q[w + 'y'] = g.y;
-      if (lined && !ev.altKey) { const a = Math.atan2(g.y - q.y, g.x - q.x) + Math.PI; q[opp + 'x'] = q.x + Math.cos(a) * oppLen; q[opp + 'y'] = q.y + Math.sin(a) * oppLen; }
-    }
-    vecApply(L, M);
+    moved = true; once(); mv(ev); vecApply(L, M);
   };
   const up = () => {
-    removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
-    if (!moved && hit.kind === 'p' && alt) { once(); vecToggle(L, hit.si, hit.pi); vecApply(L, M); }
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+    up0();
     if (undone) changed({ props:true }); needs = true;
   };
-  addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   needs = true;
 }
 function vecDelete(L) {
@@ -4260,12 +4388,14 @@ function drawPenTool(ctx) {
   ctx.save(); ctx.setLineDash([]); ctx.lineWidth = lw; ctx.strokeStyle = PEN_C;
   if (RT.pen) {
     const P = RT.pen, pts = P.pts, last = pts[pts.length - 1], id = (x, y) => ({ x, y });
-    const hot = !!P.cur && pts.length >= 2 && Math.hypot(P.cur.x - pts[0].x, P.cur.y - pts[0].y) <= 9 * px;
-    ctx.stroke(trace(pts, false, id));
-    if (last && P.cur) { // o próximo trecho, até o cursor
-      const e = hot ? pts[0] : P.shift ? snap45(last, P.cur) : P.cur;
-      ctx.globalAlpha = .55; ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.bezierCurveTo(last.ox, last.oy, hot ? e.ix : e.x, hot ? e.iy : e.y, e.x, e.y); ctx.stroke(); ctx.globalAlpha = 1;
-    }
+    const hot = PEN_MODE !== 'free' && !!P.cur && pts.length >= 2 && Math.hypot(P.cur.x - pts[0].x, P.cur.y - pts[0].y) <= 9 * px;
+    if (P.raw) { ctx.beginPath(); P.raw.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.lineWidth = 2 * px; ctx.stroke(); ctx.lineWidth = lw; } // mão livre
+    // o próximo trecho, até o cursor (no modo Curvas o ponto de trás já se ajusta)
+    const tmp = pts.map(q => ({ ...q }));
+    if (last && P.cur && !hot && PEN_MODE !== 'free') { const c = P.shift ? snap45(last, P.cur) : P.cur; tmp.push({ ...vecPt(c.x, c.y), a:PEN_MODE === 'smooth' ? 1 : 0 }); }
+    autoH(tmp, hot);
+    if (tmp.length > pts.length || hot) { ctx.globalAlpha = .55; ctx.stroke(trace(tmp, hot, id)); ctx.globalAlpha = 1; }
+    ctx.stroke(trace(tmp.slice(0, pts.length), false, id));
     pts.forEach((q, i) => anchor(q.x, q.y, i === pts.length - 1, i === 0 && hot));
     for (const q of [pts[0], last]) if (q) { if (hasH(q, 'i') && q !== pts[0]) knob(q.x, q.y, q.ix, q.iy); if (hasH(q, 'o') && (q === last || pts.length === 1)) knob(q.x, q.y, q.ox, q.oy); }
   }
@@ -7140,7 +7270,7 @@ function styleProps(L) {
     put(h('h3', { text:'Forma' }),
       segF(L, 'kind', 'Tipo', Object.entries(SHAPE_KINDS)),
       k === 'custom' ? textF(L, 'd', 'Caminho SVG (atributo d do <path>)', true) : null,
-      k === 'custom' ? h('div', { class:'row' }, [h('button', { class:'btn small', text:'Editar pontos', onclick:() => vecEdit(L) }), h('button', { class:'btn small', text:'Desenhar outra', onclick:penToolStart })]) : null,
+      h('div', { class:'row' }, [h('button', { class:'btn small', text:'Editar pontos', title:k === 'custom' ? null : 'A forma vira vetor', onclick:() => vecEdit(L) }), h('button', { class:'btn small', text:'Desenhar com a caneta', onclick:() => penToolStart() })]),
       k === 'custom' ? h('p', { class:'hint', text:'Desenhe com a caneta (P) ou cole o d de qualquer path (Figma, Illustrator, Inkscape). Clique duplo no palco edita os pontos. Ele é vetorial: escala sem perder qualidade e "Desenhar traço" percorre o contorno.' }) : null,
       rangeF(L, 'size', k === 'line' || k === 'custom' ? 'Tamanho' : 'Largura', .03, 1.6, .005, pct, { cap:SZ_MAX }),
       resizable(L) ? rangeF(L, 'mh', 'Altura', .03, 2.6, .005, pct, { cap:MH_MAX }) : null,
@@ -7349,7 +7479,7 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Comma' || e.code === 'Period') { e.preventDefault(); stepFrames((e.code === 'Comma' ? -1 : 1) * (e.shiftKey ? fps() : 1)); return; }
   if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); pause(); T = e.key === 'Home' ? 0 : lastFrame(); RT.userSeek = true; needs = true; return; }
   if (k === 'a' && e.shiftKey) { e.preventDefault(); flowToggle(); return; }
-  if (k === 'p' && !e.shiftKey) { e.preventDefault(); penToolStart(); return; }
+  if (k === 'p') { e.preventDefault(); penToolStart(e.shiftKey ? 'free' : null); return; }
   if (k === 'i' || k === 'o') { e.preventDefault(); markAt(k === 'i' ? 'start' : 'end'); return; }
   if (e.key === 'Enter' && el && (e.target === document.body || e.target === cv)) { e.preventDefault(); editText(L); }
 });
@@ -7357,7 +7487,7 @@ document.addEventListener('keydown', e => {
 const KEYS = [
   ['Tocar', [['Espaço', 'Tocar e pausar'], [', .', 'Um quadro para trás / para frente'], ['Shift + , .', 'Um segundo para trás / para frente'], ['← →', 'Quadro a quadro, com nada selecionado'], ['Home End', 'Início / último quadro']]],
   ['Tempo do elemento', [['I', 'Entra na agulha'], ['O', 'Sai na agulha'], ['Clique duplo na barra', 'Leva a agulha até ele'], ['Shift ao arrastar', 'Desliga o ímã da timeline'], ['Esc ao arrastar', 'Cancela']]],
-  ['Palco', [['← ↑ → ↓', 'Move 1 px (Shift: 10 px)'], ['Arrastar no vazio', 'Seleciona por área'], ['Shift + clique', 'Soma ou tira da seleção'], ['Ctrl + clique', 'Escolhe um item dentro do grupo'], ['Clique duplo / Enter', 'Edita o texto'], ['Ctrl ao arrastar', 'Desliga as guias'], ['Alt + arrastar imagem', 'Move a imagem na máscara'], ['Roda na imagem', 'Zoom na máscara'], ['Alças (8 pontos)', 'Cantos escalam; lados mudam largura, altura ou quebra do texto'], ['Alt ao puxar a alça', 'Escala a partir do centro'], ['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco'], ['P', 'Caneta: clique cria ponto, arrastar cria curva, Enter termina'], ['Clique duplo no vetor', 'Edita os pontos (Alt + clique: curva/canto)']]],
+  ['Palco', [['← ↑ → ↓', 'Move 1 px (Shift: 10 px)'], ['Arrastar no vazio', 'Seleciona por área'], ['Shift + clique', 'Soma ou tira da seleção'], ['Ctrl + clique', 'Escolhe um item dentro do grupo'], ['Clique duplo / Enter', 'Edita o texto'], ['Ctrl ao arrastar', 'Desliga as guias'], ['Alt + arrastar imagem', 'Move a imagem na máscara'], ['Roda na imagem', 'Zoom na máscara'], ['Alças (8 pontos)', 'Cantos escalam; lados mudam largura, altura ou quebra do texto'], ['Alt ao puxar a alça', 'Escala a partir do centro'], ['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco'], ['P', 'Caneta (modos Caneta, Curvas e Mão livre no topo do palco)'], ['Shift + P', 'Caneta à mão livre'], ['Clique duplo na forma', 'Edita os pontos (qualquer forma vira vetor)'], ['Arrastar a linha', 'Curva o trecho (na edição de pontos)'], ['Clique duplo no ponto', 'Curva / canto']]],
   ['Editar', [['Ctrl + Z', 'Desfazer'], ['Ctrl + Shift + Z', 'Refazer'], ['Ctrl + C / X / V', 'Copiar, recortar, colar (vale entre arquivos)'], ['Ctrl + D', 'Duplicar'], ['Delete', 'Apagar'], ['Ctrl + A', 'Selecionar tudo'], ['Esc', 'Tirar a seleção / sair do texto'], ['/', 'Buscar animação']]],
   ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Shift + A', 'Layout automático (sem nada selecionado: o quadro todo)'], ['Arrastar o espaço rosa', 'Muda o espaço do layout'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear']]],
   ['Arquivo', [['Ctrl + S', 'Salvar agora (já salva sozinho)'], ['Ctrl + Shift + S', 'Salvar cópia'], ['Ctrl + Shift + E', 'Exportar MP4'], ['Ctrl + V', 'Colar imagem ou SVG'], ['?', 'Este painel']]],
@@ -7389,7 +7519,7 @@ const ADD_KINDS = [
   { id:'logo', label:'Logo', gl:'<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="7.5"/><path d="M5 11c2-5 6-5 8 0"/></svg>', mk:() => { const pen = RT.logo && RT.logo.pen; const alone = !S.layers.some(l => l.type !== 'bg'); return mkLogo(alone ? 'logo' : 'logoSmall', { y:alone ? .42 : .12, size:alone ? .36 : .14, in:pen ? 'handwrite' : 'spring', inDur:pen ? BP.handwrite.dur : BP.spring.dur, idle:'shine' }); } },
   { id:'svg', label:'SVG', gl:'<b style="font:700 10px var(--f-mono)">&lt;/&gt;</b>', mk:null },
   { id:'shape', label:'Forma', gl:'<svg width="20" height="18" viewBox="0 0 20 18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="6" width="10" height="10" rx="2"/><circle cx="13" cy="6" r="5"/></svg>', mk:() => mkShape({ y:.5 }) },
-  { id:'pen', label:'Caneta', gl:'<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M9 1.5l5 7-5 8-5-8z"/><circle cx="9" cy="9" r="1.3"/><path d="M9 1.5v6.2"/></svg>', add:penToolStart },
+  { id:'pen', label:'Caneta', gl:'<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M9 1.5l5 7-5 8-5-8z"/><circle cx="9" cy="9" r="1.3"/><path d="M9 1.5v6.2"/></svg>', add:() => penToolStart() },
   { id:'cta', label:'Botão', gl:'<span style="border:1.5px solid currentColor;border-radius:9px;padding:1px 7px;font-size:10px;font-weight:700">ir</span>', mk:() => mkCta({ y:.74, in:'pop', idle:'pulse' }) },
 ];
 // momento: onde você deixou a agulha (se a moveu de propósito), senão logo depois do último elemento
