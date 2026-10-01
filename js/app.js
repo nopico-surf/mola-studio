@@ -3477,7 +3477,7 @@ function startResize(ev, pt, hd) {
   const items = (grp ? freePicked().filter(o => o._bounds) : [L]).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y, ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2, s0:{ ...size0(o), strokeW:o.strokeW } }; });
   RT.drag = { L, mode:'rs', how, hx, hy, pt0:pt, items, off:{ x:pt.x - hd.x, y:pt.y - hd.y }, b0:{ w:b.w, h:b.h }, C:{ x:cx, y:cy }, g0:grp ? null : geomNow(L),
     A:{ x:cx - hx * b.w / 2, y:cy - hy * b.h / 2 }, H0:{ x:cx + hx * b.w / 2, y:cy + hy * b.h / 2 }, s0:items[0].s0, k:b.k || 1, bw:b.w / (b.k || 1),
-    fl:grp ? flowScale(items.map(q => q.o)) : null }; // grupo com layout: o espaço (e o frame) escala junto
+    fl:grp ? flowScale(items.map(q => q.o)) : null, fg:grp && b.gid || null }; // grupo com layout: o espaço (e o frame) escala junto
   // frame do grupo com layout: os lados mudam o tamanho dele; os cantos escalam tudo junto (como antes)
   if (b.gid && (hx === 0 || hy === 0)) Object.assign(RT.drag, { how:'frame', gid:b.gid, B0:{ x0:b.x, y0:b.y, x1:b.x + b.w, y1:b.y + b.h } }); // alça do frame: muda o tamanho dele
   cv.setPointerCapture(ev.pointerId);
@@ -3513,11 +3513,45 @@ function resizeTo(D, pt, ev) {
   }
   const vx = D.H0.x - A.x, vy = D.H0.y - A.y;
   const f = Math.max(.05, hx && hy ? ((ex - A.x) * vx + (ey - A.y) * vy) / (vx * vx + vy * vy) : hx ? (ex - A.x) / vx : (ey - A.y) / vy);
-  for (const q of D.items) {
-    const a = scaleAny(q.o, q.s0, f);
-    setPos(q.o, +(q.x0 + (A.x + (q.ox - A.x) * a - q.ox) / W()).toFixed(4), +(q.y0 + (A.y + (q.oy - A.y) * a - q.oy) / H()).toFixed(4));
+  const put = f => {
+    for (const q of D.items) {
+      const a = scaleAny(q.o, q.s0, f);
+      setPos(q.o, +(q.x0 + (A.x + (q.ox - A.x) * a - q.ox) / W()).toFixed(5), +(q.y0 + (A.y + (q.oy - A.y) * a - q.oy) / H()).toFixed(5));
+    }
+    if (D.fl) D.fl(f);
+    return rsPin(D, alt);
+  };
+  // encostou na margem (texto, logo e botão não passam dela): para de crescer em vez de ser empurrado para dentro
+  let fz = f;
+  if (put(f) > .5) {
+    let ok = Math.min(D.fOk ?? 1, f), bad = f;
+    for (let n = 0; n < 10 && bad - ok > .002; n++) { const m = (ok + bad) / 2; if (put(m) > .5) bad = m; else ok = m; }
+    put(ok); fz = ok;
   }
-  if (D.fl) D.fl(f);
+  D.fOk = fz;
+}
+// Canto: a quina oposta fica parada e só cresce para o lado puxado; Alt: o centro fica parado (texto, logo, imagem, grupo e frame, tudo igual).
+// A conta acima supõe que o bloco cresce exatamente na proporção do mouse, mas a fonte arredonda, a linha quebra em outro lugar,
+// a margem empurra, o frame se refaz pela fila... Então mede onde o bloco ficou de verdade e devolve a quina (ou o centro) para o lugar
+function rsPin(D, alt) {
+  const { hx, hy } = D, box = () => {
+    if (D.fg) { const r = flowNow(D.fg); if (r) return r.box; }
+    const cx = rsPin.cx || (rsPin.cx = (() => { const c = document.createElement('canvas').getContext('2d'); c.canvas.width = c.canvas.height = 8; return c; })());
+    renderFrame(cx, T, 8 / W(), false); // quadro mínimo: só para atualizar os _bounds
+    const bs = D.items.map(q => q.o._bounds).filter(Boolean); if (!bs.length) return null;
+    return { x0:Math.min(...bs.map(b => b.x)), y0:Math.min(...bs.map(b => b.y)), x1:Math.max(...bs.map(b => b.x + b.w)), y1:Math.max(...bs.map(b => b.y + b.h)) };
+  };
+  // devolve quanto a quina (ou o centro) ainda ficou fora do lugar, em px (> 0 = a margem segurou)
+  let left = 0;
+  for (let n = 0; n < 4; n++) { // a margem pode segurar: tenta de novo com o que sobrou
+    const b = box(); if (!b) return 0;
+    const dx = !hx ? 0 : alt ? D.C.x - (b.x0 + b.x1) / 2 : D.A.x - (hx > 0 ? b.x0 : b.x1);
+    const dy = !hy ? 0 : alt ? D.C.y - (b.y0 + b.y1) / 2 : D.A.y - (hy > 0 ? b.y0 : b.y1);
+    left = Math.max(Math.abs(dx), Math.abs(dy));
+    if (left < .05 || n === 3) return left;
+    for (const q of D.items) { const p = placeRaw(q.o); setPos(q.o, +(p.x + dx / W()).toFixed(5), +(p.y + dy / H()).toFixed(5)); }
+  }
+  return left;
 }
 cv.addEventListener('pointerdown', ev => {
   if (ev.button === 1) { panStage(ev); return; }
