@@ -1823,7 +1823,7 @@ async function getImage(src) {
   if (!src) return null;
   if (RT.images.has(src)) return RT.images.get(src);
   RT.images.set(src, null);
-  try { const img = await loadImg(src); RT.images.set(src, img); RT.imgRev++; needs = true; return img; } catch (e) { return null; }
+  try { const img = await loadImg(await srcUrl(src)); RT.images.set(src, img); RT.imgRev++; needs = true; return img; } catch (e) { return null; }
 }
 function imgNow(src) { if (!src) return null; const i = RT.images.get(src); if (i === undefined) getImage(src); return i || null; }
 
@@ -3249,7 +3249,19 @@ function panStage(ev) {
   const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); $('#stageBox').style.cursor = ''; };
   addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
 }
-$('#stageBox').addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); }); // sem a rolagem automática do navegador
+$('#stageBox').addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
+// ferramenta mão: com o espaço segurado, arrastar em qualquer ponto do palco navega (pega antes de selecionar ou escalar)
+function handOn() { RT.hand = true; RT.handUsed = false; $('#stageBox').classList.add('hand'); }
+function handOff(play_) {
+  if (!RT.hand) return; const used = RT.handUsed; RT.hand = false; RT.handUsed = false; $('#stageBox').classList.remove('hand');
+  if (play_ && !used) playing ? pause() : play();
+}
+addEventListener('keyup', e => { if (e.code === 'Space') handOff(true); });
+addEventListener('blur', () => handOff(false));
+$('#stageBox').addEventListener('pointerdown', e => {
+  if (!RT.hand || e.button !== 0 || onScrollbar(e)) return;
+  e.stopPropagation(); RT.handUsed = true; panStage(e);
+}, true); // sem a rolagem automática do navegador
 
 const ov = $('#ov'), octx = ov.getContext('2d');
 function drawOverlays() {
@@ -3278,14 +3290,14 @@ function drawOverlays() {
   const ub = selUnion();
   if (!playing) for (const o of S.layers) {
     if ((o.id === RT.selected && !ub) || o.type === 'bg' || !o._bounds || !o.visible || !RT.picks || !RT.picks.has(o.id) || !phase(o, T)) continue;
-    const b = o._bounds, p = 14;
+    const b = visB(o), p = 14;
     ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.55)';
     ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2); ctx.setLineDash([]);
   }
   const L = S.layers.find(l => l.id === RT.selected);
   // item escolhido sozinho dentro de um grupo/frame: o contorno do grupo continua à vista (sem alças), como no Figma
   const pb = !playing && !ub && L && L.grp && !wholeGroup() && pickedLayers().length === 1 ? parentBox(L.grp) : null;
-  if (pb) { const p = 14; ctx.setLineDash([]); ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = 'rgba(242,182,50,.6)'; ctx.strokeRect(pb.x - p, pb.y - p, pb.w + p * 2, pb.h + p * 2); }
+  if (pb) { const p = 14; ctx.setLineDash([]); ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = 'rgba(242,182,50,.6)'; const v = visRect(pb, L); ctx.strokeRect(v.x - p, v.y - p, v.w + p * 2, v.h + p * 2); }
   // canto = quadrado (escala); lado = barra (muda largura, altura ou tamanho do frame)
   const hdl = q => {
     const s = hRad() * .75, bar = !(q.hx && q.hy), w = bar ? (q.hy === 0 ? s * .75 : s * 1.9) : s, hh = bar ? (q.hy === 0 ? s * 1.9 : s * .75) : s;
@@ -3294,13 +3306,13 @@ function drawOverlays() {
     else { ctx.fillRect(q.x - w, q.y - hh, w * 2, hh * 2); ctx.strokeRect(q.x - w, q.y - hh, w * 2, hh * 2); }
   };
   if (!playing && ub) {
-    const p = 14; ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
-    ctx.strokeRect(ub.x - p, ub.y - p, ub.w + p * 2, ub.h + p * 2); ctx.setLineDash([]);
+    const p = 14, uv = visRect(ub, L); ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
+    ctx.strokeRect(uv.x - p, uv.y - p, uv.w + p * 2, uv.h + p * 2); ctx.setLineDash([]);
     handlesOf(L).forEach(hdl);
   } else if (!playing && L && L.type !== 'bg' && L._bounds && L.visible) {
     const ph = phase(L, T);
     if (ph) {
-      const b = L._bounds, p = 14;
+      const b = visB(L), p = 14;
       ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
       ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
       ctx.setLineDash([]);
@@ -3322,7 +3334,7 @@ function drawOverlays() {
   // passar o mouse (no palco, na lista ou na timeline): contorno fino e o nome, para saber quem vai ser clicado
   const hv = !playing && !RT.drag && RT.hover && !isPicked(RT.hover) ? S.layers.find(l => l.id === RT.hover) : null;
   if (hv && hv.type !== 'bg' && hv.visible && hv._bounds && phase(hv, T)) {
-    const b = hv._bounds, p = 6 * px;
+    const b = visB(hv), p = 6 * px;
     ctx.setLineDash([]); ctx.lineWidth = 1.5 * px; ctx.strokeStyle = 'rgba(242,182,50,.85)';
     ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
     ctx.font = `600 ${11 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
@@ -3333,7 +3345,7 @@ function drawOverlays() {
   // edição de texto aberta: contorno cheio e etiqueta, para saber que dá para digitar
   const ed = !playing && RT.editId ? S.layers.find(l => l.id === RT.editId) : null;
   if (ed && ed.visible && ed._bounds && ed.id === RT.selected && phase(ed, T)) {
-    const b = ed._bounds, p = 10 * px, txt = 'Editando texto · Esc para sair';
+    const b = visB(ed), p = 10 * px, txt = 'Editando texto · Esc para sair';
     ctx.setLineDash([]); ctx.lineWidth = 2.5 * px; ctx.strokeStyle = '#F2B632';
     ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
     ctx.font = `600 ${11 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
@@ -3344,7 +3356,7 @@ function drawOverlays() {
   // seleção por área: retângulo e quem vai entrar nela
   if (RT.marq) {
     const r = RT.marq;
-    for (const o of marqHits(r)) { const b = o._bounds; ctx.setLineDash([]); ctx.lineWidth = 1.5 * px; ctx.strokeStyle = 'rgba(242,182,50,.85)'; ctx.strokeRect(b.x, b.y, b.w, b.h); }
+    for (const o of marqHits(r)) { const b = visB(o); ctx.setLineDash([]); ctx.lineWidth = 1.5 * px; ctx.strokeStyle = 'rgba(242,182,50,.85)'; ctx.strokeRect(b.x, b.y, b.w, b.h); }
     ctx.fillStyle = 'rgba(242,182,50,.08)'; ctx.fillRect(r.x, r.y, r.w, r.h);
     ctx.setLineDash([]); ctx.lineWidth = 1 * px; ctx.strokeStyle = 'rgba(242,182,50,.9)'; ctx.strokeRect(r.x, r.y, r.w, r.h);
   }
@@ -3422,11 +3434,36 @@ function heroTime() {
 
 /* ------------ arrastar no palco ------------ */
 function stagePt(ev) { const r = cv.getBoundingClientRect(); return { x:(ev.clientX - r.left) / r.width * W(), y:(ev.clientY - r.top) / r.height * H() }; }
+// A câmera mexe no desenho (zoom, deslocamento, giro, paralaxe), então contornos e alças ficam no que se vê na tela: `camFwd` leva um ponto
+// do espaço da camada para a tela e `camInv` volta. As contas de arrastar e escalar continuam no espaço da camada (`_bounds`).
+function camOf(L) {
+  const cam = camAt(T); if (!L || (cam.s === 1 && !cam.dx && !cam.dy && !cam.r)) return null;
+  const els = S.layers.filter(l => l.visible && !NOBOX(l)), k = cam.par ? lerp(1, layerDepth(L, els.indexOf(L), els.length), cam.par) : 1;
+  return { s:1 + (cam.s - 1) * k, dx:cam.dx * k, dy:cam.dy * k, r:cam.r };
+}
+function camFwd(c, p) {
+  if (!c) return p;
+  const cx = W() / 2, cy = H() / 2, x = (p.x - cx) * c.s, y = (p.y - cy) * c.s, co = Math.cos(c.r), si = Math.sin(c.r);
+  return { x:cx + c.dx + x * co - y * si, y:cy + c.dy + x * si + y * co };
+}
+function camInv(c, p) {
+  if (!c) return p;
+  const cx = W() / 2, cy = H() / 2, x = p.x - cx - c.dx, y = p.y - cy - c.dy, co = Math.cos(c.r), si = Math.sin(c.r);
+  return { x:cx + (x * co + y * si) / c.s, y:cy + (-x * si + y * co) / c.s };
+}
+// retângulo do espaço da camada -> caixa que envolve o que aparece na tela
+function visRect(b, L) {
+  const c = camOf(L); if (!c || !b) return b;
+  const q = [camFwd(c, { x:b.x, y:b.y }), camFwd(c, { x:b.x + b.w, y:b.y }), camFwd(c, { x:b.x + b.w, y:b.y + b.h }), camFwd(c, { x:b.x, y:b.y + b.h })];
+  const x0 = Math.min(...q.map(a => a.x)), y0 = Math.min(...q.map(a => a.y));
+  return { ...b, x:x0, y:y0, w:Math.max(...q.map(a => a.x)) - x0, h:Math.max(...q.map(a => a.y)) - y0 };
+}
+const visB = L => visRect(L._bounds, L);
 function hitTest(pt) {
   for (let i = S.layers.length - 1; i >= 0; i--) {
     const L = S.layers[i]; if (!L.visible || L.locked || L.type === 'bg' || !L._bounds) continue;
     if (!phase(L, T)) continue;
-    const b = L._bounds, p = 16;
+    const b = visB(L), p = 16;
     if (pt.x >= b.x - p && pt.x <= b.x + b.w + p && pt.y >= b.y - p && pt.y <= b.y + b.h + p) return L;
   }
   return null;
@@ -3455,8 +3492,9 @@ function handlesOf(L) {
   const min = hRad() * 1.9; // alça de lado que encostaria nas de canto some (elemento pequeno no zoom baixo)
   // padrão: só o canto escala; o lado só existe onde muda outra coisa (frame: tamanho; texto: largura da caixa; máscara, forma e linha: largura ou altura)
   const sideOk = k => { const [kx, ky] = HDIR[k]; if (kx && ky) return true; if (ub) return !!ub.gid; if (L.type === 'text') return ky === 0; return resizable(L) || (L.type === 'shape' && L.kind === 'line'); };
+  const cm = camOf(L); // x/y = onde a alça aparece na tela; lx/ly = o mesmo ponto no espaço da camada (as contas de escala partem dele)
   return Object.keys(HDIR).filter(sideOk).filter(k => !(HDIR[k][0] === 0 && b.w / 2 + p < min) && !(HDIR[k][1] === 0 && b.h / 2 + p < min))
-    .map(k => ({ k, hx:HDIR[k][0], hy:HDIR[k][1], x:at[k][0], y:at[k][1], grp:!!ub }));
+    .map(k => { const v = camFwd(cm, { x:at[k][0], y:at[k][1] }); return { k, hx:HDIR[k][0], hy:HDIR[k][1], x:v.x, y:v.y, lx:at[k][0], ly:at[k][1], grp:!!ub }; });
 }
 function handleAt(pt) {
   const r = hRad() * 1.3, d = q => Math.hypot(pt.x - q.x, pt.y - q.y);
@@ -3476,6 +3514,7 @@ function scaleLayer(L, s0, f) {
 // começa a puxar uma alça (vale no quadro e na mesa em volta dele)
 function startResize(ev, pt, hd) {
   const grp = hd.grp, L = selL(), b = grp ? selUnion() : L._bounds; if (!b) return;
+  const cm = camOf(L); if (cm) { pt = camInv(cm, pt); hd = { ...hd, x:hd.lx, y:hd.ly }; } // tudo no espaço da camada
   pushUndo();
   const cx = b.x + b.w / 2, cy = b.y + b.h / 2, { hx, hy } = hd;
   let how = 'uni'; // uni = escala tudo; wid/hei = só largura/altura; tw = largura de quebra do texto; thick = espessura da linha
@@ -3567,11 +3606,12 @@ function rsPin(D, alt) {
 cv.addEventListener('pointerdown', ev => {
   if (ev.button === 1) { panStage(ev); return; }
   if (ev.button === 2) return; // botão direito abre o menu (contextmenu)
-  const pt = stagePt(ev), hd = handleAt(pt);
+  let pt = stagePt(ev), hd = handleAt(pt);
   if (hd) { startResize(ev, pt, hd); return; }
   const gp = flowGapAt(pt); if (gp) { startGapDrag(ev, pt, gp); return; } // espaço do layout automático
   const L = hitTest(pt);
-  if (!L) { marquee(ev); return; } // no vazio: arrastar seleciona por área; só um clique solta a seleção (com Shift, não)
+  if (!L) { marquee(ev); return; }
+  pt = camInv(camOf(L), pt); // arrastar parte do espaço da camada // no vazio: arrastar seleciona por área; só um clique solta a seleção (com Shift, não)
   if (ev.shiftKey) { toggleSel(L); return; }
   // grupo/frame: o primeiro clique pega o grupo inteiro, o clique duplo entra no item; vizinho de um item já escolhido sozinho pega só ele (arrastar troca de lugar na fila)
   const sel = pickedLayers(), deep = !!L.grp && !(isPicked(L.id) && sel.length > 1) && sel.length === 1 && sel[0].grp === L.grp;
@@ -3610,7 +3650,7 @@ function snapMove(D, dx, dy) {
   return { dx, dy, lines };
 }
 cv.addEventListener('pointermove', ev => {
-  const pt = stagePt(ev);
+  let pt = stagePt(ev);
   if (!RT.drag) {
     if (RT.marq) return;
     const hd = handleAt(pt), gp = !hd && flowGapAt(pt), ht = !gp && hitTest(pt);
@@ -3620,6 +3660,7 @@ cv.addEventListener('pointermove', ev => {
     return;
   }
   const D = RT.drag, L = D.L;
+  if (D.mode === 'rs' || D.mode === 'pan' || D.mode === 'move') pt = camInv(camOf(D.mode === 'rs' ? selL() : L), pt);
   if (D.tap && Math.hypot(ev.clientX - D.pxy[0], ev.clientY - D.pxy[1]) > 3) D.tap = false;
   if (D.mode === 'gap') gapDrag(D, pt);
   else if (D.mode === 'rs') resizeTo(D, pt, ev); // largura de quebra do texto ('tw'): parte da largura real do bloco (não da máx.), senão o começo do arrasto não faz nada; +1 px para não quebrar no empate
@@ -3647,7 +3688,7 @@ let wheelT = null;
 cv.addEventListener('wheel', ev => {
   if (ev.ctrlKey || ev.metaKey) return; // Ctrl + roda é o zoom do palco (#stageBox)
   const L = selL(); if (!L || L.type !== 'image' || L.locked || !L._bounds) return;
-  const pt = stagePt(ev), b = L._bounds; if (pt.x < b.x || pt.x > b.x + b.w || pt.y < b.y || pt.y > b.y + b.h) return;
+  const pt = stagePt(ev), b = visB(L); if (pt.x < b.x || pt.x > b.x + b.w || pt.y < b.y || pt.y > b.y + b.h) return;
   ev.preventDefault();
   if (!wheelT) pushUndo();
   setFrame(L, { zoom:clamp(panOf(L).zoom * (ev.deltaY < 0 ? 1.06 : 1 / 1.06), .2, 5) }); needs = true; // fora do principal, só neste formato
@@ -3696,8 +3737,7 @@ function selectBg() { const bg = S.layers.find(l => l.type === 'bg'); if (bg) se
 function setHover(id) { id = id || null; if (RT.hover !== id) { RT.hover = id; needs = true; } }
 // camadas na tela que encostam no retângulo (um grupo entra inteiro)
 function marqHits(r) {
-  return S.layers.filter(o => o.type !== 'bg' && o.visible && !o.locked && o._bounds && phase(o, T) &&
-    o._bounds.x < r.x + r.w && o._bounds.x + o._bounds.w > r.x && o._bounds.y < r.y + r.h && o._bounds.y + o._bounds.h > r.y);
+  return S.layers.filter(o => { if (o.type === 'bg' || !o.visible || o.locked || !o._bounds || !phase(o, T)) return false; const b = visB(o); return b.x < r.x + r.w && b.x + b.w > r.x && b.y < r.y + r.h && b.y + b.h > r.y; });
 }
 function marquee(ev) {
   const p0 = stagePt(ev), add = ev.shiftKey, x0 = ev.clientX, y0 = ev.clientY;
@@ -3826,6 +3866,7 @@ function showFileName() { const el = $('#fileName'); if (el && document.activeEl
 async function openState(st, id, name) {
   if (saveT) await flushSave();
   if (!st || !st.layers || !st.brand) { toast('Arquivo de projeto inválido'); return false; }
+  await internImages(st); // foto em dataURL (arquivo antigo ou .json importado) vai para fora do JSON
   FILES.id = id; FILES.name = name; showFileName();
   DB.set('currentId', id);
   undoStack.length = 0; redoStack.length = 0; redoBase = null; syncHist();
@@ -4180,6 +4221,37 @@ async function mediaUrl(id) {
   if (MEDIA.has(id)) return MEDIA.get(id);
   const b = await DB.get('media:' + id); if (!b) return null;
   const u = URL.createObjectURL(b); MEDIA.set(id, u); return u;
+}
+/* ------------ fotos também ficam fora do JSON: L.src = 'img:<id>' aponta para 'media:<id>' (getImage resolve).
+   Arquivos antigos (foto em dataURL) são convertidos ao abrir; o .json exportado volta a levar as fotos dentro ------------ */
+const isRef = s => typeof s === 'string' && s.startsWith('img:');
+async function srcUrl(src) { return isRef(src) ? mediaUrl(src.slice(4)) : src; }
+async function putImage(blob) { return 'img:' + await putMedia(blob); }
+async function imageSrc(f) { try { return await putImage(f); } catch (e) { return readAs(f, 'readAsDataURL'); } }
+const IMG_KEYS = L => [[L, 'src'], [L.cut, 'orig'], [L.cut, 'mask']].filter(([o, k]) => o && typeof o[k] === 'string');
+async function internImages(st) {
+  let n = 0;
+  for (const L of (st && st.layers) || []) for (const [o, k] of IMG_KEYS(L)) {
+    if (!o[k].startsWith('data:image/') || o[k].length < 60000) continue;
+    try { o[k] = await putImage(await (await fetch(o[k])).blob()); n++; } catch (e) {}
+  }
+  return n;
+}
+async function portableState() {
+  const st = JSON.parse(JSON.stringify(S));
+  for (const L of st.layers) for (const [o, k] of IMG_KEYS(L)) if (isRef(o[k])) { const b = await DB.get('media:' + o[k].slice(4)); if (b) o[k] = await readAs(b, 'readAsDataURL'); }
+  return st;
+}
+// mídia que nenhum arquivo usa mais (arquivo apagado, recorte refeito) sai do navegador. Roda uma vez, depois de abrir
+async function gcMedia() {
+  try {
+    const db = await DB.open();
+    const keys = await new Promise(res => { const q = db.transaction('kv').objectStore('kv').getAllKeys(); q.onsuccess = () => res(q.result); q.onerror = () => res([]); });
+    const ids = keys.filter(k => typeof k === 'string' && k.startsWith('media:')).map(k => k.slice(6)); if (!ids.length) return;
+    let txt = JSON.stringify(S) + undoStack.join('') + redoStack.join('') + JSON.stringify((await DB.get('elements')) || []);
+    for (const k of keys) if (typeof k === 'string' && k.startsWith('file:')) txt += (await DB.get(k)) || '';
+    for (const id of ids) if (!txt.includes(id)) { await DB.del('media:' + id); const u = MEDIA.get(id); if (u) { URL.revokeObjectURL(u); MEDIA.delete(id); } }
+  } catch (e) {}
 }
 
 /* ------------ vídeo dentro da camada de imagem: L.video = id da mídia, L.src = pôster (1º quadro).
@@ -5343,7 +5415,7 @@ function pasteLayers(p) {
   toast(out.length > 1 ? `${out.length} elementos colados` : `"${out[0].name}" colado`);
 }
 const typingIn = t => { const tag = (t && t.tagName || '').toLowerCase(); return tag === 'input' && !['range', 'checkbox', 'color', 'button'].includes(t.type) || tag === 'textarea' || tag === 'select' || !!(t && t.isContentEditable); };
-const overlayOpen = () => !$('#files').hidden || !$('#modal').hidden || !$('#keys').hidden;
+const overlayOpen = () => !$('#files').hidden || !$('#modal').hidden || !$('#keys').hidden || !!CUTWIN;
 ['copy', 'cut'].forEach(kind => document.addEventListener(kind, e => {
   if (typingIn(e.target) || overlayOpen() || String(getSelection() || '').length) return; // texto selecionado copia o texto
   const L = selL(), p = clipPayload(); if (!p) return;
@@ -5987,7 +6059,7 @@ function selectF(L, k, label, opts, o = {}) {
 function blendF(L) {
   const id = fid(L, 'blend');
   const nameOf = () => BLENDS[blendOf(L) || 'normal'].nome;
-  const btn = h('button', { type:'button', id, class:'blendbtn', 'aria-haspopup':'menu' }, [h('span', { text:nameOf() }), h('i', { text:'▾' })]);
+  const btn = h('button', { type:'button', id, class:'blendbtn', 'aria-haspopup':'menu' }, [h('span', { text:nameOf() }), h('i', { html:'<svg width="14" height="14" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>' })]);
   const hint = h('p', { class:'hint' });
   const tip = () => {
     const b = blendOf(L); hint.hidden = !b;
@@ -6305,9 +6377,9 @@ function renderProps() {
   const L = selL();
   if (!L) { box.append(h('div', { class:'props-empty', text:'Selecione uma camada.' })); return; }
   const gid = wholeGroup(); // grupo inteiro selecionado: a aba Animação é a do grupo
-  const head = h('section', { class:'sec' }, [
+  const head = h('section', { class:'sec sec-head', style:`--tc:${gid ? 'var(--c-group)' : TYPE_COLOR[L.type]}` }, [
     h('div', { class:'lhead' }, [
-      h('span', { class:'type-chip', style:`color:${gid ? 'var(--accent)' : TYPE_COLOR[L.type]}`, text:gid ? 'Grupo' : TYPE_LABEL[L.type] }),
+      h('span', { class:'type-chip', style:`color:${gid ? 'var(--c-group)' : TYPE_COLOR[L.type]}`, text:gid ? 'Grupo' : TYPE_LABEL[L.type] }),
       gid ? (() => { const i = h('input', { type:'text', id:'f-g-' + gid + '-name', value:groupName(gid), 'aria-label':'Nome do grupo' }); i.addEventListener('input', () => { gmeta(gid, true).name = i.value.trim() || undefined; renderLayers(); renderTimeline(); autosave(); }); return i; })()
         : (() => { const i = h('input', { type:'text', id:fid(L, 'name'), value:L.name, 'aria-label':'Nome da camada' }); i.addEventListener('input', () => { L.name = i.value; renderLayers(); autosave(); }); return i; })(),
       L.type !== 'bg' ? h('button', { class:'icon-btn', title:'Duplicar', html:ICONS.copy, onclick:() => duplicateLayer(L) }) : null,
@@ -6524,7 +6596,8 @@ function styleProps(L) {
         L.mask = v; changed({ props:true });
       } })));
     put(
-      uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem', 'image/*', async f => { pushUndo(); L.src = await readAs(f, 'readAsDataURL'); await getImage(L.src); changed({ props:true }); }),
+      uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem', 'image/*', async f => { const src = await imageSrc(f); pushUndo(); L.src = src; delete L.cut; await getImage(L.src); changed({ props:true }); }),
+      cutoutF(L),
       h('h3', { text:'Máscara' }),
       field('Forma', maskSeg, null),
       rangeF(L, 'size', masked(L) ? 'Largura' : 'Tamanho', .03, 1.6, .005, pct),
@@ -6559,7 +6632,7 @@ function fillProps(L, sec) {
   const lbl = { mesh:['Base', 'Mancha 1', 'Mancha 2', 'Mancha 3'], linear:['Cor 1', 'Cor 2', 'Cor 3'], spot:['Base', 'Luz'], solid:['Cor'], image:[] }[L.mode] || [];
   lbl.forEach((t, i) => sec.append(colorF(L, 'c' + (i + 1), t)));
   if (L.mode === 'image') {
-    sec.append(uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem de fundo', 'image/*', async f => { pushUndo(); L.src = await readAs(f, 'readAsDataURL'); await getImage(L.src); changed(); }));
+    sec.append(uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem de fundo', 'image/*', async f => { const src = await imageSrc(f); pushUndo(); L.src = src; await getImage(L.src); changed(); }));
     sec.append(rangeF(L, 'darken', 'Escurecer', 0, .85, .01, v => Math.round(v * 100) + '%'));
   }
   if (L.mode === 'linear') sec.append(rangeF(L, 'angle', 'Ângulo', 0, 360, 1, v => Math.round(v) + '°'));
@@ -6673,7 +6746,8 @@ document.addEventListener('keydown', e => {
     return;
   }
   // espaço sempre toca/pausa (mesmo com um botão focado), menos enquanto digita
-  if (e.code === 'Space') { e.preventDefault(); if (tag === 'button') e.target.blur(); playing ? pause() : play(); return; }
+  // Espaço segurado = mão (arrasta o palco); tocar e soltar sem arrastar toca/pausa, como antes
+  if (e.code === 'Space') { e.preventDefault(); if (tag === 'button') e.target.blur(); if (!e.repeat) handOn(); return; }
   // atalhos do Figma: Delete / Backspace apagam a camada selecionada
   if (e.key === 'Delete' || e.key === 'Backspace') { const L = selL(); if (L && L.type !== 'bg') { e.preventDefault(); closeMenu(); deleteLayer(L); } return; }
   if (e.key === '?') { e.preventDefault(); showKeys(true); return; }
@@ -6800,7 +6874,7 @@ async function addSvgText(text, name, pos) {
 async function addImageFile(f, pos) {
   if (isSvgFile(f)) { addSvgText(await readAs(f, 'readAsText'), f.name && f.name.replace(/\.[^.]+$/, ''), pos); return; }
   if (!isImg(f)) return;
-  const src = await readAs(f, 'readAsDataURL'); await getImage(src);
+  const src = await imageSrc(f); await getImage(src);
   addLayer(mkImage({ y:.42, idle:'float', src, name:f.name ? f.name.replace(/\.[^.]+$/, '') : 'Imagem' }), pos || {});
   toast('Imagem adicionada');
 }
@@ -6888,7 +6962,7 @@ $('#copyBtn').onclick = saveAsCopy; // Ctrl+Shift+S fica no atalho geral
 // antes de fechar a aba ou trocar de janela, grava o que estiver pendente
 document.addEventListener('visibilitychange', () => { if (document.hidden && saveT) flushSave(); });
 addEventListener('beforeunload', e => { if (saveT || saving) { flushSave(); e.preventDefault(); } });
-$('#jsonOut').onclick = () => saveFile(JSON.stringify(S), `${FILES.name.replace(/[\\/:*?"<>|]+/g, '-')}.json`);
+$('#jsonOut').onclick = async () => saveFile(JSON.stringify(await portableState()), `${FILES.name.replace(/[\\/:*?"<>|]+/g, '-')}.json`);
 $('#jsonIn').onclick = () => $('#jsonFile').click();
 $('#jsonFile').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
@@ -7213,6 +7287,7 @@ $('#varBtn').onclick = openVars;
   const fresh = !(saved && saved.layers && saved.brand);
   if (!fresh) { S = saved; FILES.id = id; FILES.name = list.find(f => f.id === id).name; }
   else { newProject(); FILES.id = newFileId(); FILES.name = 'Sem título'; }
+  const interned = !fresh && await internImages(S);
   DB.set('currentId', FILES.id); showFileName(); setSaveState('Salvo');
   RT.selected = S.layers.find(l => l.type === 'logo')?.id || S.layers[1]?.id || S.layers[0]?.id;
   renderAll(); updPlay(); fitStage();
@@ -7222,5 +7297,6 @@ $('#varBtn').onclick = openVars;
   S.layers.forEach(l => l.src && getImage(l.src));
   ensureFonts();
   pause(); T = heroTime(); needs = true;
-  if (fresh) autosave();
+  if (fresh || interned) autosave();
+  setTimeout(gcMedia, 20000);
 })();

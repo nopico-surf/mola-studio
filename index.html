@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&display=swap">
 <link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/cutout.css">
 <style>body{margin:0}</style>
 </head>
 <body>
@@ -41,7 +42,7 @@
     </div>
     <div class="spacer"></div>
     <label class="tog" for="safe"><input type="checkbox" id="safe"> Zona segura 9:16</label>
-    <button class="btn ghost keysbtn" id="keysBtn" title="Atalhos de teclado (?)" aria-label="Atalhos de teclado">?</button>
+    <button class="btn ghost keysbtn" id="keysBtn"title="Atalhos de teclado (?)" aria-label="Atalhos de teclado">?</button>
     <button class="btn ghost" id="undo" title="Desfazer (Ctrl+Z)">Desfazer</button>
     <button class="btn ghost" id="redo" title="Refazer (Ctrl+Shift+Z ou Ctrl+Y)" disabled>Refazer</button>
     <button class="btn ghost" id="varBtn" title="A mesma animação com outros textos, para exportar várias versões">Variações</button>
@@ -148,6 +149,7 @@
 <div class="files keys" id="keys" hidden></div>
 <div class="toast" id="toast" hidden></div>
 <script src="vendor/mp4-muxer.js"></script>
+<script src="js/cutout.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

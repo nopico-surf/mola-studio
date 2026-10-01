@@ -1,0 +1,24 @@
+/* Remover fundo (js/cutout.js): janela própria, por cima de tudo. Usa os tokens do app.css. */
+.cut-win{z-index:35}
+.cut-card{width:100%;height:100%;max-width:none;padding:16px;gap:12px}
+.cut-meta{font:11px var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.cut-body{flex:1;min-height:0;display:grid;grid-template-columns:248px minmax(0,1fr);gap:12px}
+.cut-side{overflow-y:auto;border:1px solid var(--line);border-radius:9px;background:var(--panel)}
+.cut-side .sec:last-child{border-bottom:0}
+.cut-side.off{opacity:.45;pointer-events:none}
+.cut-wrap{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
+.cut-wrap .btn{width:100%;justify-content:center;text-align:center}
+.cut-wrap .btn:only-child,.cut-wrap .btn:last-child:nth-child(odd){grid-column:1/-1}
+.cut-stage{position:relative;min-width:0;min-height:0;background:var(--bg);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.cut-cv{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
+.cut-zoom{position:absolute;right:12px;bottom:12px}
+.cut-prog{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(380px,calc(100% - 32px));background:var(--raised);border:1px solid var(--line-2);border-radius:9px;padding:16px;box-shadow:0 16px 40px -8px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:10px}
+.cut-prog[hidden]{display:none}
+.cut-prog b{font-size:13px;font-weight:600}
+.cut-prog .btn{align-self:flex-start}
+.cut-bar{height:4px;border-radius:999px;background:var(--line);overflow:hidden}
+.cut-bar i{display:block;height:100%;width:0;background:var(--accent);border-radius:inherit;transition:width .25s}
+.cut-prog.indet .cut-bar i{width:32%;animation:cutSlide 1.3s ease-in-out infinite}
+@keyframes cutSlide{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}
+.btn.on{background:var(--accent-soft);border-color:var(--accent);color:var(--fg)}
+@media (max-width:720px){.cut-body{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}.cut-side{max-height:38vh}}
