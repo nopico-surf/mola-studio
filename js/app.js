@@ -3877,7 +3877,15 @@ function resizeTo(D, pt, ev) {
   const A = alt ? D.C : D.A;
   if (D.how === 'frame') { flowResize(D, ex, ey, alt); return; }
   if (D.how === 'tw') { // caixa de largura fixa: o lado oposto fica parado (Alt: os dois lados)
-    const d = hx * (pt.x - D.pt0.x) / D.k * (alt ? 2 : 1), Mg = marginBox(), mw = clamp(D.bw + d + 1, .1 * W(), Mg ? Mg.x1 - Mg.x0 : W()); // não passa da margem (o texto quebra nela)
+    // não passa da margem: o limite é a distância do lado parado (ou do centro, com Alt) até a margem; só a largura total deixava a borda
+    // puxada passar dela e o texto, empurrado para dentro, crescia para o outro lado
+    const Mg = marginBox(), d = hx * (pt.x - D.pt0.x) / D.k * (alt ? 2 : 1);
+    let cap = Mg ? Mg.x1 - Mg.x0 : W();
+    if (Mg && !inFlow(L)) {
+      const room = alt ? 2 * Math.min(D.C.x - Mg.x0, Mg.x1 - D.C.x) : hx > 0 ? Mg.x1 - D.A.x : D.A.x - Mg.x0;
+      cap = Math.max(D.bw + 1, room / D.k); // se já estava além da margem, não encolhe de repente
+    }
+    const mw = clamp(D.bw + d + 1, .1 * W(), Math.max(.1 * W(), cap));
     L.fixW = true; L.maxW = +(mw / W()).toFixed(4);
     if (!alt) setPos(L, +(q0.x0 + hx * (mw - D.bw - 1) * D.k / 2 / W()).toFixed(5), null);
     RT.layout.clear(); return;
@@ -5616,8 +5624,11 @@ function flowResize(D, ex, ey, alt) {
     if (alt) { const c = (b[k0] + b[k1]) / 2, hw = Math.max(mn / 2, Math.abs(e - c)); b[k0] = c - hw; b[k1] = c + hw; }
     else if (d > 0) b[k1] = Math.max(b[k0] + mn, e); else b[k0] = Math.min(b[k1] - mn, e);
   };
-  if (D.hx) { pull(ex, 'x0', 'x1', D.hx, lim.w); F.w = Math.round((b.x1 - b.x0) / kk); }
-  if (D.hy) { pull(ey, 'y0', 'y1', D.hy, lim.h); F.h = Math.round((b.y1 - b.y0) / kk); }
+  const M = marginBox(); // texto, logo e botão dentro do frame não passam da margem: a caixa para nela em vez de empurrar o conteúdo
+  const lock = M && its.some(i => i.L.type !== 'group' && !freeType(i.L));
+  const cap = (k0, k1, lo, hi, mn) => { if (b[k1] > hi && D.B0[k1] <= hi + .5) b[k1] = Math.max(hi, b[k0] + mn); if (b[k0] < lo && D.B0[k0] >= lo - .5) b[k0] = Math.min(lo, b[k1] - mn); };
+  if (D.hx) { pull(ex, 'x0', 'x1', D.hx, lim.w); if (lock) cap('x0', 'x1', M.x0, M.x1, lim.w); F.w = Math.round((b.x1 - b.x0) / kk); }
+  if (D.hy) { pull(ey, 'y0', 'y1', D.hy, lim.h); if (lock) cap('y0', 'y1', M.y0, M.y1, lim.h); F.h = Math.round((b.y1 - b.y0) / kk); }
   flowFill(D.gid, b);
 }
 function flowGroupSec(gid) {
