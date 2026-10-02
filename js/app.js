@@ -2729,6 +2729,8 @@ function ngon(w, h, n, inner) {
 const STROKE_STYLES = { solid:'Sólido', dash:'Tracejado', long:'Longo', dot:'Pontilhado', dashdot:'Traço-ponto' };
 const STROKE_PAT = { dash:[3, 2], long:[6, 3], dot:[0, 2], dashdot:[4, 2, 0, 2] };
 function strokeCap(L) { return L.strokeDash === 'dot' ? 'round' : (L.strokeCap || 'round'); }
+// padrão de traço exato (SVG importado): só vale enquanto o estilo e o espaçamento são os de quando entrou; mexer num deles volta aos estilos prontos
+const strokeArr = L => { const s = L.strokeArr; return s && s.a && s.a.length && s.k === `${L.strokeDash}|${L.strokeGap ?? 1}` ? s.a : null; };
 /* Contorno (como no Figma): vale para texto, logo, botão, imagem/vídeo e forma, junto com a cor, sem tirá-la.
    "Sem cor" (a bolinha branca cortada de vermelho no seletor) é a cor com opacidade 0: o rgb fica guardado para voltar. */
 const noCol = c => colA(c) <= 0;
@@ -2745,12 +2747,16 @@ const strokeOn = L => L.type === 'shape' ? L.kind === 'line' || !!L.stroke || L.
 const strokeSee = L => strokeOn(L) && !noCol(skC(L));
 // lista para setLineDash. dp < 1 = traço sendo desenhado: o padrão é cortado no comprimento já percorrido
 function strokeDash(L, len, dp) {
-  const pat = STROKE_PAT[L.strokeDash], far = len * 2 + 10;
-  if (!pat) return dp < 1 ? [len * dp, far] : [];
-  const w = Math.max(3, skW(L)), cap = strokeCap(L), g = clamp(L.strokeGap ?? 1, .4, 3);
-  // ponta redonda/quadrada avança meia espessura de cada lado: encurta o traço e alarga o vão, o desenho fica igual
-  const ext = cap === 'butt' ? 0 : w;
-  const a = pat.map((v, i) => i % 2 ? Math.max(.5, v * w * g + ext) : Math.max(.01, v * w - ext));
+  const pat = STROKE_PAT[L.strokeDash], raw = strokeArr(L), far = len * 2 + 10;
+  if (!pat && !raw) return dp < 1 ? [len * dp, far] : [];
+  let a;
+  if (raw) a = raw; // padrão exato (vindo de um SVG): medidas em px do vídeo, sem compensar a ponta
+  else {
+    const w = Math.max(3, skW(L)), cap = strokeCap(L), g = clamp(L.strokeGap ?? 1, .4, 3);
+    // ponta redonda/quadrada avança meia espessura de cada lado: encurta o traço e alarga o vão, o desenho fica igual
+    const ext = cap === 'butt' ? 0 : w;
+    a = pat.map((v, i) => i % 2 ? Math.max(.5, v * w * g + ext) : Math.max(.01, v * w - ext));
+  }
   if (dp >= 1) return a;
   const end = len * dp, out = []; let pos = 0;
   for (let i = 0; pos < end && i < 6000; i++) {
@@ -2796,7 +2802,7 @@ function strokeOnPath(ctx, path, L, o = {}) {
   const { closed = true, len = 0, dp = 1 } = o, w = skW(L), pos = closed ? L.strokePos || 'center' : 'center', lw = pos === 'center' ? w : w * 2;
   ctx.save();
   ctx.strokeStyle = skC(L); ctx.lineJoin = L.strokeJoin || 'round'; ctx.lineCap = strokeCap(L); ctx.lineWidth = lw;
-  if (pos === 'inside') ctx.clip(path);
+  if (pos === 'inside') ctx.clip(path, L.fillRule === 'evenodd' ? 'evenodd' : 'nonzero');
   else if (pos === 'outside') { const big = new Path2D(); big.rect(-1e5, -1e5, 2e5, 2e5); big.addPath(path); ctx.clip(big, 'evenodd'); }
   const dash = strokeDash({ ...L, strokeW:lw }, len, dp); if (dash.length) ctx.setLineDash(dash);
   ctx.stroke(path); ctx.restore();
@@ -2924,7 +2930,7 @@ function drawBlockBody(ctx, L, G, info, R) {
     const dp = drawing ? Ease.cubicInOut(clamp(pp / .72)) : 1;
     const fillA = !filled ? 0 : drawing ? Ease.cubicInOut(clamp((pp - .5) / .5)) : 1;
     if (fillA > 0) {
-      ctx.save(); ctx.clip(V.path); ctx.globalAlpha *= fillA; ctx.translate(-G.w / 2, -G.h / 2);
+      ctx.save(); ctx.clip(V.path, L.fillRule === 'evenodd' ? 'evenodd' : 'nonzero'); ctx.globalAlpha *= fillA; ctx.translate(-G.w / 2, -G.h / 2);
       paintFill(ctx, L, info.t, G.w, G.h); ctx.restore();
     }
     const tmp = drawing && !stroked; // traço de apoio: some no fim
@@ -3010,11 +3016,13 @@ function noiseTile() {
   x.putImageData(d, 0, 0); NOISE = c; return c;
 }
 function drawBg(ctx, L, t, R) { paintFill(ctx, L, t, FW(), H()); }
+// degradê exato (SVG importado): paradas em [posição 0..1 na caixa, cor]; só vale enquanto as três cores são as de quando entrou (editou a cor = volta ao degradê de três paradas)
+const gradStops = L => { const s = L.gst; return L.mode === 'linear' && s && s.stops && s.key === [L.c1, L.c2, L.c3].join('|') ? s.stops : null; };
 // preenchimento animado (usado pelo fundo e pelas formas): pinta o retângulo 0,0 → w,hh
 function paintFill(ctx, L, t, w, hh) {
-  const m = L.motion ?? 1;
+  const m = L.motion ?? 1, gs = gradStops(L);
   ctx.save();
-  ctx.fillStyle = L.c1; ctx.fillRect(0, 0, w, hh);
+  if (!gs) { ctx.fillStyle = L.c1; ctx.fillRect(0, 0, w, hh); } // degradê exato (SVG) pode ter transparência: sem cor de base
   if (L.mode === 'mesh') {
     [L.c2, L.c3, L.c4].forEach((c, i) => {
       const ph = i * 2.1 + .7;
@@ -3027,7 +3035,7 @@ function paintFill(ctx, L, t, w, hh) {
   } else if (L.mode === 'linear') {
     const a = ((L.angle ?? 135) + t * 8 * m) * Math.PI / 180, d = Math.hypot(w, hh) / 2;
     const g = ctx.createLinearGradient(w / 2 - Math.cos(a) * d, hh / 2 - Math.sin(a) * d, w / 2 + Math.cos(a) * d, hh / 2 + Math.sin(a) * d);
-    g.addColorStop(0, L.c1); g.addColorStop(.55, L.c2); g.addColorStop(1, L.c3);
+    if (gs) gs.forEach(([o, c]) => g.addColorStop(clamp(o, 0, 1), c)); else { g.addColorStop(0, L.c1); g.addColorStop(.55, L.c2); g.addColorStop(1, L.c3); }
     ctx.fillStyle = g; ctx.fillRect(0, 0, w, hh);
   } else if (L.mode === 'spot') {
     const px = w * (.5 + .08 * Math.sin(t * .5 * m)), py = hh * (.42 + .05 * Math.cos(t * .4 * m));
@@ -3846,6 +3854,8 @@ function restTime(L) {
 }
 function seekLayer(L) { pause(); T = clamp(restTime(L), 0, S.duration); needs = true; }
 function seekOut(L) { pause(); const ph = phase(L, L.start) || { outD:0 }, end = L.end ?? S.duration; T = clamp(end - ph.outD * .5, 0, S.duration); needs = true; }
+// mexer em velocidade/intensidade não leva a agulha para outro lugar se ela já está dentro da camada (restTime muda com a velocidade e a linha pulava)
+function seekKeep(L, out) { const end = L.end ?? S.duration; if (T >= L.start && T <= end) { needs = true; return; } out ? seekOut(L) : seekLayer(L); }
 // "Ver entrada" / "Ver saída": toca só o trecho da camada uma vez e para (pedido explícito, com botão)
 function previewIn(L) { play(Math.max(0, L.start - .25), Math.min(L.end ?? S.duration, restTime(L) + .45)); }
 function previewOut(L) {
@@ -5904,7 +5914,11 @@ function toggleSel(L) {
   const cur = RT.picks && RT.picks.size ? new Set([...RT.picks].filter(id => S.layers.some(l => l.id === id))) : new Set();
   cur.add(RT.selected);
   const mem = groupOf(L).map(l => l.id);
-  if (cur.has(L.id) && cur.size > mem.length) { mem.forEach(id => cur.delete(id)); if (!cur.has(RT.selected)) RT.selected = [...cur].pop(); }
+  // parte do grupo já escolhida (item de dentro): Shift soma ou tira só o item clicado, não o grupo inteiro
+  if (L.grp && mem.some(id => cur.has(id)) && !mem.every(id => cur.has(id))) {
+    if (cur.has(L.id) && cur.size > 1) { cur.delete(L.id); if (RT.selected === L.id) RT.selected = [...cur].pop(); }
+    else if (!cur.has(L.id)) { cur.add(L.id); RT.selected = L.id; }
+  } else if (cur.has(L.id) && cur.size > mem.length) { mem.forEach(id => cur.delete(id)); if (!cur.has(RT.selected)) RT.selected = [...cur].pop(); }
   else { mem.forEach(id => cur.add(id)); RT.selected = L.id; }
   const bg = S.layers.find(l => l.type === 'bg'); if (bg && cur.size > 1) cur.delete(bg.id);
   RT.picks = cur; renderLayers(); renderProps(); needs = true;
@@ -7346,11 +7360,12 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
   const scale = opts.scale || 10 ** Math.round(Math.log10(Math.abs(num(ref) / ref) || 1));
   const unit = (String(fmt(ref)).match(/[^\d.,\s-]+$/) || [''])[0];
   // posição: a do formato aberto (fora do principal, o ajuste vale só nele)
-  const isPos = k === 'x' || k === 'y', val = () => isPos ? posOf(L)[k] : L[k];
+  const isPos = k === 'x' || k === 'y', val = () => opts.get ? opts.get() : isPos ? posOf(L)[k] : L[k];
   const out = h('input', { type:'text', class:'num', inputmode:'decimal', 'aria-label':`${label} (valor)`, value:fmt(val()) });
   const inp = h('input', { type:'range', id, min, max, step, value:val() });
   // tamanho, opacidade, ritmo etc. valem para todas as camadas do mesmo tipo selecionadas; posição e tempo ficam só na principal
   const set = v => {
+    if (opts.put) { opts.put(v); if (opts.onInput) opts.onInput(); changed(); return; }
     // posição: a seleção toda se move junto (mesmo deslocamento)
     if (isPos) {
       const d = v - val();
@@ -7390,6 +7405,13 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
 let SZ_UNIT = (() => { try { return localStorage.getItem('mola-szunit') === 'px' ? 'px' : '%'; } catch (e) { return '%'; } })();
 function sizeF(L, k, label, min, max, step, opts = {}) {
   const px = SZ_UNIT === 'px';
+  // fora do formato principal a máscara tem tamanho próprio (fpos ww/hh, px do bloco) e escala k: o campo mostra e grava o que está na tela
+  if (fmtOwn() && (k === 'mh' || (k === 'size' && (L.type === 'image' || L.type === 'shape'))) && L.type !== 'text') {
+    const wd = k === 'size', own = () => { const G = blockGeom(L); return G ? { G, k:placeOf(L).k || 1 } : null; };
+    opts = { ...opts,
+      get: () => { const o = own(); return o ? (wd ? geomNow(L).w : geomNow(L).h) * o.k / W() : L[k]; },
+      put: v => { const o = own(); if (!o) { L[k] = v; return; } for (const q of peersOf(L)) { const g = blockGeom(q); if (g) setFmt(q, wd ? { ww:+(v * W() / o.k).toFixed(2) } : { hh:+(v * W() / o.k).toFixed(2) }); } RT.layout.clear(); } };
+  }
   const f = px ? rangeF(L, k, label, min, max, 1 / W(), v => Math.round(v * W()) + 'px', { ...opts, scale:W(), dec:0 })
     : rangeF(L, k, label, min, max, step, v => Math.round(v * 100) + '%', opts);
   f.classList.add('flowgap');
@@ -7978,13 +8000,13 @@ function renderProps() {
     };
     box.append((() => { const slot = h('div'); const ref = () => { slot.innerHTML = ''; const f = slideDirF(L, 'in'); if (f) slot.append(f); }; ref();
       return h('section', { class:'sec' }, [h('h3', {}, ['Entrada', seeBtn('Ver a entrada (toca só este trecho)', () => previewIn(L))]), presetGrid(L, 'in', inKeys, map, ref), slot,
-        ...rhythm('in', .4, 6, () => seekLayer(L))]); })());
-    box.append(h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), idleGrid(L), ...rhythm('idle', .2, 4, () => seekLayer(L))]));
+        ...rhythm('in', .4, 6, () => seekKeep(L))]); })());
+    box.append(h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), idleGrid(L), ...rhythm('idle', .2, 4, () => seekKeep(L))]));
     box.append(...animExtras(L)); // marca à mão (texto), movimento dentro da imagem
     box.append((() => { const slot = h('div'); const ref = () => { slot.innerHTML = ''; const f = slideDirF(L, 'out'); if (f) slot.append(f); }; ref();
       return h('section', { class:'sec' }, [h('h3', {}, ['Saída', h('span', { class:'h3r' }, [h('small', { text:(L.end ?? S.duration) >= S.duration - .01 ? 'no fim do vídeo' : `em ${(L.end).toFixed(1)}s` }),
         seeBtn('Ver a saída (toca só este trecho)', () => previewOut(L))])]), presetGrid(L, 'out', outKeys, map, ref), slot,
-        ...rhythm('out', .4, 6, () => seekOut(L))]); })());
+        ...rhythm('out', .4, 6, () => seekKeep(L, true))]); })());
     box.append(h('section', { class:'sec' }, [
       h('h3', { text:'Tempo', 'data-sum':`${fmtSec(L.start)} → ${fmtSec(L.end ?? S.duration)}` }),
       rangeF(L, 'start', 'Entra em', 0, S.duration - .2, .1, v => v.toFixed(1) + 's', { onInput:() => { if (L.end != null && L.end < L.start + .3) L.end = Math.min(S.duration, L.start + .3); renderMarks(); }, after:() => { renderLayers(); seekLayer(L); } }),
@@ -8012,11 +8034,11 @@ function groupAnimSecs(gid, head, box) {
   return [
     h('p', { class:'hint hint-pad', text:'Animação do grupo inteiro: age sobre o conjunto e se soma à de cada item, que continua como está. Para mexer em um item só, clique nele na timeline ou use Ctrl + clique.' }),
     h('section', { class:'sec' }, [h('h3', {}, ['Entrada do grupo', seeBtn('Ver a entrada do grupo (toca só este trecho)', () => previewIn(G))]), presetGrid(G, 'in', G_KEYS.in, BP, inRef), inSlot,
-      ...rhythm('in', .4, 6, () => seekLayer(G))]),
-    h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), presetGrid(G, 'idle', G_KEYS.idle, idleMap), ...rhythm('idle', .2, 4, () => seekLayer(G))]),
+      ...rhythm('in', .4, 6, () => seekKeep(G))]),
+    h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), presetGrid(G, 'idle', G_KEYS.idle, idleMap), ...rhythm('idle', .2, 4, () => seekKeep(G))]),
     h('section', { class:'sec' }, [h('h3', {}, ['Saída do grupo', h('span', { class:'h3r' }, [h('small', { text:`em ${w.end.toFixed(1)}s` }),
       seeBtn('Ver a saída do grupo (toca só este trecho)', () => previewOut(G))])]), presetGrid(G, 'out', G_KEYS.out, BP, outRef), outSlot,
-      ...rhythm('out', .4, 6, () => seekOut(G))]),
+      ...rhythm('out', .4, 6, () => seekKeep(G, true))]),
   ];
 }
 // opacidade, mesclagem, sombra e desfoque: iguais em toda camada, no grupo e na seleção mista (um lugar só)
@@ -8196,9 +8218,29 @@ function strokeSecs(L) {
     on && canOutline(L) ? h('div', { class:'row' }, [h('button', { class:'btn small', text:'Contorno em vetor', title:'O contorno vira uma forma Vetor própria (Ctrl+Shift+O), como Outline stroke no Figma', onclick:() => outlineStroke(L) })]) : null];
 }
 // cor animada: o mesmo motor do fundo, também usado nas formas
+// Estilo da forma com "Sem preenchimento" junto de Sólido etc.: é só todas as cores em uso com opacidade 0 (o rgb fica guardado)
+function fillStyleF(L) {
+  const wrap = h('div', { class:'segs', role:'group', 'aria-label':'Estilo' });
+  const used = o => { const n = { solid:1, linear:3, spot:2, mesh:4 }[o.mode] || 0; return Array.from({ length:n }, (_, i) => 'c' + (i + 1)); };
+  const draw = () => {
+    wrap.innerHTML = ''; const none = fillVoid(L);
+    const pick = (t, on, fn) => wrap.append(h('button', { 'aria-pressed':String(on), text:t, onclick:() => { pushUndo(); for (const o of peersOf(L)) fn(o); RT.layout.clear(); draw(); changed(); renderProps(); } }));
+    for (const [v, t] of Object.entries(BG_MODES)) pick(t, !none && L.mode === v, o => {
+      const was = fillVoid(o); o.mode = v;
+      if (was) for (const k of used(o)) o[k] = withA(o[k] || S.brand.colors[2], 1);
+    });
+    pick('Sem preenchimento', none, o => {
+      if (o.mode === 'image') o.mode = 'solid';
+      for (const k of used(o)) o[k] = withA(o[k] || S.brand.colors[2], 0);
+    });
+  };
+  draw();
+  return field('Estilo', wrap, null, true);
+}
 function fillProps(L, sec) {
-  sec.append(segF(L, 'mode', 'Estilo', Object.entries(BG_MODES)));
-  const lbl = { mesh:['Base', 'Mancha 1', 'Mancha 2', 'Mancha 3'], linear:['Cor 1', 'Cor 2', 'Cor 3'], spot:['Base', 'Luz'], solid:['Cor'], image:[] }[L.mode] || [];
+  sec.append(L.type === 'shape' ? fillStyleF(L) : segF(L, 'mode', 'Estilo', Object.entries(BG_MODES)));
+  if (L.type === 'shape' && fillVoid(L)) return; // sem preenchimento: nada de cor, ângulo, movimento ou granulado
+  const lbl =   { mesh:['Base', 'Mancha 1', 'Mancha 2', 'Mancha 3'], linear:['Cor 1', 'Cor 2', 'Cor 3'], spot:['Base', 'Luz'], solid:['Cor'], image:[] }[L.mode] || [];
   lbl.forEach((t, i) => sec.append(colorF(L, 'c' + (i + 1), t)));
   if (L.mode === 'image') {
     sec.append(uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem de fundo', 'image/*', async f => { const src = await imageSrc(f); pushUndo(); L.src = src; await getImage(L.src); changed(); }));

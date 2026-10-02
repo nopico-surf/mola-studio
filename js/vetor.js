@@ -354,10 +354,21 @@ const svgFill = (c, att = 'fill') => { const o = svgCol(c); return `${att}="${o.
 const svgStops = list => list.map(([off, c, a = 1]) => { const o = svgCol(c); return `<stop offset="${off}" stop-color="${o.c}" stop-opacity="${+(o.a * a).toFixed(3)}"/>`; }).join('');
 const SVG_BLEND = { lighter:'plus-lighter' };
 function newSvgCtx() { let n = 0; return { defs:[], id:() => 'm' + (++n), names:new Set() }; }
+const svgUid = (X, raw, fallback) => {
+  const nm = String(raw || fallback).replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/g, '') || fallback;
+  let id = nm, i = 2;
+  while (X.names.has(id)) id = `${nm}-${i++}`;
+  X.names.add(id); return id;
+};
+// grupo (frame) da lista de camadas: um <g> com o nome, a opacidade e a mesclagem dele, e as camadas dentro
+function svgGroup(gid, inner, X) {
+  const gm = (S.groups && S.groups[gid]) || {}, bm = blendOf(gm), op = gm.opacity ?? 1;
+  return `<g id="${svgEsc(svgUid(X, groupName(gid), 'grupo'))}"${op < 1 ? ` opacity="${+op.toFixed(3)}"` : ''}${bm ? ` style="mix-blend-mode:${SVG_BLEND[bm] || bm}"` : ''}>${inner}</g>`;
+}
 // cada camada vira um <g> com opacidade, mesclagem, sombra e desfoque da camada
 function svgWrap(L, inner, X) {
   if (!inner) return '';
-  let op = L.opacity ?? 1; const gm = L.grp && S.groups && S.groups[L.grp]; if (gm && gm.opacity != null) op *= gm.opacity;
+  const op = L.opacity ?? 1;
   const bm = blendOf(L), sh = L.shadow && L.shadow !== 'none' ? SHADOWS[L.shadow] : null, fx = [];
   if (sh && !sh.long) {
     const k = shadowK(L), c = svgCol(L.shColor || autoShadowHex(L, L.shadow));
@@ -366,21 +377,19 @@ function svgWrap(L, inner, X) {
   if (L.lblur > 0) fx.push(`<feGaussianBlur stdDeviation="${sn(L.lblur)}"/>`);
   let fid = '';
   if (fx.length) { const id = X.id(); X.defs.push(`<filter id="${id}" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">${fx.join('')}</filter>`); fid = ` filter="url(#${id})"`; }
-  let nm = String(L.name || L.type).replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/g, '') || L.type, id = nm, i = 2;
-  while (X.names.has(id)) id = `${nm}-${i++}`;
-  X.names.add(id);
+  const id = svgUid(X, L.name || L.type, L.type);
   return `<g id="${svgEsc(id)}"${op < 1 ? ` opacity="${+op.toFixed(3)}"` : ''}${bm ? ` style="mix-blend-mode:${SVG_BLEND[bm] || bm}"` : ''}${fid}>${inner}</g>`;
 }
 // contorno (center | inside | outside) em cima de um elemento; el(atributos) devolve o elemento, sc = escala do espaço dele
 function svgStroke(L, el, X, o = {}) {
   if (!strokeSee(L)) return '';
   const sc = o.sc || 1, pos = o.closed === false ? 'center' : L.strokePos || 'center', w = skW(L), lw = pos === 'center' ? w : w * 2;
-  const dash = strokeDash({ ...L, strokeW:lw }, 0, 1);
+  const dash = strokeDash({ ...L, strokeW:lw }, 0, 1), eo = o.rule === 'evenodd';
   const att = `fill="none" ${svgFill(skC(L), 'stroke')} stroke-width="${sn(lw / sc)}" stroke-linecap="${strokeCap(L)}" stroke-linejoin="${L.strokeJoin || 'round'}"${dash.length ? ` stroke-dasharray="${dash.map(v => sn(v / sc)).join(' ')}"` : ''}`;
   if (pos === 'center') return el(att);
   const id = X.id();
-  if (pos === 'inside') { X.defs.push(`<clipPath id="${id}">${el('')}</clipPath>`); return `<g clip-path="url(#${id})">${el(att)}</g>`; }
-  X.defs.push(`<mask id="${id}" maskUnits="userSpaceOnUse" x="-100000" y="-100000" width="200000" height="200000"><rect x="-100000" y="-100000" width="200000" height="200000" fill="#fff"/>${el('fill="#000" stroke="none"')}</mask>`);
+  if (pos === 'inside') { X.defs.push(`<clipPath id="${id}">${el(eo ? 'clip-rule="evenodd"' : '')}</clipPath>`); return `<g clip-path="url(#${id})">${el(att)}</g>`; }
+  X.defs.push(`<mask id="${id}" maskUnits="userSpaceOnUse" x="-100000" y="-100000" width="200000" height="200000"><rect x="-100000" y="-100000" width="200000" height="200000" fill="#fff"/>${el(`fill="#000" stroke="none"${eo ? ' fill-rule="evenodd"' : ''}`)}</mask>`);
   return `<g mask="url(#${id})">${el(att)}</g>`;
 }
 // bytes da imagem como dataURL (a original; com ajustes ou vídeo, o quadro de agora)
@@ -408,7 +417,7 @@ async function svgPaint(L, x, y, w, hh, X) {
     });
   } else if (L.mode === 'linear') {
     const a = ((L.angle ?? 135) + t * 8 * m) * Math.PI / 180, d = Math.hypot(w, hh) / 2, cx = x + w / 2, cy = y + hh / 2;
-    out = rect(`fill="url(#${grad('linearGradient', `x1="${sn(cx - Math.cos(a) * d)}" y1="${sn(cy - Math.sin(a) * d)}" x2="${sn(cx + Math.cos(a) * d)}" y2="${sn(cy + Math.sin(a) * d)}"`, [[0, L.c1], [.55, L.c2], [1, L.c3]])})"`);
+    out = rect(`fill="url(#${grad('linearGradient', `x1="${sn(cx - Math.cos(a) * d)}" y1="${sn(cy - Math.sin(a) * d)}" x2="${sn(cx + Math.cos(a) * d)}" y2="${sn(cy + Math.sin(a) * d)}"`, gradStops(L) || [[0, L.c1], [.55, L.c2], [1, L.c3]])})"`);
   } else if (L.mode === 'spot') {
     const px = x + w * (.5 + .08 * Math.sin(t * .5 * m)), py = y + hh * (.42 + .05 * Math.cos(t * .4 * m));
     out += rect(`fill="url(#${grad('radialGradient', `cx="${sn(px)}" cy="${sn(py)}" r="${sn(Math.max(w, hh) * .7)}"`, [[0, L.c2, .95], [.55, L.c2, .25], [1, L.c2, 0]])})"`);
@@ -442,14 +451,15 @@ async function svgShape(L, X) {
     else { const d = vecD(shapePts(L, G)); el = a => `<path d="${d}" ${a}/>`; }
   }
   let body = '';
+  const rule = L.fillRule === 'evenodd' ? 'evenodd' : '';
   if (shFilled(L)) {
-    if (L.mode === 'solid') body += el(svgFill(L.c1) + ' stroke="none"');
+    if (L.mode === 'solid') body += el(svgFill(L.c1) + ' stroke="none"' + (rule ? ' fill-rule="evenodd"' : ''));
     else {
-      const id = X.id(); X.defs.push(`<clipPath id="${id}">${el('')}</clipPath>`);
+      const id = X.id(); X.defs.push(`<clipPath id="${id}">${el(rule ? 'clip-rule="evenodd"' : '')}</clipPath>`);
       body += `<g clip-path="url(#${id})">${await svgPaint(L, -G.w / 2, -G.h / 2, G.w, G.h, X)}</g>`;
     }
   }
-  body += svgStroke(L, el, X, { sc, closed:kind !== 'line' });
+  body += svgStroke(L, el, X, { sc, closed:kind !== 'line', rule });
   return svgWrap(L, `<g transform="${tf}">${body}</g>`, X);
 }
 // texto em curvas (se a fonte não vier, <text>)
@@ -522,7 +532,15 @@ async function buildSvg(only) {
   if (!ls.length) throw new Error('Nada na tela neste momento');
   ensureBounds(ls);
   const parts = [];
-  for (const L of ls) { try { parts.push(await SVG_DRAW[L.type](L, X)); } catch (e) { console.warn(L.name, e); } }
+  for (const L of ls) { try { parts.push({ gid:L.grp, s:await SVG_DRAW[L.type](L, X) }); } catch (e) { console.warn(L.name, e); } }
+  // camadas seguidas do mesmo grupo entram num <g> com o nome do grupo
+  const out = []; let run = null;
+  const flush = () => { if (run) { out.push(svgGroup(run.gid, run.s.filter(Boolean).join('\n'), X)); run = null; } };
+  for (const p of parts) {
+    if (p.gid && run && run.gid === p.gid) run.s.push(p.s);
+    else { flush(); if (p.gid) run = { gid:p.gid, s:[p.s] }; else out.push(p.s); }
+  }
+  flush();
   let vb = [0, 0, FW(), H()];
   if (only) {
     const bs = ls.map(l => l._bounds).filter(Boolean); if (!bs.length) throw new Error('A seleção não está na tela');
@@ -530,7 +548,7 @@ async function buildSvg(only) {
     const pad = Math.max(8, ...ls.map(l => (strokeSee(l) ? skW(l) : 0) * 1.2));
     vb = [sn(x0 - pad), sn(y0 - pad), sn(x1 - x0 + pad * 2), sn(y1 - y0 + pad * 2)];
   }
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${vb[2]}" height="${vb[3]}" viewBox="${vb.join(' ')}">\n<defs>${X.defs.join('\n')}</defs>\n${parts.join('\n')}\n</svg>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${vb[2]}" height="${vb[3]}" viewBox="${vb.join(' ')}">\n<defs>${X.defs.join('\n')}</defs>\n${out.filter(Boolean).join('\n')}\n</svg>\n`;
 }
 let svgBusy = false;
 async function exportSvg(mode) {
