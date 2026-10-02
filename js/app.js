@@ -515,6 +515,8 @@ function posOf(L) { const p = placeOf(L); return { x:p.x, y:p.y }; }
 const fmtOwn = () => S.format !== baseFmt(); // mexer no palco agora grava só neste formato
 const fOf = L => (fmtOwn() && L.fpos && L.fpos[S.format]) || {};
 function setFmt(L, patch) { L.fpos ||= {}; L.fpos[S.format] = { ...L.fpos[S.format], ...patch }; }
+// limite do centro (fração do quadro) ao mover: largo de propósito, forma e foto podem ir bem para fora do palco; só evita perder o elemento de vez
+const POS_LO = -3, POS_HI = 4, clampPos = v => clamp(v, POS_LO, POS_HI);
 // null mantém o eixo como está
 function setPos(L, x, y) {
   if (!fmtOwn()) { if (x != null) L.x = x; if (y != null) L.y = y; return; }
@@ -4036,8 +4038,8 @@ cv.addEventListener('pointermove', ev => {
     }
     // um deslocamento só para todos: se um bate no limite, ninguém passa (senão desalinham)
     const its = [{ o:L, x0:D.x0, y0:D.y0 }, ...(D.others || [])];
-    const ddx = clamp(x - D.x0, Math.max(...its.map(q => -.2 - q.x0)), Math.min(...its.map(q => 1.2 - q.x0)));
-    const ddy = clamp(y - D.y0, Math.max(...its.map(q => -.2 - q.y0)), Math.min(...its.map(q => 1.2 - q.y0)));
+    const ddx = clamp(x - D.x0, Math.max(...its.map(q => POS_LO - q.x0)), Math.min(...its.map(q => POS_HI - q.x0)));
+    const ddy = clamp(y - D.y0, Math.max(...its.map(q => POS_LO - q.y0)), Math.min(...its.map(q => POS_HI - q.y0)));
     for (const q of its) setPos(q.o, +(q.x0 + ddx).toFixed(4), +(q.y0 + ddy).toFixed(4));
     syncPosFields(L);
   }
@@ -5440,8 +5442,8 @@ function alignLayers(mode) {
   pushUndo();
   for (const u of U) { const v = d.get(u); for (const L of u.m) {
     const b = L._bounds;
-    if (horiz) { setPos(L, +clamp((b.x + b.w / 2 + v) / W(), -.2, 1.2).toFixed(4), null); b.x += v; }
-    else { setPos(L, null, +clamp((b.y + b.h / 2 + v) / H(), -.2, 1.2).toFixed(4)); b.y += v; }
+    if (horiz) { setPos(L, +clampPos((b.x + b.w / 2 + v) / W()).toFixed(4), null); b.x += v; }
+    else { setPos(L, null, +clampPos((b.y + b.h / 2 + v) / H()).toFixed(4)); b.y += v; }
   } }
   changed({ props:true });
 }
@@ -6731,7 +6733,7 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
     // posição: a seleção toda se move junto (mesmo deslocamento)
     if (isPos) {
       const d = v - val();
-      for (const o of peersAny(L)) { const n = o === L ? v : +clamp(posOf(o)[k] + d, -.2, 1.2).toFixed(4); setPos(o, k === 'x' ? n : null, k === 'y' ? n : null); }
+      for (const o of peersAny(L)) { const n = o === L ? v : +clampPos(posOf(o)[k] + d).toFixed(4); setPos(o, k === 'x' ? n : null, k === 'y' ? n : null); }
       if (opts.onInput) opts.onInput(); changed(); return;
     }
     for (const o of (['start', 'end'].includes(k) ? [L] : ['inSpeed', 'inInt', 'outSpeed', 'outInt', 'idleSpeed', 'idleInt', 'opacity'].includes(k) ? peersAny(L) : peersOf(L))) o[k] = v; if (opts.layout) RT.layout.clear(); if (opts.onInput) opts.onInput(); changed(); };
@@ -6743,7 +6745,7 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
   const apply = () => {
     const raw = parseFloat(out.value.replace(',', '.').replace(/[^\d.-]/g, ''));
     if (isFinite(raw)) {
-      let v = clamp(raw / scale, min, opts.cap ?? max); if (step >= 1) v = Math.round(v); // cap: digitado pode passar do fim da barra
+      let v = clamp(raw / scale, opts.low ?? min, opts.cap ?? max); if (step >= 1) v = Math.round(v); // cap/low: digitado pode passar das pontas da barra
       if (v !== val()) { pushUndo(); set(v); inp.value = v; if (opts.after) opts.after(); }
     }
     out.value = fmt(val());
@@ -6755,8 +6757,8 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
       e.preventDefault();
       const cur = parseFloat(out.value.replace(',', '.')); if (!isFinite(cur)) return;
       const d = step * scale * (e.shiftKey ? 10 : 1) * (e.key === 'ArrowUp' ? 1 : -1);
-      out.value = String(+(clamp((cur + d) / scale, min, opts.cap ?? max) * scale).toFixed(4)).replace('.', ',');
-      const v = clamp((cur + d) / scale, min, max); if (v !== val()) { pushUndo(); set(v); inp.value = v; }
+      out.value = String(+(clamp((cur + d) / scale, opts.low ?? min, opts.cap ?? max) * scale).toFixed(4)).replace('.', ',');
+      const v = clamp((cur + d) / scale, opts.low ?? min, opts.cap ?? max); if (v !== val()) { pushUndo(); set(v); inp.value = v; }
     }
   });
   out.addEventListener('blur', () => { if (out.dataset.skip) { delete out.dataset.skip; out.value = fmt(val()); return; } apply(); });
@@ -7358,7 +7360,8 @@ function syncPosFields(L) {
   const n = document.getElementById(fid(L, 'fpos')), nn = posNote(L); if (n && nn) n.replaceWith(nn);
 }
 function posFields(L) {
-  return [rangeF(L, 'x', 'Horizontal', 0, 1, .005, v => Math.round(v * 100) + '%'), rangeF(L, 'y', 'Vertical', 0, 1, .005, v => Math.round(v * 100) + '%'), posNote(L)];
+  const pos = { low:POS_LO, cap:POS_HI }; // digitado pode ir além da barra (elemento fora do palco)
+  return [rangeF(L, 'x', 'Horizontal', 0, 1, .005, v => Math.round(v * 100) + '%', pos), rangeF(L, 'y', 'Vertical', 0, 1, .005, v => Math.round(v * 100) + '%', pos), posNote(L)];
 }
 // fora do formato principal: de onde vem a posição e como voltar ao automático
 function posNote(L) {
@@ -7682,7 +7685,7 @@ function nudge(dx, dy) {
   const p = posOf(L); let x = p.x + dx / W(), y = p.y + dy / H();
   if (!freeType(L) && L._bounds) { const f = fitInMargin(x * W(), y * H(), L._bounds.w, L._bounds.h); x = f.ax / W(); y = f.ay / H(); }
   const ddx = x - p.x, ddy = y - p.y;
-  for (const o of ls) { const q = posOf(o); setPos(o, +clamp(q.x + ddx, -.2, 1.2).toFixed(5), +clamp(q.y + ddy, -.2, 1.2).toFixed(5)); }
+  for (const o of ls) { const q = posOf(o); setPos(o, +clampPos(q.x + ddx).toFixed(5), +clampPos(q.y + ddy).toFixed(5)); }
   syncPosFields(L); changed();
 }
 // I / O: a seleção entra / sai no quadro da agulha. Se a agulha passou do outro lado, o elemento inteiro vai para lá
