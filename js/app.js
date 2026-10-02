@@ -6660,8 +6660,8 @@ function groupCell(gid, where) {
   }
   groupDrop(el, gid);
   el.draggable = true;
-  el.addEventListener('dragstart', e => { dragGroupId = gid; dragLayerId = mem[0].id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', gid); });
-  el.addEventListener('dragend', () => { dragGroupId = null; dragLayerId = null; document.querySelectorAll('.drop-before,.drop-after,.drop-in').forEach(n => n.classList.remove('drop-before', 'drop-after', 'drop-in')); });
+  el.addEventListener('dragstart', e => { dragGroupId = gid; dragLayerId = mem[0].id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', gid); setTimeout(() => el.classList.add('dragging')); });
+  el.addEventListener('dragend', () => { dragGroupId = null; dragLayerId = null; el.classList.remove('dragging'); document.querySelectorAll('.drop-before,.drop-after,.drop-in').forEach(n => n.classList.remove('drop-before', 'drop-after', 'drop-in')); });
   return el;
 }
 function renderLayers() {
@@ -6712,15 +6712,15 @@ function dragReorder(el, L) {
   if (L.type === 'bg') return;
   el.draggable = true;
   const clear = () => document.querySelectorAll('.drop-before,.drop-after,.drop-in').forEach(n => n.classList.remove('drop-before', 'drop-after', 'drop-in'));
-  el.addEventListener('dragstart', e => { dragLayerId = L.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', L.id); });
-  el.addEventListener('dragend', () => { dragLayerId = null; clear(); });
+  el.addEventListener('dragstart', e => { dragLayerId = L.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', L.id); setTimeout(() => el.classList.add('dragging')); });
+  el.addEventListener('dragend', () => { dragLayerId = null; el.classList.remove('dragging'); clear(); });
   el.addEventListener('dragover', e => {
     if (!dragLayerId || dragLayerId === L.id) return;
     e.preventDefault(); clear();
     const r = el.getBoundingClientRect();
     el.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
   });
-  el.addEventListener('dragleave', () => el.classList.remove('drop-before', 'drop-after'));
+  el.addEventListener('dragleave', e => { if (!el.contains(e.relatedTarget)) el.classList.remove('drop-before', 'drop-after'); });
   el.addEventListener('drop', e => {
     if (!dragLayerId || dragLayerId === L.id) return;
     e.preventDefault();
@@ -6766,7 +6766,7 @@ function groupDrop(el, gid) {
     const r = el.getBoundingClientRect();
     el.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-in');
   });
-  el.addEventListener('dragleave', () => el.classList.remove('drop-before', 'drop-in'));
+  el.addEventListener('dragleave', e => { if (!el.contains(e.relatedTarget)) el.classList.remove('drop-before', 'drop-in'); });
   el.addEventListener('drop', e => {
     if (!dragLayerId) return;
     e.preventDefault();
@@ -8489,10 +8489,12 @@ document.addEventListener('keydown', e => {
 const KEYS = [
   ['Tocar', [['Espaço', 'Tocar e pausar'], [', .', 'Um quadro para trás / para frente'], ['Shift + , .', 'Um segundo para trás / para frente'], ['← →', 'Quadro a quadro, com nada selecionado'], ['Home End', 'Início / último quadro']]],
   ['Tempo do elemento', [['I', 'Entra na agulha'], ['O', 'Sai na agulha'], ['Clique duplo na barra', 'Leva a agulha até ele'], ['Shift ao arrastar', 'Desliga o ímã da timeline'], ['Esc ao arrastar', 'Cancela']]],
-  ['Palco', [['← ↑ → ↓', 'Move 1 px (Shift: 10 px)'], ['Arrastar no vazio', 'Seleciona por área'], ['Shift + clique', 'Soma ou tira da seleção'], ['Ctrl + clique', 'Escolhe um item dentro do grupo'], ['Clique duplo / Enter', 'Edita o texto'], ['Ctrl ao arrastar', 'Desliga as guias'], ['Alt + arrastar imagem', 'Move a imagem na máscara'], ['Roda na imagem', 'Zoom na máscara'], ['Alças (8 pontos)', 'Cantos escalam; lados mudam largura, altura ou quebra do texto'], ['Alt ao puxar a alça', 'Escala a partir do centro'], ['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco'], ['Ctrl + \\', 'Esconde ou mostra todos os painéis'], ['P', 'Caneta (modos Caneta, Curvas e Mão livre no topo do palco)'], ['Shift + P', 'Caneta à mão livre'], ['Clique duplo na forma', 'Edita os pontos (qualquer forma vira vetor)'], ['Arrastar a linha', 'Curva o trecho (na edição de pontos)'], ['Clique duplo no ponto', 'Curva / canto']]],
+  ['Palco', [['← ↑ → ↓', 'Move 1 px (Shift: 10 px)'], ['Arrastar no vazio', 'Seleciona por área'], ['Shift + clique', 'Soma ou tira da seleção'], ['Ctrl + clique', 'Escolhe um item dentro do grupo'], ['Clique duplo / Enter', 'Edita o texto'], ['Ctrl ao arrastar', 'Desliga as guias'], ['Alt + arrastar imagem', 'Move a imagem na máscara'], ['Roda na imagem', 'Zoom na máscara'], ['Alças (8 pontos)', 'Cantos escalam; lados mudam largura, altura ou quebra do texto'], ['Alt ao puxar a alça', 'Escala a partir do centro']]],
+  ['Zoom e painéis', [['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco'], ['Ctrl + \\', 'Esconde ou mostra todos os painéis']]],
+  ['Caneta e pontos', [['P', 'Caneta (modos Caneta, Curvas e Mão livre no topo do palco)'], ['Shift + P', 'Caneta à mão livre'], ['Clique duplo na forma', 'Edita os pontos (qualquer forma vira vetor)'], ['Arrastar a linha', 'Curva o trecho (na edição de pontos)'], ['Clique duplo no ponto', 'Curva / canto']]],
   ['Editar', [['Ctrl + Z', 'Desfazer'], ['Ctrl + Shift + Z', 'Refazer'], ['Ctrl + C / X / V', 'Copiar, recortar, colar (vale entre arquivos)'], ['Ctrl + D', 'Duplicar'], ['Delete', 'Apagar'], ['Ctrl + A', 'Selecionar tudo'], ['Esc', 'Tirar a seleção / sair do texto'], ['/', 'Buscar animação']]],
   ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Alt + Shift + U S I E', 'Pathfinder: unir, subtrair, interseção, excluir (formas)'], ['Ctrl + E', 'Pathfinder: achatar as formas em um vetor'], ['Ctrl + Shift + O', 'Converter em vetor: texto em curvas e contorno em forma'], ['Shift + A', 'Layout automático (sem nada selecionado: o quadro todo)'], ['Arrastar o espaço rosa', 'Muda o espaço do layout'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear']]],
-  ['Arquivo', [['Ctrl + S', 'Salvar agora (já salva sozinho)'], ['Ctrl + Shift + S', 'Salvar cópia'], ['Ctrl + Shift + E', 'Exportar (MP4, ou PNG com Duração 0)'], ['Exportar PNG / Exportar SVG (transporte)', 'Com algo selecionado salva só a seleção; sem seleção, o quadro da agulha (SVG parado, com o texto em curvas)'], ['Ctrl + V', 'Colar imagem ou SVG'], ['?', 'Este painel']]],
+  ['Arquivo', [['Ctrl + S', 'Salvar agora (já salva sozinho)'], ['Ctrl + Shift + S', 'Salvar cópia'], ['Ctrl + Shift + E', 'Exportar (MP4, ou PNG com Duração 0)'], ['Exportar PNG / SVG', 'No transporte. Com algo selecionado salva só a seleção; sem seleção, o quadro da agulha (SVG parado, com o texto em curvas)'], ['Ctrl + V', 'Colar imagem ou SVG'], ['?', 'Este painel']]],
 ];
 function showKeys(on) {
   const box = $('#keys');
