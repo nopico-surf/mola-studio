@@ -87,14 +87,26 @@ const TP = { // texto
   scramble:  {label:'Embaralhar', unit:'char', s:.6, ease:'linear', dur:1.2, fn:({p})=>({scr:p<1, a:clamp(p*3)})},
   glitch:    {label:'Falha digital', unit:'line', s:.3, ease:'linear', dur:.9, fn:({p,I,size,i,seed})=>p>=1?{}:({dx:(rand(seed,i)-.5)*size*(.2+.8*I)*(1-p), a:rand(seed,i+7)<(.35+p*.65)?1:.15, split:(1-p)*size*.07})},
   zoom:      {label:'Zoom de câmera', unit:'all', s:0, ease:'expoOut', dur:1.0, fn:({e,p,I})=>({sc:1+(1-e)*(.25+.8*I), blur:(1-e)*16, a:clamp(p*2.2)})},
-  slideWord: {label:'Desliza por palavra', unit:'word', s:.45, ease:'expoOut', dur:1.1, fn:({e,p,I,size,dir})=>({dx:(1-e)*size*(.6+1.2*I)*dir, a:clamp(p*2.5)})},
-  slideAlt:  {label:'Linhas alternadas', unit:'line', s:.2, ease:'expoOut', dur:1.1, fn:({e,p,i,W,dir,I})=>({dx:(1-e)*W*(.3+.5*I)*(i%2?1:-1)*dir, blur:(1-e)*12, a:clamp(p*2)})},
+  slideWord: {label:'Desliza por palavra', unit:'word', s:.45, ease:'expoOut', dur:1.1, fn:({e,p,I,size,dir,sax,ssg})=>{ const m=(1-e)*size*(.6+1.2*I)*(ssg??1)*dir, o={a:clamp(p*2.5)}; if(sax==='y')o.dy=m; else o.dx=m; return o; }},
+  slideAlt:  {label:'Linhas alternadas', unit:'line', s:.2, ease:'expoOut', dur:1.1, fn:({e,p,i,W,H,dir,I,sax,ssg})=>{ const m=(1-e)*(sax==='y'?H:W)*(.3+.5*I)*(i%2?1:-1)*(ssg??1)*dir, o={blur:(1-e)*12, a:clamp(p*2)}; if(sax==='y')o.dy=m; else o.dx=m; return o; }},
   counter:   {label:'Contador', unit:'all', s:0, ease:'expoOut', dur:1.3, counter:true, fn:({e,p})=>({count:e, a:clamp(p*4)})},
   fade:      {label:'Fade', unit:'all', s:0, ease:'cubicOut', dur:.8, fn:({e})=>({a:e, dy:(1-e)*8})},
   cut:       {label:'Sem animação', unit:'all', s:0, ease:'linear', dur:0, fn:()=>({})},
 };
 const TEXT_IN  = ['cut','rise','springWord','lineMask','blurChar','wave','stamp','highlight','type','track','drop','elastic','flip','scramble','glitch','zoom','slideWord','slideAlt','counter','fade'];
 const TEXT_OUT = ['cut','fade','rise','lineMask','blurChar','zoom','track','slideWord','slideAlt','glitch','scramble','drop','highlight'];
+
+/* Direção dos presets de deslizar (slide, slideWord, slideAlt): 4 opções, por fase (entrada e saída).
+   Código = de onde o elemento vem: L (esquerda→direita), R (direita→esquerda), T (cima→baixo), B (baixo→cima).
+   sax = eixo do movimento; ssg = sinal do deslocamento inicial (onde a unidade começa em relação ao repouso). */
+const SLIDE_DIRS = { L:{ sax:'x', ssg:-1 }, R:{ sax:'x', ssg:1 }, T:{ sax:'y', ssg:-1 }, B:{ sax:'y', ssg:1 } };
+const SLIDE_DEF = { slide:'L', slideWord:'R', slideAlt:'R' }; // padrão que mantém o visual dos arquivos antigos
+function slideOf(L, mode) {
+  const key = mode === 'out' ? L.out : L.in;
+  if (!(key in SLIDE_DEF)) return null;
+  const code = (mode === 'out' ? L.outSlide : L.inSlide) || SLIDE_DEF[key];
+  return SLIDE_DIRS[code] || SLIDE_DIRS[SLIDE_DEF[key]];
+}
 
 const BP = { // blocos: logo, botão, imagem
   draw:    {label:'Desenhar traço', svg:true, shape:true, special:true, dur:2.4},
@@ -106,7 +118,7 @@ const BP = { // blocos: logo, botão, imagem
   drop:    {label:'Cai e quica', ease:'spring', dur:1.2, fn:({e,p,h,dir})=>({dy:-(1-e)*h*2.2*dir, a:clamp(p*5)})},
   spin:    {label:'Giro', ease:'expoOut', dur:1.1, fn:({e,p,I})=>({rot:(1-e)*Math.PI*(1+I), sc:Math.max(0,e), a:clamp(p*3)})},
   flip:    {label:'Vira', ease:'backOut', dur:1.0, fn:({e,p})=>({sx:Math.cos((1-e)*Math.PI/2), a:clamp(p*3)})},
-  slide:   {label:'Desliza', ease:'expoOut', dur:1.0, fn:({e,p,I,W,dir})=>({dx:-(1-e)*W*(.3+.4*I)*dir, blur:(1-e)*14*I, a:clamp(p*2)})},
+  slide:   {label:'Desliza', ease:'expoOut', dur:1.0, fn:({e,p,I,W,H,dir,sax,ssg})=>{ const m=(1-e)*(sax==='y'?H:W)*(.3+.4*I)*(ssg??-1)*dir, o={blur:(1-e)*14*I, a:clamp(p*2)}; if(sax==='y')o.dy=m; else o.dx=m; return o; }},
   rise:    {label:'Sobe com máscara', ease:'quintOut', dur:1.0, fn:({e,h,dir})=>({cdy:(1-e)*h*1.08*dir, clip:'bounds'})},
   blur:    {label:'Desfoque', ease:'cubicOut', dur:1.0, fn:({e,p,I})=>({blur:(1-e)*(10+26*I), sc:1+(1-e)*.3*I, a:clamp(p*1.5)})},
   circle:  {label:'Revelação circular', ease:'cubicInOut', dur:1.1, fn:({e,I})=>({clip:'circle', ce:e, sc:1+(1-e)*.15*I})},
@@ -2373,7 +2385,7 @@ function drawText(ctx, L, t, R) {
     const q = unitP(pr, idx, nOf, P.s);
     const e = ph.mode === 'in' ? easeIn(P.ease, q, I) : easeOutPhase(P.ease, q, I);
     const p = ph.mode === 'in' ? q : 1 - q;
-    return P.fn({ e, p, I, size, lineH:lay.lineH, maskH:lay.mask.h, dir, i:idx, n:nOf, seed, W:W(), bw:lay.blockW, bh:lay.blockH });
+    return P.fn({ e, p, I, size, lineH:lay.lineH, maskH:lay.mask.h, dir, i:idx, n:nOf, seed, W:W(), H:H(), bw:lay.blockW, bh:lay.blockH, ...slideOf(L, ph.mode) });
   };
   const stCache = new Map();
   const stateFor = idx => { if (!stCache.has(idx)) stCache.set(idx, stAt(idx, ph.p)); return stCache.get(idx); };
@@ -2845,7 +2857,7 @@ function drawBlock(ctx, L, t, R) {
   const seed = Math.floor(t * 24);
   const stAt = q => {
     const e = ph.mode === 'in' ? easeIn(P.ease, q, I) : easeOutPhase(P.ease, q, I);
-    return P.fn({ e, p:ph.mode === 'in' ? q : 1 - q, I, w:G.w, h:G.h, dir, W:W(), seed });
+    return P.fn({ e, p:ph.mode === 'in' ? q : 1 - q, I, w:G.w, h:G.h, dir, W:W(), H:H(), seed, ...slideOf(L, ph.mode) });
   };
   const st = P && P.fn ? stAt(ph.p) : {};
   const idl = idleState(L, tl, ph, false, G.h / 2); // movimento contínuo
@@ -3295,7 +3307,7 @@ function drawGroup(tc, gid, gp, els, t, R, cam, one, G, depth = 0) {
   const I = intOf(gp, ph.mode === 'out' ? 'out' : 'in'), dir = ph.mode === 'out' ? -1 : 1, seed = Math.floor(t * 24);
   const stAt = q => {
     const e = ph.mode === 'in' ? easeIn(P.ease, q, I) : easeOutPhase(P.ease, q, I);
-    return P.fn({ e, p:ph.mode === 'in' ? q : 1 - q, I, w, h:hh, dir, W:W(), seed });
+    return P.fn({ e, p:ph.mode === 'in' ? q : 1 - q, I, w, h:hh, dir, W:W(), H:H(), seed, ...slideOf(gp, ph.mode) });
   };
   const st = P ? stAt(ph.p) : {}, idl = idleState(gp, t - gp.start, ph, false, hh / 2);
   const bands = B.bands || [], padX = w * .35, BIG = 1e5;
@@ -3965,7 +3977,7 @@ function rsPin(D, alt) {
   }
   return left;
 }
-cv.addEventListener('pointerdown', ev => {
+function cvDown(ev) {
   if (ev.button === 1) { panStage(ev); return; }
   if (ev.button === 2) return; // botão direito abre o menu (contextmenu)
   let pt = stagePt(ev), hd = handleAt(pt);
@@ -3984,7 +3996,8 @@ cv.addEventListener('pointerdown', ev => {
   if (ev.altKey && L.type === 'image') { const pn = panOf(L); RT.drag = { L, mode:'pan', pt0:pt, ix0:pn.ix, iy0:pn.iy, bw:L._bounds.w, bh:L._bounds.h }; }
   else { const p = posOf(L); RT.drag = { L, mode:'move', tap:grp, pxy:[ev.clientX, ev.clientY], ox:pt.x - p.x * W(), oy:pt.y - p.y * H(), others:freePicked().filter(o => o !== L).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y }; }), x0:p.x, y0:p.y, ...snapSetup() }; RT.drag.fb = marginHold([L, ...RT.drag.others.map(q => q.o)]); flowGrab(RT.drag); }
   cv.setPointerCapture(ev.pointerId);
-});
+}
+cv.addEventListener('pointerdown', cvDown);
 // caixa (px, no começo do arrasto) do que se move e respeita a margem: texto, logo, botão e foto com keepIn, fora de layout automático
 function marginHold(ls) {
   const bs = ls.filter(o => !freeType(o) && !inFlow(o) && o._bounds).map(o => o._bounds); if (!bs.length) return null;
@@ -4507,7 +4520,11 @@ $('#stageBox').addEventListener('pointerdown', e => {
   if (!(RT.pen || RT.vec) || RT.hand || e.button !== 0 || onScrollbar(e) || e.target.closest('#stageHint')) return;
   if (RT.pen) { e.stopPropagation(); e.preventDefault(); penToolDown(e); return; }
   const L = vecL(), M = L && vecMap(L), hit = M && vecHit(L, M, stagePt(e));
-  if (!hit) { vecExit(); return; } // clique fora: sai da edição e o clique segue normal (seleciona outro, área, solta)
+  if (!hit) {
+    // clique no corpo da própria forma: move a forma e continua editando (as linhas e os pontos ficam à vista)
+    if (M && hitTest(stagePt(e)) === L) { e.stopPropagation(); e.preventDefault(); cvDown(e); return; }
+    vecExit(); return; // clique fora: sai da edição e o clique segue normal (seleciona outro, área, solta)
+  }
   e.stopPropagation(); e.preventDefault(); vecDown(e, L, M, hit);
 }, true);
 $('#stageBox').addEventListener('pointermove', e => {
@@ -4515,7 +4532,7 @@ $('#stageBox').addEventListener('pointermove', e => {
   if (e.buttons) return; // arrastando: o movimento tem que chegar à janela (curva da caneta, mão livre, pontos)
   e.stopPropagation();
   if (RT.pen) { RT.pen.cur = stagePt(e); RT.pen.shift = e.shiftKey; needs = true; return; }
-  const L = vecL(), M = L && vecMap(L), hit = M && vecHit(L, M, stagePt(e)), c = !hit ? '' : hit.kind === 'seg' ? 'copy' : 'move';
+  const L = vecL(), M = L && vecMap(L), hit = M && vecHit(L, M, stagePt(e)), c = !hit ? (M && hitTest(stagePt(e)) === L ? 'move' : '') : hit.kind === 'seg' ? 'copy' : 'move';
   cv.style.cursor = c; $('#stageBox').style.cursor = c;
 }, true);
 addEventListener('keydown', e => {
@@ -6512,9 +6529,10 @@ function tlStack(tl, bar, moving, y0) {
       // cabeçalho: metade de cima = acima do grupo; de baixo = no topo do grupo (recolhido: abaixo dele)
       const open = gmeta(rg)?.open !== false;
       to = up ? { gtop:rg } : open ? { gtop:rg, ng:rg } : { gbot:rg }; inside = !up && open;
-    } else { const T = byId(r.dataset.id); to = { ref:T, up, ng:T.grp }; inside = !!T.grp; }
+    } else { const T = byId(r.dataset.id); if (T.type === 'bg') up = true; to = { ref:T, up, ng:T.grp }; inside = !!T.grp; }  // o fundo fica sempre embaixo: o limite é acima dele
     const res = result(to);
-    if (same(res)) { to = null; return; }
+    // sem mudança a linha continua à vista (limite de cima/baixo), só não grava nada
+    to.noop = same(res);
     line.hidden = false; line.classList.toggle('in', inside);
     line.style.top = ((up ? top : bot) - tl.getBoundingClientRect().top + tl.scrollTop) + 'px';
     line.firstChild.textContent = whole ? '' : res.ng && moving.some(l => l.grp !== res.ng) ? `Entra em ${groupName(res.ng)}` : !res.ng && moving.some(l => l.grp) ? 'Sai do grupo' : '';
@@ -6537,7 +6555,7 @@ function tlStack(tl, bar, moving, y0) {
       all.forEach(r => r.classList.remove('moving'));
     },
     drop() {
-      if (!to) return false;
+      if (!to || to.noop) return false;
       const r = result(to);
       S.layers = r.order;
       if (!whole) moving.forEach(l => { if (r.ng) l.grp = r.ng; else delete l.grp; });
@@ -7209,7 +7227,7 @@ function findPreset() {
   paneShow('right');
   const i = $('#presetQ'); if (i) { i.focus(); i.select(); }
 }
-function presetGrid(L, k, keys, map, title) {
+function presetGrid(L, k, keys, map, onPick) {
   const wrap = h('div', { class:'chips' });
   let dest = null; // bloco da categoria aberta (os chips entram nele)
   const lgo = logoOf(L), svgOK = lgo && lgo.isSvg && lgo.parts.length, penOK = lgo && lgo.pen;
@@ -7231,6 +7249,7 @@ function presetGrid(L, k, keys, map, title) {
         // o mesmo preset pode aparecer duas vezes (em Favoritos e na categoria)
         wrap.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', String(c.dataset.key === key))); wrap.dataset.cur = P.label; changed(); renderMarks();
         if (k === 'out') seekOut(L); else seekLayer(L);
+        if (onPick) onPick();
       } }, [h('span', { text:P.label }), needSvg ? h('em', { text:'SVG' }) : null]);
     // "Sem animação" não tem estrela: já fica sempre no topo
     const star = key === 'cut' || key === 'none' ? null : h('button', { type:'button', class:'fav', 'aria-pressed':String(fav), title:fav ? 'Tirar dos favoritos' : 'Favoritar',
@@ -7272,7 +7291,18 @@ function presetGrid(L, k, keys, map, title) {
   wrap.fill = fill; fill();
   return wrap;
 }
-// presets que desenham uma linha de destaque ("Linha e revela", "Corte diagonal", "Scanner")
+// direção dos presets de deslizar (slide, slideWord, slideAlt), por fase: de onde o elemento vem
+const SLIDE_ARROWS = [['L', '▶', 'Da esquerda para a direita'], ['R', '◀', 'Da direita para a esquerda'], ['T', '▼', 'De cima para baixo'], ['B', '▲', 'De baixo para cima']];
+function slideDirF(L, k) {
+  if (!(L[k] in SLIDE_DEF)) return null;
+  const sk = k === 'out' ? 'outSlide' : 'inSlide';
+  const wrap = h('div', { class:'segs tight', role:'group', 'aria-label':'Direção do deslize' });
+  const draw = () => { wrap.innerHTML = ''; const cur = L[sk] || SLIDE_DEF[L[k]];
+    SLIDE_ARROWS.forEach(([v, arrow, title]) => wrap.append(h('button', { 'aria-pressed':String(cur === v), text:arrow, title,
+      onclick:() => { pushUndo(); for (const o of peersOf(L)) if (o[k] in SLIDE_DEF) o[sk] = v; draw(); changed(); if (k === 'out') seekOut(L); else seekLayer(L); } }))); };
+  draw();
+  return field('Direção', wrap, null, true);
+}
 const usesLine = L => ['line', 'diag', 'scan'].some(k => L.in === k || L.out === k);
 function lineF(L) {
   if (!usesLine(L)) return null;
@@ -7325,13 +7355,15 @@ function renderProps() {
       return [rangeF(L, sk, 'Velocidade', minS, maxS, .05, v => v.toFixed(2) + '×', { after }),
         rangeF(L, ik, 'Intensidade', 0, 1, .01, v => Math.round(v * 100) + '%', { after })];
     };
-    box.append(h('section', { class:'sec' }, [h('h3', {}, ['Entrada', seeBtn('Ver a entrada (toca só este trecho)', () => previewIn(L))]), presetGrid(L, 'in', inKeys, map),
-      ...rhythm('in', .4, 6, () => seekLayer(L))]));
+    box.append((() => { const slot = h('div'); const ref = () => { slot.innerHTML = ''; const f = slideDirF(L, 'in'); if (f) slot.append(f); }; ref();
+      return h('section', { class:'sec' }, [h('h3', {}, ['Entrada', seeBtn('Ver a entrada (toca só este trecho)', () => previewIn(L))]), presetGrid(L, 'in', inKeys, map, ref), slot,
+        ...rhythm('in', .4, 6, () => seekLayer(L))]); })());
     box.append(h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), idleGrid(L), ...rhythm('idle', .2, 4, () => seekLayer(L))]));
     box.append(...animExtras(L)); // marca à mão (texto), movimento dentro da imagem
-    box.append(h('section', { class:'sec' }, [h('h3', {}, ['Saída', h('span', { class:'h3r' }, [h('small', { text:(L.end ?? S.duration) >= S.duration - .01 ? 'no fim do vídeo' : `em ${(L.end).toFixed(1)}s` }),
-      seeBtn('Ver a saída (toca só este trecho)', () => previewOut(L))])]), presetGrid(L, 'out', outKeys, map),
-      ...rhythm('out', .4, 6, () => seekOut(L))]));
+    box.append((() => { const slot = h('div'); const ref = () => { slot.innerHTML = ''; const f = slideDirF(L, 'out'); if (f) slot.append(f); }; ref();
+      return h('section', { class:'sec' }, [h('h3', {}, ['Saída', h('span', { class:'h3r' }, [h('small', { text:(L.end ?? S.duration) >= S.duration - .01 ? 'no fim do vídeo' : `em ${(L.end).toFixed(1)}s` }),
+        seeBtn('Ver a saída (toca só este trecho)', () => previewOut(L))])]), presetGrid(L, 'out', outKeys, map, ref), slot,
+        ...rhythm('out', .4, 6, () => seekOut(L))]); })());
     box.append(h('section', { class:'sec' }, [
       h('h3', { text:'Tempo', 'data-sum':`${fmtSec(L.start)} → ${fmtSec(L.end ?? S.duration)}` }),
       rangeF(L, 'start', 'Entra em', 0, S.duration - .2, .1, v => v.toFixed(1) + 's', { onInput:() => { if (L.end != null && L.end < L.start + .3) L.end = Math.min(S.duration, L.start + .3); renderMarks(); }, after:() => { renderLayers(); seekLayer(L); } }),
@@ -7354,13 +7386,15 @@ function groupAnimSecs(gid, head, box) {
   };
   const idleMap = Object.fromEntries(G_KEYS.idle.map(k => [k, { label:IDLE[k] }]));
   const w = gwin(gid);
+  const inSlot = h('div'), inRef = () => { inSlot.innerHTML = ''; const f = slideDirF(G, 'in'); if (f) inSlot.append(f); }; inRef();
+  const outSlot = h('div'), outRef = () => { outSlot.innerHTML = ''; const f = slideDirF(G, 'out'); if (f) outSlot.append(f); }; outRef();
   return [
     h('p', { class:'hint hint-pad', text:'Animação do grupo inteiro: age sobre o conjunto e se soma à de cada item, que continua como está. Para mexer em um item só, clique nele na timeline ou use Ctrl + clique.' }),
-    h('section', { class:'sec' }, [h('h3', {}, ['Entrada do grupo', seeBtn('Ver a entrada do grupo (toca só este trecho)', () => previewIn(G))]), presetGrid(G, 'in', G_KEYS.in, BP),
+    h('section', { class:'sec' }, [h('h3', {}, ['Entrada do grupo', seeBtn('Ver a entrada do grupo (toca só este trecho)', () => previewIn(G))]), presetGrid(G, 'in', G_KEYS.in, BP, inRef), inSlot,
       ...rhythm('in', .4, 6, () => seekLayer(G))]),
     h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), presetGrid(G, 'idle', G_KEYS.idle, idleMap), ...rhythm('idle', .2, 4, () => seekLayer(G))]),
     h('section', { class:'sec' }, [h('h3', {}, ['Saída do grupo', h('span', { class:'h3r' }, [h('small', { text:`em ${w.end.toFixed(1)}s` }),
-      seeBtn('Ver a saída do grupo (toca só este trecho)', () => previewOut(G))])]), presetGrid(G, 'out', G_KEYS.out, BP),
+      seeBtn('Ver a saída do grupo (toca só este trecho)', () => previewOut(G))])]), presetGrid(G, 'out', G_KEYS.out, BP, outRef), outSlot,
       ...rhythm('out', .4, 6, () => seekOut(G))]),
   ];
 }
