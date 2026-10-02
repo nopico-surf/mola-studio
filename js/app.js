@@ -968,7 +968,7 @@ function mkBg(o = {}) {
 
 /* ------------ roteiros ------------ */
 const TEMPLATES = [
-  { id:'blank', ic:'+', name:'Do zero', desc:'Só o fundo. Você adiciona texto, imagem, logo e botão', dur:8, build:()=>[mkBg({mode:'mesh'})] },
+  { id:'blank', ic:'+', name:'Do zero', desc:'Só o fundo. Você adiciona texto, imagem, logo e botão', dur:8, build:()=>[mkBg({mode:'mesh', c1:'#ffffff', c2:'#6fd3a6', c3:'#e0e0e0', c4:'#b0b0b0'})] },
   { id:'marca-msg', ic:'LOGO', name:'Marca, mensagem e botão', desc:'O logo se desenha, depois entram a mensagem e o botão', dur:10, build:(B,F)=>[
     mkBg({mode:'mesh'}),
     mkLogo('logo',{y:.42,size:.36,start:.2,end:3.4,in:'draw',out:'blur',outDur:.5}),
@@ -3800,9 +3800,12 @@ function updStageHint() {
   const key = msg ? (L && L.id) + msg + (tools ? tools.map(t => t[0] + t[1]).join() : '') : '';
   if (el._k === key) return; el._k = key;
   el.hidden = !msg; el.innerHTML = '';
-  if (msg) el.append(h('span', { text:msg }),
-    tools ? h('div', { class:'hseg', role:'group' }, tools.map(([t, on, fn]) => h('button', { type:'button', 'aria-pressed':String(on), text:t, onclick:() => { fn(); el._k = ''; needs = true; } }))) : null,
-    h('button', { type:'button', text:act[0], onclick:act[1] }));
+  if (msg) {
+    const parts = [h('span', { text:msg })];
+    if (tools) parts.push(h('div', { class:'hseg', role:'group' }, tools.map(([t, on, fn]) => h('button', { type:'button', 'aria-pressed':String(on), text:t, onclick:() => { fn(); el._k = ''; needs = true; } }))));
+    parts.push(h('button', { type:'button', text:act[0], onclick:act[1] }));
+    el.append(...parts);
+  }
 }
 let lastNow = performance.now();
 function tick(now) {
