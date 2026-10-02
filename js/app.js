@@ -258,8 +258,9 @@ const BG_MODES = { mesh:'Gradiente vivo', linear:'Linear girando', spot:'Holofot
 const FORMATS = { '1x1':{w:1080,h:1080,label:'1:1'}, '4x5':{w:1080,h:1350,label:'4:5'}, '3x4':{w:1080,h:1440,label:'3:4'}, '9x16':{w:1080,h:1920,label:'9:16'} };
 const FPS_OPTS = [24, 25, 30, 50, 60];
 const fps = () => (S && FPS_OPTS.includes(S.fps) ? S.fps : 30);
-const TYPE_LABEL = { bg:'Fundo', text:'Texto', logo:'Logo', cta:'Botão', image:'Imagem', shape:'Forma', camera:'Câmera', fx:'Transição' };
-const TYPE_COLOR = { bg:'var(--c-bg)', text:'var(--c-text)', logo:'var(--c-logo)', cta:'var(--c-cta)', image:'var(--c-image)', shape:'var(--c-shape)', camera:'var(--c-camera)', fx:'var(--c-fx)' };
+const TYPE_LABEL = { bg:'Fundo', text:'Texto', logo:'Logo', cta:'Botão', image:'Imagem', video:'Vídeo', svg:'SVG', shape:'Forma', camera:'Câmera', fx:'Transição' };
+const typeKey = L => L.type === 'image' && L.video ? 'video' : L.type === 'logo' && L.svg ? 'svg' : L.type;
+const TYPE_COLOR = { bg:'var(--c-bg)', text:'var(--c-text)', logo:'var(--c-logo)', cta:'var(--c-cta)', image:'var(--c-image)', video:'var(--c-video)', svg:'var(--c-svg)', shape:'var(--c-shape)', camera:'var(--c-camera)', fx:'var(--c-fx)' };
 const ROLE_NAME = { logo:'Logo', logoSmall:'Logo pequeno', brand:'Nome da marca', title:'Título', sub:'Subtítulo', cta:'Botão', big:'Número grande', offer:'Oferta', tag:'Etiqueta', kicker:'Chamada', k1:'Frase 1', k2:'Frase 2', k3:'Frase 3', image:'Imagem', bg:'Fundo' };
 const ROLE_TEXT = { brand:'GRÃO LENTO', title:'Café de verdade,\nsem pressa.', sub:'Torra artesanal na sua porta em 24h', cta:'Peça agora  →', big:'-30%', offer:'na primeira assinatura', tag:'Só até domingo', kicker:'LANÇAMENTO', k1:'Moído na hora.', k2:'Torrado ontem.', k3:'Na sua porta amanhã.' };
 const GOOGLE_SUGGEST = ['Urbanist','Inter Tight','Roboto','Open Sans','Lato','Nunito','Nunito Sans','Raleway','Work Sans','Mulish','Karla','Barlow','Barlow Condensed','Josefin Sans','Quicksand','Kanit','Prompt','Jost','Albert Sans','Be Vietnam Pro','Public Sans','IBM Plex Sans','IBM Plex Serif','Libre Franklin','Merriweather','Lora','EB Garamond','Crimson Pro','Source Serif 4','Noto Sans','Noto Serif','Playfair','Abril Fatface','Alfa Slab One','Space Mono','JetBrains Mono','Fraunces','Manrope','Unbounded','Bricolage Grotesque','Syne','Sora','Outfit','Plus Jakarta Sans','DM Sans','DM Serif Display','Instrument Serif','Instrument Sans','Space Grotesk','Archivo','Archivo Black','Anton','Bebas Neue','Oswald','Montserrat','Poppins','Inter','Figtree','Onest','Rubik','Geist','Hanken Grotesk','Schibsted Grotesk','Familjen Grotesk','Big Shoulders Display','Bodoni Moda','Playfair Display','Cormorant Garamond','Gloock','Caveat','Permanent Marker','Lexend','Red Hat Display','Chivo','Darker Grotesque','Krona One','Dela Gothic One','Rethink Sans','Epilogue','Young Serif','Libre Caslon Display','Shrikhand','Righteous','Bowlby One','Lilita One'];
@@ -2001,12 +2002,13 @@ function brighten(c, cw, ch, b) {
 const SUBPX = 3e-3;
 // letra desfocada sem filtro: desenha longe, fora da tela, e só a sombra desfocada (px do canvas) cai no lugar
 const OFFX = 40000;
-function blurText(c, ch, x, y, col, px) {
+function blurText(c, ch, x, y, col, px, lw) {
   const m = c.getTransform();
   c.save();
   c.setTransform(m.a, m.b, m.c, m.d, m.e - OFFX, m.f);
   c.fillStyle = col; c.shadowColor = col; c.shadowBlur = px * 2; c.shadowOffsetX = OFFX; c.shadowOffsetY = 0;
-  c.fillText(ch, x, y);
+  if (lw) { c.strokeStyle = col; c.lineWidth = lw; c.strokeText(ch, x, y); } // contorno da letra desfocada
+  else c.fillText(ch, x, y);
   c.restore();
 }
 /* ------------ recortes ------------ */
@@ -2397,11 +2399,12 @@ function drawText(ctx, L, t, R) {
   // cursor da máquina de escrever
   let lastVisible = -1;
 
+  const skOn = strokeSee(L), skw = skW(L), skOut = L.strokePos === 'outside'; // contorno da letra (fora = por baixo, com o dobro da espessura)
   const drawGlyph = (c, line, g, st, px, py, track) => {
     const a = st.a == null ? 1 : st.a;
     if (a <= .001) return false;
     c.save();
-    if (st.clip === true) { c.beginPath(); c.rect(line.x0 - size * 2, line.baseline - lay.mask.top, line.width + size * 4, lay.mask.h); c.clip(); }
+    if (st.clip === true) { const sx = skOn ? skw : 0; c.beginPath(); c.rect(line.x0 - size * 2, line.baseline - lay.mask.top - sx, line.width + size * 4, lay.mask.h + sx * 2); c.clip(); }
     else if (st.clip) clipFx(c, st, lay.blockW, lay.blockH);
     c.globalAlpha *= a;
     c.translate(px + (st.dx || 0), py + (st.dy || 0));
@@ -2416,7 +2419,15 @@ function drawText(ctx, L, t, R) {
     const put = (col, x) => { c.fillStyle = col; if (bl) blurText(c, ch, x, 0, col, bl); else c.fillText(ch, x, 0); };
     if (st.split) { c.save(); c.globalAlpha *= .7; put('#FF3D6E', -st.split); put('#3DD6FF', st.split); c.restore(); }
     const col = brightCol(g.c || L.color, st.bright), gl = (st.glow || 0) + glowIdle;
+    const putStroke = () => {
+      const sc = brightCol(skC(L), st.bright), lw = skOut ? skw * 2 : skw;
+      c.save(); c.lineJoin = L.strokeJoin || 'round'; c.miterLimit = 3;
+      if (bl) blurText(c, ch, 0, 0, sc, bl, lw); else { c.strokeStyle = sc; c.lineWidth = lw; c.strokeText(ch, 0, 0); }
+      c.restore();
+    };
+    if (skOn && skOut) putStroke();
     put(col, 0);
+    if (skOn && !skOut) putStroke();
     if (gl > .01) { // luz na cor da própria letra (neon, flash): só o halo desfocado, por cima
       const m = c.getTransform(), r = size * (.12 + .16 * Math.min(gl, 2)) * Math.hypot(m.a, m.b);
       c.globalAlpha *= Math.min(1, gl);
@@ -2680,11 +2691,25 @@ function ngon(w, h, n, inner) {
 const STROKE_STYLES = { solid:'Sólido', dash:'Tracejado', long:'Longo', dot:'Pontilhado', dashdot:'Traço-ponto' };
 const STROKE_PAT = { dash:[3, 2], long:[6, 3], dot:[0, 2], dashdot:[4, 2, 0, 2] };
 function strokeCap(L) { return L.strokeDash === 'dot' ? 'round' : (L.strokeCap || 'round'); }
+/* Contorno (como no Figma): vale para texto, logo, botão, imagem/vídeo e forma, junto com a cor, sem tirá-la.
+   "Sem cor" (a bolinha branca cortada de vermelho no seletor) é a cor com opacidade 0: o rgb fica guardado para voltar. */
+const noCol = c => colA(c) <= 0;
+const skW = L => Math.max(.5, L.strokeW || (L.type === 'shape' ? 8 : 4));
+const skC = L => L.strokeColor || '#ffffff';
+// forma sem preenchimento (arquivos antigos: fill:false) ou com todas as cores em uso "sem cor"; contorno ligado
+function fillVoid(L) {
+  const n = { solid:1, linear:3, spot:2, mesh:4 }[L.mode] || 0;
+  for (let i = 1; i <= n; i++) if (!noCol(L['c' + i])) return false;
+  return n > 0;
+}
+const shFilled = L => L.kind !== 'line' && L.fill !== false && !fillVoid(L);
+const strokeOn = L => L.type === 'shape' ? L.kind === 'line' || !!L.stroke || L.fill === false : !!L.stroke;
+const strokeSee = L => strokeOn(L) && !noCol(skC(L));
 // lista para setLineDash. dp < 1 = traço sendo desenhado: o padrão é cortado no comprimento já percorrido
 function strokeDash(L, len, dp) {
   const pat = STROKE_PAT[L.strokeDash], far = len * 2 + 10;
   if (!pat) return dp < 1 ? [len * dp, far] : [];
-  const w = Math.max(3, L.strokeW || 8), cap = strokeCap(L), g = clamp(L.strokeGap ?? 1, .4, 3);
+  const w = Math.max(3, skW(L)), cap = strokeCap(L), g = clamp(L.strokeGap ?? 1, .4, 3);
   // ponta redonda/quadrada avança meia espessura de cada lado: encurta o traço e alarga o vão, o desenho fica igual
   const ext = cap === 'butt' ? 0 : w;
   const a = pat.map((v, i) => i % 2 ? Math.max(.5, v * w * g + ext) : Math.max(.01, v * w - ext));
@@ -2708,13 +2733,35 @@ function shapeVec(L, G) {
   }
   if (k === 'triangle') { const pts = [[0, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]]; return { path:polyPath(pts), len:polyLen(pts), closed:true }; }
   if (k === 'polygon' || k === 'star') { const pts = ngon(w, h, Math.max(3, Math.round(L.points || 5)), k === 'star' ? clamp(L.inner ?? .45, .1, .95) : 0); return { path:polyPath(pts), len:polyLen(pts), closed:true }; }
-  const r = Math.max(0, Math.min(L.radius || 0, w / 2, h / 2)), p = new Path2D();
-  p.moveTo(-w / 2 + r, -h / 2); p.arcTo(w / 2, -h / 2, w / 2, h / 2, r); p.arcTo(w / 2, h / 2, -w / 2, h / 2, r); p.arcTo(-w / 2, h / 2, -w / 2, -h / 2, r); p.arcTo(-w / 2, -h / 2, w / 2, -h / 2, r); p.closePath();
-  return { path:p, len:2 * (w + h) - (8 - 2 * Math.PI) * r, closed:true };
+  const rr = radii4(radOf(L), w, h), p = new Path2D();
+  rrTrace(p, -w / 2, -h / 2, w, h, rr);
+  return { path:p, len:2 * (w + h) - (2 - Math.PI / 2) * (rr[0] + rr[1] + rr[2] + rr[3]), closed:true };
 }
-function rrect(ctx, x, y, w, h, r) {
-  r = Math.max(0, Math.min(r, w / 2, h / 2));
-  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+// raio dos cantos: número (todos iguais) ou [sup. esq., sup. dir., inf. dir., inf. esq.]; radOf lê da camada (radSep = cada canto com o seu)
+const RAD_KEYS = ['rTL', 'rTR', 'rBR', 'rBL'];
+const radOf = L => L.radSep ? RAD_KEYS.map(k => L[k] ?? L.radius ?? 0) : (L.radius || 0);
+function radii4(r, w, h) {
+  if (!Array.isArray(r)) { const v = Math.max(0, Math.min(r, w / 2, h / 2)); return [v, v, v, v]; }
+  const [a, b, c, d] = r.map(v => Math.max(0, v || 0));
+  const f = Math.min(1, w / ((a + b) || 1), w / ((c + d) || 1), h / ((a + d) || 1), h / ((b + c) || 1));
+  return [a * f, b * f, c * f, d * f];
+}
+function rrTrace(p, x, y, w, h, r) {
+  const [a, b, c, d] = radii4(r, w, h);
+  p.moveTo(x + a, y); p.arcTo(x + w, y, x + w, y + h, b); p.arcTo(x + w, y + h, x, y + h, c); p.arcTo(x, y + h, x, y, d); p.arcTo(x, y, x + w, y, a); p.closePath();
+}
+function rrect(ctx, x, y, w, h, r) { ctx.beginPath(); rrTrace(ctx, x, y, w, h, r); }
+function rrectP(x, y, w, h, r) { const p = new Path2D(); rrTrace(p, x, y, w, h, r); return p; }
+// contorno de um caminho fechado ou aberto (forma, máscara da imagem, botão). strokePos: dentro/fora = traço central
+// com o dobro da espessura recortado pelo caminho (ou pelo que sobra dele); dp < 1 = "Desenhar traço" em andamento
+function strokeOnPath(ctx, path, L, o = {}) {
+  const { closed = true, len = 0, dp = 1 } = o, w = skW(L), pos = closed ? L.strokePos || 'center' : 'center', lw = pos === 'center' ? w : w * 2;
+  ctx.save();
+  ctx.strokeStyle = skC(L); ctx.lineJoin = L.strokeJoin || 'round'; ctx.lineCap = strokeCap(L); ctx.lineWidth = lw;
+  if (pos === 'inside') ctx.clip(path);
+  else if (pos === 'outside') { const big = new Path2D(); big.rect(-1e5, -1e5, 2e5, 2e5); big.addPath(path); ctx.clip(big, 'evenodd'); }
+  const dash = strokeDash({ ...L, strokeW:lw }, len, dp); if (dash.length) ctx.setLineDash(dash);
+  ctx.stroke(path); ctx.restore();
 }
 function paintPart(ctx, pt, overrideAlpha) {
   ctx.globalAlpha *= pt.op;
@@ -2722,7 +2769,34 @@ function paintPart(ctx, pt, overrideAlpha) {
   if (pt.stroke) { ctx.lineWidth = pt.sw; ctx.strokeStyle = pt.stroke; ctx.lineCap = pt.cap; ctx.lineJoin = pt.join; ctx.stroke(pt.path); }
 }
 let TINTC = null;
+// contorno do logo: a silhueta da imagem engordada (cópias em volta, em passos pequenos para a espessura ficar cheia), guardada pronta
+function logoOutline(ctx, L, G, info) {
+  const lg = logoOf(L); if (!lg || !lg.img) return;
+  const r = skW(L), col = withA(skC(L), 1), key = `${Math.round(G.w)}|${Math.round(G.h)}|${r}|${col}`;
+  if (!lg._ol || lg._ol.key !== key) {
+    const pad = Math.ceil(r) + 2, w = Math.ceil(G.w) + pad * 2, hh = Math.ceil(G.h) + pad * 2;
+    const sil = document.createElement('canvas'); sil.width = w; sil.height = hh;
+    const s = sil.getContext('2d'); s.drawImage(lg.img, pad, pad, G.w, G.h);
+    s.globalCompositeOperation = 'source-in'; s.fillStyle = col; s.fillRect(0, 0, w, hh);
+    let cur = sil;
+    const n = Math.max(1, Math.ceil(r / 4)), step = r / n;
+    for (let i = 0; i < n; i++) {
+      const nx = document.createElement('canvas'); nx.width = w; nx.height = hh;
+      const c = nx.getContext('2d'); c.drawImage(cur, 0, 0);
+      for (let a = 0; a < 16; a++) c.drawImage(cur, Math.cos(a * TAU / 16) * step, Math.sin(a * TAU / 16) * step);
+      cur = nx;
+    }
+    lg._ol = { key, c:cur, pad };
+  }
+  const svg = info.key === 'draw' || info.key === 'assemble' || info.key === 'handwrite'; // o contorno só aparece quando o logo termina de se formar
+  ctx.save(); ctx.globalAlpha *= colA(skC(L)) * (svg ? clamp((info.pp - .8) / .2) : 1);
+  ctx.drawImage(lg._ol.c, -G.w / 2 - lg._ol.pad, -G.h / 2 - lg._ol.pad); ctx.restore();
+}
 function drawBlockContent(ctx, L, G, info, R) {
+  if (L.type === 'logo' && strokeSee(L)) logoOutline(ctx, L, G, info);
+  drawBlockBody(ctx, L, G, info, R);
+}
+function drawBlockBody(ctx, L, G, info, R) {
   if (L.type === 'logo' && L.tint) {
     // pinta o logo inteiro (imagem, traço, peças) numa cor só: desenha à parte e troca a cor de tudo que tem tinta
     const pad = Math.ceil(info.key === 'assemble' ? G.w * .7 : (L.drawWidth || 5) + 30);
@@ -2731,7 +2805,7 @@ function drawBlockContent(ctx, L, G, info, R) {
     TINTC.width = w; TINTC.height = h;
     const c = TINTC.getContext('2d');
     c.translate(w / 2, h / 2);
-    drawBlockContent(c, { ...L, tint:false, drawOrig:false }, G, info, R);
+    drawBlockContent(c, { ...L, tint:false, drawOrig:false, stroke:false }, G, info, R);
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.globalCompositeOperation = 'source-in'; c.fillStyle = L.tintColor || '#ffffff'; c.fillRect(0, 0, w, h);
     ctx.drawImage(TINTC, -w / 2, -h / 2);
@@ -2789,16 +2863,17 @@ function drawBlockContent(ctx, L, G, info, R) {
     if (G.img) {
       ctx.save();
       if (L.mask === 'circle') { ctx.beginPath(); ctx.ellipse(0, 0, G.w / 2, G.h / 2, 0, 0, TAU); }
-      else rrect(ctx, -G.w / 2, -G.h / 2, G.w, G.h, L.radius || 0);
+      else rrect(ctx, -G.w / 2, -G.h / 2, G.w, G.h, radOf(L));
       ctx.clip();
       const pn = panOf(L), iw = G.img.naturalWidth, ih = G.img.naturalHeight, k = Math.max(G.w / iw, G.h / ih) * pn.zoom; // enquadramento do formato aberto
       const dw = iw * k, dh = ih * k;
       ctx.drawImage(adjImg(L, G.img), -dw / 2 + pn.ix * G.w, -dh / 2 + pn.iy * G.h, dw, dh);
       if (L.aVig && masked(L)) adjVignette(ctx, L.aVig, G.w, G.h);
       ctx.restore();
+      if (strokeSee(L)) strokeOnPath(ctx, L.mask === 'circle' ? (() => { const p = new Path2D(); p.ellipse(0, 0, G.w / 2, G.h / 2, 0, 0, TAU); return p; })() : rrectP(-G.w / 2, -G.h / 2, G.w, G.h, radOf(L)), L);
       drawDevice(ctx, L, G); // moldura de celular ou navegador em volta da máscara
     } else if (!R.export) {
-      ctx.save(); rrect(ctx, -G.w / 2, -G.h / 2, G.w, G.h, L.radius || 0);
+      ctx.save(); rrect(ctx, -G.w / 2, -G.h / 2, G.w, G.h, radOf(L));
       ctx.fillStyle = 'rgba(255,255,255,.06)'; ctx.fill(); ctx.setLineDash([14, 10]); ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.stroke();
       ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.font = '600 34px "Instrument Sans", system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText('Envie uma imagem', 0, 0); ctx.restore();
@@ -2807,7 +2882,7 @@ function drawBlockContent(ctx, L, G, info, R) {
   }
   if (L.type === 'shape') {
     const V = shapeVec(L, G), pp = info.pp, drawing = info.key === 'draw';
-    const line = L.kind === 'line', filled = !line && L.fill !== false, stroked = !filled || L.stroke; // sem preenchimento, o contorno é a forma
+    const filled = shFilled(L), stroked = strokeOn(L); // fill desligado e contorno ligado são independentes (o "sem cor" é só uma cor)
     const dp = drawing ? Ease.cubicInOut(clamp(pp / .72)) : 1;
     const fillA = !filled ? 0 : drawing ? Ease.cubicInOut(clamp((pp - .5) / .5)) : 1;
     if (fillA > 0) {
@@ -2816,11 +2891,11 @@ function drawBlockContent(ctx, L, G, info, R) {
     }
     const tmp = drawing && !stroked; // traço de apoio: some no fim
     const sa = tmp ? 1 - Ease.cubicInOut(clamp((pp - .82) / .18)) : 1;
-    if ((stroked || tmp) && sa > 0 && dp > .002) {
-      ctx.save(); ctx.globalAlpha *= sa; ctx.lineJoin = stroked ? (L.strokeJoin || 'round') : 'round'; ctx.lineCap = stroked ? strokeCap(L) : 'round';
-      ctx.lineWidth = stroked ? L.strokeW : 5; ctx.strokeStyle = stroked ? L.strokeColor : (L.mode === 'solid' ? L.c1 : L.c2);
-      const dash = stroked ? strokeDash(L, V.len, dp) : dp < 1 ? [V.len * dp, V.len * 2 + 10] : [];
-      if (dash.length) ctx.setLineDash(dash);
+    if (stroked && strokeSee(L) && dp > .002) strokeOnPath(ctx, V.path, L, { closed:V.closed, len:V.len, dp });
+    else if (tmp && sa > 0 && dp > .002) {
+      ctx.save(); ctx.globalAlpha *= sa; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.lineWidth = 5; ctx.strokeStyle = L.mode === 'solid' ? L.c1 : L.c2;
+      ctx.setLineDash(dp < 1 ? [V.len * dp, V.len * 2 + 10] : []);
       ctx.stroke(V.path); ctx.restore();
     }
     return;
@@ -2833,6 +2908,7 @@ function drawBlockContent(ctx, L, G, info, R) {
       rrect(ctx, -ww / 2, -hh / 2, ww, hh, L.radius); ctx.stroke(); ctx.restore();
     }
     rrect(ctx, -G.w / 2, -G.h / 2, G.w, G.h, L.radius); ctx.fillStyle = L.bg; ctx.fill();
+    if (strokeSee(L)) strokeOnPath(ctx, rrectP(-G.w / 2, -G.h / 2, G.w, G.h, L.radius), L);
     ctx.font = fontStr(L, L.size); ctx.fillStyle = L.color; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
     ctx.translate(0, L.size * .35); ctx.rotate(SUBPX / 3); // o botão é largo: giro menor, também acima do limite (ver SUBPX)
     ctx.fillText(L.text, 0, 0);
@@ -2870,7 +2946,7 @@ function drawBlock(ctx, L, t, R) {
     drawBlockContent(c, L, G, info, R);
   };
   const o = { k:fk, rot:(L.rot || 0) * Math.PI / 180, piv:P && P.pivot ? (P.pivot === 'top' ? -G.h / 2 : G.h / 2) : 0,
-    pad:Math.max(12, L.stroke || L.fill === false || L.kind === 'line' ? (L.strokeW || 8) : 0, Math.max(G.w, G.h) * .04), color:L.lineColor || S.brand.colors[2] };
+    pad:Math.max(12, strokeOn(L) ? skW(L) : 0, Math.max(G.w, G.h) * .04), color:L.lineColor || S.brand.colors[2] };
   ctx.save();
   ctx.translate(ax, ay);
   ctx.globalAlpha *= L.opacity ?? 1;
@@ -3371,18 +3447,18 @@ function drawDevice(ctx, L, G) {
   const w = G.w, hh = G.h;
   ctx.save();
   if (L.device === 'phone') {
-    const b = w * .034, r = Math.min(L.radius || 0, w / 2);
+    const b = w * .034, ro = radii4(radOf(L), w, hh);
     ctx.lineWidth = b; ctx.strokeStyle = '#0C0D10';
-    rrect(ctx, -w / 2 - b / 2, -hh / 2 - b / 2, w + b, hh + b, r + b / 2); ctx.stroke();
+    rrect(ctx, -w / 2 - b / 2, -hh / 2 - b / 2, w + b, hh + b, ro.map(v => v + b / 2)); ctx.stroke();
     ctx.lineWidth = Math.max(1, b * .16); ctx.strokeStyle = 'rgba(255,255,255,.28)';
-    rrect(ctx, -w / 2 - b, -hh / 2 - b, w + b * 2, hh + b * 2, r + b); ctx.stroke();
+    rrect(ctx, -w / 2 - b, -hh / 2 - b, w + b * 2, hh + b * 2, ro.map(v => v + b)); ctx.stroke();
     const iw = w * .3, ih = w * .085;
     ctx.fillStyle = '#0C0D10'; rrect(ctx, -iw / 2, -hh / 2 + w * .035, iw, ih, ih / 2); ctx.fill();
     ctx.fillStyle = '#23252B';
     ctx.fillRect(w / 2 + b * .95, -hh * .2, b * .45, hh * .1);
     ctx.fillRect(-w / 2 - b * 1.4, -hh * .27, b * .45, hh * .06); ctx.fillRect(-w / 2 - b * 1.4, -hh * .18, b * .45, hh * .06);
   } else if (L.device === 'browser') {
-    const bh = w * .068, r = Math.min(Math.max(L.radius || 0, 10), bh), top = -hh / 2 - bh;
+    const bh = w * .068, r = Math.min(Math.max(radii4(radOf(L), w, hh)[0], 10), bh), top = -hh / 2 - bh;
     ctx.fillStyle = '#ECEDF0'; ctx.beginPath();
     ctx.moveTo(-w / 2, -hh / 2 + 1); ctx.lineTo(-w / 2, top + r); ctx.arcTo(-w / 2, top, -w / 2 + r, top, r);
     ctx.lineTo(w / 2 - r, top); ctx.arcTo(w / 2, top, w / 2, top + r, r); ctx.lineTo(w / 2, -hh / 2 + 1); ctx.closePath(); ctx.fill();
@@ -3556,6 +3632,13 @@ function drawOverlays() {
     ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2); ctx.setLineDash([]);
   }
   const L = S.layers.find(l => l.id === RT.selected);
+  for (const o of offPicked()) { // escolhida e fora da tela neste momento: tracejada onde assenta, dá para arrastar
+    const g = ghostB(o); if (!g) continue;
+    const b = visRect(g, o), p = selPad(o);
+    ctx.fillStyle = 'rgba(242,182,50,.07)'; ctx.fillRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
+    ctx.setLineDash([4, 7]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.75)';
+    ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2); ctx.setLineDash([]);
+  }
   // item escolhido sozinho dentro de um grupo/frame: o contorno do grupo continua à vista (sem alças), como no Figma
   const pb = !playing && !ub && L && L.grp && !wholeGroup() && pickedLayers().length === 1 ? parentBox(L.grp) : null;
   if (pb) { const p = 0; ctx.setLineDash([]); ctx.lineWidth = 1.25 / OS; ctx.strokeStyle = 'rgba(242,182,50,.6)'; const v = visRect(pb, L); ctx.strokeRect(v.x - p, v.y - p, v.w + p * 2, v.h + p * 2); }
@@ -3671,7 +3754,7 @@ function tick(now) {
     needs = true;
   }
   syncMedia(); // vídeos e trilha acompanham a agulha
-  if (needs && !RT.exporting) { renderFrame(pctx, T, RS, false); drawOverlays(); updTime(); updStageHint(); needs = false; }
+  if (needs && !RT.exporting) { measureGhosts(); renderFrame(pctx, T, RS, false); drawOverlays(); updTime(); updStageHint(); needs = false; }
   requestAnimationFrame(tick);
 }
 const fmtT = s => { s = Math.max(0, s); const m = Math.floor(s / 60), ss = Math.floor(s % 60), f = Math.floor((s % 1) * fps()); return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}<span>:${String(f).padStart(2, '0')}</span>`; };
@@ -3744,6 +3827,27 @@ function visRect(b, L) {
   return { ...b, x:x0, y:y0, w:Math.max(...q.map(a => a.x)) - x0, h:Math.max(...q.map(a => a.y)) - y0 };
 }
 const visB = L => visRect(L._bounds, L);
+// Camada escolhida que não está na tela neste momento (ainda não entrou, já saiu): aparece tracejada onde assenta, pega no clique e anda
+// junto com o arrasto. A caixa fica em RT.ghost (fora de S, senão entraria no desfazer e no arquivo) e é medida em repouso por `measureGhosts`.
+const offPicked = () => playing || RT.exporting || RT.pen || RT.vec ? [] : freePicked().filter(o => o.visible && !NOBOX(o) && !phase(o, T));
+const ghostB = o => { const g = RT.ghost && RT.ghost.get(o.id); return g && g.b; };
+const bOf = o => (!phase(o, T) && ghostB(o)) || o._bounds; // caixa de quem se move junto (a de repouso, se não está na tela)
+function measureGhosts() {
+  const key = `${RT.rev}|${S.format}`, ghost = RT.ghost || (RT.ghost = new Map());
+  const need = offPicked().filter(o => (ghost.get(o.id) || {}).k !== key); if (!need.length) return;
+  const keep = S.layers.map(o => o._bounds); // medir em outro momento mexe nos _bounds de todo mundo; o quadro de agora refaz, mas aqui voltam
+  ensureBounds(need, true);
+  need.forEach(o => ghost.set(o.id, { k:key, b:o._bounds ? { ...o._bounds } : null }));
+  S.layers.forEach((o, i) => { o._bounds = keep[i]; });
+}
+function ghostAt(pt) {
+  for (const o of offPicked().reverse()) {
+    const g = ghostB(o); if (!g) continue;
+    const b = visRect(g, o), p = 16;
+    if (pt.x >= b.x - p && pt.x <= b.x + b.w + p && pt.y >= b.y - p && pt.y <= b.y + b.h + p) return o;
+  }
+  return null;
+}
 function hitTest(pt) {
   for (let i = S.layers.length - 1; i >= 0; i--) {
     const L = S.layers[i]; if (!L.visible || L.locked || L.type === 'bg' || !L._bounds) continue;
@@ -3765,9 +3869,9 @@ const hRad = () => 11 * W() / (cv.getBoundingClientRect().width || 1);
 // Forma com traço: o traço passa metade para fora da geometria, então a caixa abre essa metade para ficar rente ao que se vê
 const SEL_FINE = .55;
 function selPad(L) {
-  if (!L || L.type !== 'shape' || L.kind === 'line' || !(L.stroke || L.fill === false)) return 0;
-  const g = L._bounds && L.size ? L._bounds.w / (L.size * W()) : 1;
-  return Math.max(3, L.strokeW || 8) / 2 * (isFinite(g) && g > 0 ? g : 1);
+  if (!L || L.type !== 'shape' || L.kind === 'line' || !strokeOn(L)) return 0;
+  const g = L._bounds && L.size ? L._bounds.w / (L.size * W()) : 1, pos = L.strokePos || 'center';
+  return skW(L) * (pos === 'outside' ? 1 : pos === 'inside' ? 0 : .5) * (isFinite(g) && g > 0 ? g : 1);
 }
 const masked = L => L.type === 'image' && (L.mask === 'rect' || L.mask === 'circle');
 const resizable = L => masked(L) || L.type === 'shape' && L.kind !== 'custom' && L.kind !== 'line';
@@ -3983,7 +4087,7 @@ function cvDown(ev) {
   let pt = stagePt(ev), hd = handleAt(pt);
   if (hd) { hd.rot ? startRotate(ev, pt) : startResize(ev, pt, hd); return; }
   const gp = flowGapAt(pt); if (gp) { startGapDrag(ev, pt, gp); return; } // espaço do layout automático
-  const L = hitTest(pt);
+  const L = hitTest(pt) || ghostAt(pt); // sem nada na tela ali, a seleção que está fora da tela também pega
   if (!L) { marquee(ev); return; }
   pt = camInv(camOf(L), pt); // arrastar parte do espaço da camada // no vazio: arrastar seleciona por área; só um clique solta a seleção (com Shift, não)
   if (ev.shiftKey) { toggleSel(L); return; }
@@ -4000,16 +4104,16 @@ function cvDown(ev) {
 cv.addEventListener('pointerdown', cvDown);
 // caixa (px, no começo do arrasto) do que se move e respeita a margem: texto, logo, botão e foto com keepIn, fora de layout automático
 function marginHold(ls) {
-  const bs = ls.filter(o => !freeType(o) && !inFlow(o) && o._bounds).map(o => o._bounds); if (!bs.length) return null;
+  const bs = ls.filter(o => !freeType(o) && !inFlow(o) && bOf(o)).map(bOf); if (!bs.length) return null;
   const x0 = Math.min(...bs.map(b => b.x)), y0 = Math.min(...bs.map(b => b.y));
   return { x:x0, y:y0, w:Math.max(...bs.map(b => b.x + b.w)) - x0, h:Math.max(...bs.map(b => b.y + b.h)) - y0 };
 }
 // Guias ao arrastar: bordas e centro da seleção contra os elementos fora dela, o quadro e a margem (Ctrl desliga; Shift trava num eixo)
 function snapSetup() {
-  const mv = freePicked().filter(o => o._bounds && o.visible);
+  const mv = freePicked().filter(o => o.visible && bOf(o)).map(bOf);
   if (!mv.length) return {};
-  const x0 = Math.min(...mv.map(o => o._bounds.x)), y0 = Math.min(...mv.map(o => o._bounds.y));
-  const b0 = { x:x0, y:y0, w:Math.max(...mv.map(o => o._bounds.x + o._bounds.w)) - x0, h:Math.max(...mv.map(o => o._bounds.y + o._bounds.h)) - y0 };
+  const x0 = Math.min(...mv.map(b => b.x)), y0 = Math.min(...mv.map(b => b.y));
+  const b0 = { x:x0, y:y0, w:Math.max(...mv.map(b => b.x + b.w)) - x0, h:Math.max(...mv.map(b => b.y + b.h)) - y0 };
   const tg = [{ x:0, y:0, w:W(), h:H(), c:'rgba(143,176,255,.9)' }];
   const M = marginBox(); if (M) tg.push({ x:M.x0, y:M.y0, w:M.x1 - M.x0, h:M.y1 - M.y0, c:'rgba(111,211,166,.9)' });
   for (const o of S.layers) if (o.type !== 'bg' && o.visible && o._bounds && !isPicked(o.id) && phase(o, T)) tg.push({ x:o._bounds.x, y:o._bounds.y, w:o._bounds.w, h:o._bounds.h, c:'rgba(255,92,163,.95)' });
@@ -4034,7 +4138,7 @@ cv.addEventListener('pointermove', ev => {
   let pt = stagePt(ev);
   if (!RT.drag) {
     if (RT.marq) return;
-    const hd = handleAt(pt), gp = !hd && flowGapAt(pt), ht = !gp && hitTest(pt);
+    const hd = handleAt(pt), gp = !hd && flowGapAt(pt), ht = !gp && (hitTest(pt) || ghostAt(pt));
     cv.style.cursor = hd ? (hd.rot ? ROT_CUR : HCUR[hd.k]) : gp ? (gp.v ? 'row-resize' : 'col-resize') : ht ? (ev.altKey && ht.type === 'image' ? 'all-scroll' : 'move') : '';
     setHover(hd || gp ? null : ht && ht.id);
     const gk = gp && !gp.gid ? Math.round(gp.s0) : null; if (RT.gapHot !== gk) { RT.gapHot = gk; needs = true; } // espaço do quadro só aparece com o mouse em cima
@@ -4071,6 +4175,9 @@ cv.addEventListener('pointermove', ev => {
     const ddx = clamp(x - D.x0, Math.max(...its.map(q => POS_LO - q.x0)), Math.min(...its.map(q => POS_HI - q.x0)));
     const ddy = clamp(y - D.y0, Math.max(...its.map(q => POS_LO - q.y0)), Math.min(...its.map(q => POS_HI - q.y0)));
     for (const q of its) setPos(q.o, +(q.x0 + ddx).toFixed(4), +(q.y0 + ddy).toFixed(4));
+    // quem está fora da tela anda junto: a caixa tracejada acompanha
+    for (const q of its) { const g = RT.ghost && RT.ghost.get(q.o.id); if (g && g.b) { g.b.x += (ddx - (D.gx || 0)) * W(); g.b.y += (ddy - (D.gy || 0)) * H(); } }
+    D.gx = ddx; D.gy = ddy;
     syncPosFields(L);
   }
   needs = true;
@@ -4199,7 +4306,10 @@ function vecApply(L, M) {
   const b = customBox(d), bx = b.x + b.w / 2, by = b.y + b.h / 2, u = (bx - M.bx) * M.s, v = (by - M.by) * M.s;
   M.ax += u * M.co - v * M.si; M.ay += u * M.si + v * M.co; M.bx = bx; M.by = by;
   L.size = b.w * M.s / (M.k || 1) / W();
-  setPos(L, M.ax / W(), M.ay / H()); needs = true;
+  // fora do principal, gravar a posição daria ao item um fpos só dele e ele sairia da fila do layout automático (e da adaptação) dos outros
+  const p0 = posOf(L), nx = M.ax / W(), ny = M.ay / H();
+  if (!(fmtOwn() && !ownPos(L) && (S.flow || inFlow(L))) && Math.hypot((nx - p0.x) * W(), (ny - p0.y) * H()) > .01) setPos(L, nx, ny);
+  needs = true;
 }
 function stageMode() { const b = $('#stageBox'); b.classList.toggle('pen', !!RT.pen); setHover(null); needs = true; }
 // modos: 'pen' = clique é canto e arrastar é curva; 'smooth' = cada clique é um ponto suave (a linha passa curva por eles);
@@ -4307,17 +4417,17 @@ function shapePts(L, G) {
     return [{ closed:true, pts:[{ x:0, y:-b, ix:-a * K, iy:-b, ox:a * K, oy:-b }, { x:a, y:0, ix:a, iy:-b * K, ox:a, oy:b * K },
       { x:0, y:b, ix:a * K, iy:b, ox:-a * K, oy:b }, { x:-a, y:0, ix:-a, iy:b * K, ox:-a, oy:-b * K }] }];
   }
-  const r = Math.max(0, Math.min(L.radius || 0, w / 2, h / 2)), x0 = -w / 2, x1 = w / 2, y0 = -h / 2, y1 = h / 2, c = r * K;
-  if (r < .5) return poly([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+  const [r0, r1, r2, r3] = radii4(radOf(L), w, h), x0 = -w / 2, x1 = w / 2, y0 = -h / 2, y1 = h / 2, c0 = r0 * K, c1 = r1 * K, c2 = r2 * K, c3 = r3 * K;
+  if (Math.max(r0, r1, r2, r3) < .5) return poly([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
   const P = [], add = (x, y, ix, iy, ox, oy) => {
     const l = P[P.length - 1];
-    if (l && Math.hypot(l.x - x, l.y - y) < .01) { l.ox = ox; l.oy = oy; return; } // canto inteiro redondo: os dois pontos viram um
+    if (l && Math.hypot(l.x - x, l.y - y) < .01) { l.ox = ox; l.oy = oy; return; } // canto inteiro redondo (ou reto): os dois pontos viram um
     P.push({ x, y, ix, iy, ox, oy });
   };
-  add(x0 + r, y0, x0 + r - c, y0, x0 + r, y0); add(x1 - r, y0, x1 - r, y0, x1 - r + c, y0);
-  add(x1, y0 + r, x1, y0 + r - c, x1, y0 + r); add(x1, y1 - r, x1, y1 - r, x1, y1 - r + c);
-  add(x1 - r, y1, x1 - r + c, y1, x1 - r, y1); add(x0 + r, y1, x0 + r, y1, x0 + r - c, y1);
-  add(x0, y1 - r, x0, y1 - r + c, x0, y1 - r); add(x0, y0 + r, x0, y0 + r, x0, y0 + r - c);
+  add(x0 + r0, y0, x0 + r0 - c0, y0, x0 + r0, y0); add(x1 - r1, y0, x1 - r1, y0, x1 - r1 + c1, y0);
+  add(x1, y0 + r1, x1, y0 + r1 - c1, x1, y0 + r1); add(x1, y1 - r2, x1, y1 - r2, x1, y1 - r2 + c2);
+  add(x1 - r2, y1, x1 - r2 + c2, y1, x1 - r2, y1); add(x0 + r3, y1, x0 + r3, y1, x0 + r3 - c3, y1);
+  add(x0, y1 - r3, x0, y1 - r3 + c3, x0, y1 - r3); add(x0, y0 + r0, x0, y0 + r0, x0, y0 + r0 - c0);
   const f = P[0], l = P[P.length - 1]; if (P.length > 1 && Math.hypot(f.x - l.x, f.y - l.y) < .01) { f.ix = l.ix; f.iy = l.iy; P.pop(); }
   return [{ pts:P, closed:true }];
 }
@@ -5092,9 +5202,25 @@ function videoEl(L) {
   }
   return v.ok ? v.el : null;
 }
+// corte: L.vIn/L.vOut = trecho do vídeo em segundos (ausente = do começo / até o fim); o trecho repete se a camada for mais longa
+function vidCut(L, el) {
+  const d = (el && el.duration) || L.vdur || 1, a = clamp(L.vIn || 0, 0, Math.max(0, d - .1));
+  return { a, b:clamp(L.vOut ?? d, a + .1, d), d };
+}
 function vidTime(L, t, el) {
-  const d = el.duration || L.vdur || 1, vt = Math.max(0, t - L.start);
-  return vt < d - .02 ? vt : vt % d;
+  const { a, b } = vidCut(L, el), len = b - a, vt = Math.max(0, t - L.start);
+  return a + (vt < len - .02 ? vt : vt % len);
+}
+// a camada dura o trecho (como um clipe num editor de vídeo): o fim da barra acompanha o corte
+function vidFitEnd(o) {
+  const { a, b } = vidCut(o); o.end = +Math.min(S.duration, o.start + b - a).toFixed(3);
+}
+// borda da barra na timeline = corte. v = estado no começo do arrasto ({ a, b, d, s, e } de vidCut + barra).
+// Esquerda: o vídeo fica parado no tempo e o começo do trecho anda junto. Direita: o fim do trecho segue a barra;
+// passou do fim do vídeo = trecho até o fim, repetindo. Se a camada já era mais longa que o trecho (repetindo), a direita não corta.
+function vidTrim(o, v, mode) {
+  if (mode === 'l') { const a = clamp(v.a + o.start - v.s, 0, v.b - .1); if (a > 1e-3) o.vIn = +a.toFixed(3); else delete o.vIn; }
+  else if (mode === 'r' && v.e - v.s <= v.b - v.a + .05) { const b = v.a + (o.end ?? S.duration) - o.start; if (b < v.d - 1e-3) o.vOut = +b.toFixed(3); else delete o.vOut; }
 }
 // prévia: toca junto quando o palco toca; pausado, fica no quadro da agulha
 function syncVideos() {
@@ -5106,7 +5232,8 @@ function syncVideos() {
     const vt = vidTime(L, T, el);
     if (playing) {
       if (el.paused) el.play().catch(() => {});
-      if (Math.abs(el.currentTime - vt) > .25) el.currentTime = vt;
+      // tocando sozinho o <video> passaria do fim do corte antes de a conta dar a volta
+      if (Math.abs(el.currentTime - vt) > .25 || el.currentTime > vidCut(L, el).b + .02) el.currentTime = vt;
     } else {
       if (!el.paused) el.pause();
       if (Math.abs(el.currentTime - vt) > .02 && !el.seeking) el.currentTime = vt;
@@ -5154,7 +5281,8 @@ async function addVideoFile(f, pos) {
     const L = mkImage({ name:f.name ? f.name.replace(/\.[^.]+$/, '') : 'Vídeo', video:id, src:p.src, vdur:p.dur, mask:'rect', radius:24, size, mh:+(size * p.h / p.w).toFixed(4), in:'fade', inDur:BP.fade.dur, y:.5 });
     await getImage(L.src);
     addLayer(L, pos || {});
-    toast(p.dur < (L.end ?? S.duration) - L.start - .05 ? `Vídeo adicionado. Ele tem ${fmtSec(p.dur)} e repete até a camada sair` : 'Vídeo adicionado');
+    const e0 = L.end ?? S.duration; vidFitEnd(L); L.end = Math.min(L.end, e0); changed({ layers:true, props:true }); // a barra do vídeo começa do tamanho dele (dentro de um frame, no máximo a dele)
+    toast(p.dur > S.duration - L.start + .05 ? `Vídeo adicionado. Ele tem ${fmtSec(p.dur)} e passa do fim: puxe a borda da barra para cortar` : 'Vídeo adicionado');
   } catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
 }
 
@@ -5501,6 +5629,78 @@ function ungroupSel() {
   pushUndo(); keepPlace(() => { S.layers.forEach(l => { if (ids.has(l.grp)) delete l.grp; }); ids.forEach(g => { if (S.groups) delete S.groups[g]; }); });
   changed({ layers:true, props:true }); toast('Grupo desfeito');
 }
+/* ------------ Pathfinder (como no Figma): Unir, Subtrair, Interseção, Excluir e Achatar ------------
+   Vale para formas (qualquer tipo; retângulo, círculo etc. viram vetor). As contas são do paper.js (vendor/paper-core.min.js, só as operações
+   booleanas, em curvas de verdade). O resultado é uma forma Vetor só, na posição de agora, com o estilo e o tempo da forma de baixo
+   (a que serve de base no Subtrair) e no lugar da forma de cima da pilha. Tudo é medido na tela do formato aberto, sem a câmera. */
+const PF_SVG = p => `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round">${p}</svg>`;
+const PF_OPS = [
+  ['union', 'Unir', 'Alt + Shift + U', 'unite', PF_SVG('<path fill="currentColor" d="M2 2h8v4h4v8H6v-4H2z"/>')],
+  ['subtract', 'Subtrair', 'Alt + Shift + S', 'subtract', PF_SVG('<path fill="currentColor" d="M2 2h8v4H6v4H2z"/><path d="M6 6h8v8H6z"/>')],
+  ['intersect', 'Interseção', 'Alt + Shift + I', 'intersect', PF_SVG('<path d="M2 2h8v8H2zM6 6h8v8H6z"/><path fill="currentColor" d="M6 6h4v4H6z"/>')],
+  ['exclude', 'Excluir', 'Alt + Shift + E', 'exclude', PF_SVG('<path fill="currentColor" fill-rule="evenodd" d="M2 2h8v4h4v8H6v-4H2zM6 6v4h4V6z"/>')],
+  ['flatten', 'Achatar', 'Ctrl + E', null, PF_SVG('<path d="M8 2l6 6-6 6-6-6z"/><path d="M5 8h6" stroke-linecap="round"/>')],
+];
+let PF_SCOPE = null;
+const paperScope = () => PF_SCOPE || (PF_SCOPE = (() => { const s = new paper.PaperScope(); s.setup(new s.Size(8, 8)); return s; })());
+// pontos da forma na tela (px do vídeo): posição, escala do formato, giro (o espaço do d não é o da tela)
+function pfSubpaths(L) {
+  const G = geomNow(L); if (!G) return null;
+  const pl = placeOf(L), a = (L.rot || 0) * Math.PI / 180, co = Math.cos(a), si = Math.sin(a);
+  let vec, bx = 0, by = 0, s = pl.k;
+  if (L.kind === 'custom') {
+    vec = vecOf(L); const b = G.cust; if (!vec || !b) return null;
+    s = G.w / b.w * pl.k; bx = b.x + b.w / 2; by = b.y + b.h / 2;
+  } else vec = shapePts(L, G);
+  const ax = pl.x * W(), ay = pl.y * H(), f = (x, y) => { const u = (x - bx) * s, v = (y - by) * s; return [ax + u * co - v * si, ay + u * si + v * co]; };
+  return vec.map(sp => ({ closed:sp.closed, pts:sp.pts.map(p => { const q = f(p.x, p.y), i = f(p.ix, p.iy), o = f(p.ox, p.oy); return { x:q[0], y:q[1], ix:i[0], iy:i[1], ox:o[0], oy:o[1] }; }) }));
+}
+const pfTargets = () => { const ls = pickedLayers(); return ls.length && ls.every(l => l.type === 'shape') ? ls : []; };
+function pathfinder(op) {
+  const def = PF_OPS.find(o => o[0] === op), ls = pfTargets(); if (!def || !ls.length) return;
+  if (ls.some(l => l.locked)) { lockedNote(ls); return; }
+  if (op !== 'flatten' && ls.length < 2) { toast('Selecione duas formas ou mais'); return; }
+  if (op !== 'flatten' && ls.some(l => l.kind === 'line')) { toast('A linha não tem área: use Achatar, ou troque por outra forma'); return; }
+  if (typeof paper === 'undefined') { toast('O Pathfinder não carregou. Recarregue a página', 4000); return; }
+  const order = [...ls].sort((a, b) => S.layers.indexOf(a) - S.layers.indexOf(b)), subs = order.map(pfSubpaths);
+  if (subs.some(s => !s)) { toast('Um dos caminhos tem arcos (comando A) e não dá para combinar. Redesenhe com a caneta (P)', 4500); return; }
+  let d, bad = false;
+  if (op === 'flatten') d = vecD(subs.flat());
+  else {
+    const sc = paperScope(); let acc = null;
+    try {
+      const its = subs.map(s => { const c = new sc.CompoundPath({ pathData:vecD(s), insert:false }); c.closed = true; return c; });
+      acc = its[0]; for (const c of its.slice(1)) acc = acc[def[3]](c, { insert:false });
+      d = acc.pathData;
+    } catch (e) { console.warn(e); bad = true; }
+    sc.project.clear();
+  }
+  const vec = !bad && d && vecParse(d);
+  if (!vec) { toast(!bad && !d ? 'Nada sobrou dessa conta (as formas não se tocam?)' : 'Não consegui combinar essas formas', 4000); return; }
+  d = vecD(vec);
+  const b = customBox(d), cx = (b.x + b.w / 2) / W(), cy = (b.y + b.h / 2) / H();
+  const src = order.find(l => l.kind !== 'line') || order[0], n = JSON.parse(JSON.stringify(src));
+  for (const k of ['_bounds', 'fpos', 'fsz', 'flowFree', 'radius', 'radSep', 'rTL', 'rTR', 'rBR', 'rBL', 'points', 'inner']) delete n[k];
+  Object.assign(n, { id:uid(), name:def[1], kind:'custom', d, vec, vecD:d, size:b.w / W(), mh:null, rot:0, x:cx, y:cy, fill:src.kind === 'line' ? true : src.fill });
+  pushUndo();
+  const top = Math.max(...order.map(l => S.layers.indexOf(l)));
+  S.layers.splice(top + 1, 0, n);
+  order.forEach(l => S.layers.splice(S.layers.indexOf(l), 1));
+  if (fmtOwn()) { // fora do principal a forma nova nasce com a escala da adaptação: desfaz, o desenho fica como foi medido
+    setPos(n, cx, cy); RT.frameNo = (RT.frameNo || 0) + 1;
+    const k = placement().get(n.id)?.k; if (k && Math.abs(k - 1) > .001) setFmt(n, { s:1 / k });
+  }
+  propTab = 'style'; select(n.id, true);
+  changed({ layers:true, props:true }); seekLayer(n);
+  toast(`${def[1]}: ${ls.length > 1 ? `${ls.length} formas viraram uma` : 'a forma virou vetor'}`, 3500, UNDO_ACT);
+}
+function pathfinderSec() {
+  const ls = pfTargets(); if (!ls.length) return null;
+  const many = ls.length > 1;
+  return h('section', { class:'sec' }, [h('h3', {}, ['Pathfinder', h('small', { text:many ? `${ls.length} formas` : 'uma forma' })]),
+    h('div', { class:'pfrow' }, PF_OPS.map(([op, t, key,, ic]) => h('button', { class:'btn small', title:`${t} (${key})`, disabled:op !== 'flatten' && !many || null, onclick:() => pathfinder(op), html:`${ic}<span>${t}</span>` }))),
+    h('p', { class:'hint', text:'Junta as formas em uma só, em curvas de verdade. Subtrair tira as de cima da de baixo. O resultado fica com o estilo da forma de baixo.' })]);
+}
 const AL = (d, r) => `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="${d}"/>${r}</svg>`;
 const rc = (x, y, w, hh) => `<rect x="${x}" y="${y}" width="${w}" height="${hh}" rx=".7"/>`;
 Object.assign(ICONS, {
@@ -5527,18 +5727,23 @@ function scaleBar() {
   rng.addEventListener('pointerdown', () => { pushUndo(); ap = beginScaleSel(); });
   rng.addEventListener('input', () => { if (!ap) { pushUndo(); ap = beginScaleSel(); } if (ap) { ap(+rng.value / 100); out.textContent = rng.value + '%'; } });
   rng.addEventListener('change', () => { ap = null; rng.value = 100; out.textContent = '100%'; changed({ props:true }); });
-  // escrito (−10% / +10%) para não confundir com o − / + que abre e fecha a seção
+  // escrito (−10% / +10%): mais claro que um − / + solto
   const step = (f, t) => h('button', { class:'btn small', title:t, 'aria-label':t, text:f > 1 ? '+10%' : '−10%', onclick:() => { pushUndo(); const a = beginScaleSel(); if (a) { a(f); changed({ props:true }); } } });
   return h('section', { class:'sec' }, [h('h3', {}, ['Tamanho da seleção', h('small', { text:'todos juntos' })]),
     h('div', { class:'row' }, [step(1 / 1.1, 'Diminuir 10%'), rng, out, step(1.1, 'Aumentar 10%')])]);
 }
+// Posição (como no Figma): alinhar, agrupar e a posição do elemento numa seção só, no topo da aba "Conteúdo e estilo"
 function alignBar() {
   const ls = pickedLayers(); if (!ls.length) return null;
   const n = new Set(ls.map(l => l.grp || l.id)).size;
   const b = (k, t, off) => h('button', { class:'icon-btn', title:t, 'aria-label':t, html:ICONS['al_' + k], disabled:off || null, onclick:() => alignLayers(k) });
   const oneGrp = ls.every(l => l.grp && l.grp === ls[0].grp);
+  // grupo inteiro: só alinhar (a posição é a dos itens); o resto ganha os campos de posição e, foto/forma, "Manter dentro da margem"
+  const L = selL(), pos = L && !wholeGroup() ? posFields(L) : [];
+  const keep = pos.length && ls.every(l => l.type === L.type) && (L.type === 'image' || L.type === 'shape')
+    ? [checkF(L, 'keepIn', 'Manter dentro da margem'), h('p', { class:'hint', text:`Precisa da margem ligada. Se ${L.type === 'image' ? 'a imagem' : 'a forma'} não couber, ela encolhe.` })] : [];
   return h('section', { class:'sec' }, [
-    h('h3', {}, ['Alinhar', h('small', { text:n > 1 ? 'entre a seleção' : ls.length > 1 ? marginBox() ? 'grupo à margem' : 'grupo ao quadro' : marginBox() ? 'à margem' : 'ao quadro' })]),
+    h('h3', {}, ['Posição', h('small', { text:n > 1 ? 'alinha entre a seleção' : ls.length > 1 ? marginBox() ? 'grupo à margem' : 'grupo ao quadro' : marginBox() ? 'alinha à margem' : 'alinha ao quadro' })]),
     h('div', { class:'alrow' }, [b('l', 'Alinhar à esquerda'), b('ch', 'Centralizar na horizontal'), b('r', 'Alinhar à direita'), h('i'),
       b('t', 'Alinhar ao topo'), b('cv', 'Centralizar na vertical'), b('b', 'Alinhar embaixo'), h('i'),
       b('dh', 'Distribuir na horizontal (3 ou mais)', n < 3), b('dv', 'Distribuir na vertical (3 ou mais)', n < 3)]),
@@ -5547,7 +5752,8 @@ function alignBar() {
       ls.some(l => l.grp) ? h('button', { class:'btn small', text:'Desagrupar', title:'Desagrupar (Ctrl+Shift+G)', onclick:ungroupSel }) : null,
       n > 1 ? h('button', { class:'btn small', text:'Layout automático', title:'Agrupar em fila, com o mesmo espaço entre eles (Shift+A)', onclick:flowToggle }) : null,
     ]),
-    ls.length > 1 ? h('p', { class:'hint', text:`${ls.length} selecionados` }) : null,
+    ...pos, ...keep,
+    ls.length > 1 ? h('p', { class:'hint', text:`${ls.length} selecionados${pos.length ? ': a posição move todos juntos' : ''}` }) : null,
   ]);
 }
 
@@ -5999,7 +6205,7 @@ function renderPalette() {
   };
   const reorder = (arrs, from, to) => arrs.forEach(a => { const [x] = a.splice(from, 1); a.splice(to, 0, x); });
   const chip = (c, label, onInput, onDel, nameEl, gripEl) => {
-    const sw = colorButton(c, `Cor ${label}`, { cls:'sw', alpha:false, onStart:pushUndo, onInput:x => { onInput(x); needs = true; autosave(); } });
+    const sw = colorButton(c, `Cor ${label}`, { cls:'sw', onStart:pushUndo, onInput:x => { onInput(x); needs = true; autosave(); } });
     return h('div', { class:'swcol' }, [gripEl, h('div', { class:'swwrap' }, [sw, onDel ? h('button', { class:'sw-del', title:'Remover cor', 'aria-label':'Remover cor', text:'×', onclick:() => { pushUndo(); onDel(); redo(); } }) : null]), nameEl]);
   };
   const group = (title, titleEl, chips, onAdd, onDelGroup) => h('div', { class:'pgroup' }, [
@@ -6061,7 +6267,7 @@ function layerCell(L, where) {
   const list = where === 'list', bg = L.type === 'bg', i = S.layers.indexOf(L);
   const el = h('div', { class:(list ? 'layer' : 'tl-nm') + ' lcell' + (list ? (L.visible ? '' : ' off') + (L.locked ? ' locked' : '') + (L.grp ? ' ingrp' : '') : ''),
     title:list ? null : 'Clique duas vezes para renomear. Arraste para reordenar', onclick:e => clickOrRename(L, where, e) }, [
-    h('span', { class:'dot', style:`background:${TYPE_COLOR[L.type]}` }),
+    h('span', { class:'dot', style:`background:${TYPE_COLOR[typeKey(L)]}` }),
     h('span', { class:'lnm', title:list ? 'Clique duas vezes para renomear. Arraste para reordenar' : null }, [L.name, bg ? null : h('small', { text:`${L.start.toFixed(1)}s` })]),
     h('div', { class:'acts' }, [
       bg ? null : actBtn('Subir', ICONS.up, () => move(i, 1)),
@@ -6434,7 +6640,7 @@ function renderTimeline() {
       if (!doneG.has(L.grp)) { doneG.add(L.grp); groupRow(L.grp); }
       if (gmeta(L.grp).open === false) continue;
     }
-    const bar = h('div', { class:'tl-bar', style:`--c:${TYPE_COLOR[L.type]}`, title:`${L.name}: entra em ${L.start.toFixed(1)}s, sai em ${(L.end ?? d).toFixed(1)}s. Arraste para cima ou para baixo para mudar a ordem. Clique duplo leva a agulha até ele. I e O marcam entrada e saída na agulha` }, [
+    const bar = h('div', { class:'tl-bar', style:`--c:${TYPE_COLOR[typeKey(L)]}`, title:`${L.name}: entra em ${L.start.toFixed(1)}s, sai em ${(L.end ?? d).toFixed(1)}s. Arraste para cima ou para baixo para mudar a ordem. Clique duplo leva a agulha até ele. I e O marcam entrada e saída na agulha` }, [
       h('div', { class:'seg in' }), h('div', { class:'seg out' }), h('em', { text:tlLabel(L) }), h('div', { class:'h l' }), h('div', { class:'h r' })]);
     placeBar(bar, L);
     const lane = h('div', { class:'tl-lane' }, [bar]);
@@ -6639,6 +6845,9 @@ function tlDrag(e, L, bar, mode) {
   pushUndo(); pause();
   const grp = isPicked(L.id) ? freePicked().filter(o => o !== L).map(o => ({ o, s:o.start, e:o.end })) : [];
   const d = S.duration, s0 = L.start, e0 = L.end ?? d, end0 = L.end, x0 = e.clientX, y0 = e.clientY, grid = v => Math.round(v * 10) / 10, MIN = .3;
+  // vídeo: as bordas cortam o vídeo (vidTrim); a esquerda não passa do começo do vídeo
+  const vid0 = new Map([L, ...grp.map(q => q.o)].filter(o => o.video).map(o => [o, { ...vidCut(o), rIn:o.vIn, rOut:o.vOut, s:o.start, e:o.end ?? d }]));
+  const sMin = o => { const v = vid0.get(o); return v ? Math.max(0, v.s - v.a) : 0; };
   // ímã: início, fim, agulha e as bordas das outras camadas (Shift desliga)
   const pts = [0, d, T, ...extraSnaps(L)]; // + batidas da música e o meio das transições
   for (const o of S.layers) if (o !== L && o.type !== 'bg' && !grp.some(q => q.o === o)) pts.push(o.start, o.end ?? d);
@@ -6684,15 +6893,16 @@ function tlDrag(e, L, bar, mode) {
       s = clamp(s, s0 + dLo, s0 + dHi); if (hit !== null && Math.abs(s - hit) > 1e-6 && Math.abs(s + len - hit) > 1e-6) hit = null;
       L.start = s; L.end = Math.round((s + len) * 1000) / 1000;
     }
-    else if (mode === 'l') { const f = fit(s0 + dt); L.start = clamp(f.v, 0, e0 - MIN); hit = L.start === f.v ? f.hit : null; }
+    else if (mode === 'l') { const f = fit(s0 + dt); L.start = clamp(f.v, sMin(L), e0 - MIN); hit = L.start === f.v ? f.hit : null; }
     else { const f = fit(e0 + dt); L.end = clamp(f.v, s0 + MIN, d); hit = L.end === f.v ? f.hit : null; }
     // mesma diferença para todos os selecionados (mover ou esticar as bordas)
     const r3 = v => Math.round(v * 1000) / 1000;
     for (const q of grp) {
       if (mode === 'm') { q.o.start = r3(q.s + L.start - s0); if (q.e != null && q.e < d - .01) q.o.end = r3(q.e + L.start - s0); }
-      else if (mode === 'l') q.o.start = r3(clamp(q.s + L.start - s0, 0, ext(q.s, q.e) - MIN));
+      else if (mode === 'l') q.o.start = r3(clamp(q.s + L.start - s0, sMin(q.o), ext(q.s, q.e) - MIN));
       else { const ne = r3(clamp((q.e ?? d) + (L.end ?? d) - e0, q.s + MIN, d)); if (q.e != null || ne < d - .01) q.o.end = ne; }
     }
+    if (mode !== 'm') for (const [o, v] of vid0) vidTrim(o, v, mode);
     show(hit);
     needs = true; // a agulha fica onde está
   };
@@ -6702,7 +6912,7 @@ function tlDrag(e, L, bar, mode) {
   };
   const up = () => { done(); if (stk) stk.drop(); else if (moved) changed({ layers:true, props:true }); };
   // Esc devolve a barra para onde estava
-  const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); L.start = s0; L.end = end0; grp.forEach(q => { q.o.start = q.s; q.o.end = q.e; }); placeBar(bar, L); done(); needs = true; };
+  const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); L.start = s0; L.end = end0; grp.forEach(q => { q.o.start = q.s; q.o.end = q.e; }); vid0.forEach((v, o) => { o.vIn = v.rIn; o.vOut = v.rOut; if (o.vIn == null) delete o.vIn; if (o.vOut == null) delete o.vOut; }); placeBar(bar, L); done(); needs = true; };
   bar.classList.add('drag'); if (mode === 'l' || mode === 'r') bar.classList.add('h' + mode);
   addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up); addEventListener('keydown', key, true);
 }
@@ -6749,7 +6959,7 @@ panesApply();
 function renderMarks() {
   renderTimeline();
   const box = $('#marks'); box.innerHTML = '';
-  for (const L of S.layers) if (L.type !== 'bg' && L.visible) box.append(h('i', { style:`left:calc(${(L.start / S.duration * 100).toFixed(2)}% - 1px);background:${TYPE_COLOR[L.type]}`, title:`${L.name} entra em ${L.start.toFixed(1)}s` }));
+  for (const L of S.layers) if (L.type !== 'bg' && L.visible) box.append(h('i', { style:`left:calc(${(L.start / S.duration * 100).toFixed(2)}% - 1px);background:${TYPE_COLOR[typeKey(L)]}`, title:`${L.name} entra em ${L.start.toFixed(1)}s` }));
 }
 
 /* ------------ propriedades ------------ */
@@ -6774,7 +6984,7 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
       for (const o of peersAny(L)) { const n = o === L ? v : +clampPos(posOf(o)[k] + d).toFixed(4); setPos(o, k === 'x' ? n : null, k === 'y' ? n : null); }
       if (opts.onInput) opts.onInput(); changed(); return;
     }
-    for (const o of (['start', 'end'].includes(k) ? [L] : ['inSpeed', 'inInt', 'outSpeed', 'outInt', 'idleSpeed', 'idleInt', 'opacity'].includes(k) ? peersAny(L) : peersOf(L))) o[k] = v; if (opts.layout) RT.layout.clear(); if (opts.onInput) opts.onInput(); changed(); };
+    for (const o of (['start', 'end'].includes(k) ? [L] : ['inSpeed', 'inInt', 'outSpeed', 'outInt', 'idleSpeed', 'idleInt', 'opacity', 'lblur', 'bblur'].includes(k) ? peersAny(L) : peersOf(L))) o[k] = v; if (opts.layout) RT.layout.clear(); if (opts.onInput) opts.onInput(); changed(); };
   inp.addEventListener('pointerdown', pushUndo);
   inp.addEventListener('input', () => { set(parseFloat(inp.value)); out.value = fmt(val()); });
   if (opts.after) inp.addEventListener('change', opts.after);
@@ -6833,7 +7043,8 @@ function pickerOutside(e) { if (openPicker && !openPicker.contains(e.target) && 
 function colorButton(value, label, { onStart, onInput, cls = '', alpha = true }) {
   let cur = value;
   const btn = h('button', { type:'button', class:'cpick ' + cls, 'aria-label':label, title:label, style:`--c:${cur}` });
-  btn.setColor = c => { cur = c; btn.style.setProperty('--c', c); };
+  btn.setColor = c => { cur = c; btn.style.setProperty('--c', c); btn.classList.toggle('none', alpha && noCol(c)); }; // "sem cor": amostra branca cortada de vermelho
+  btn.setColor(cur);
   btn.addEventListener('click', () => {
     if (openPicker && openPicker._btn === btn) { closePicker(); return; }
     closePicker();
@@ -6849,13 +7060,17 @@ function colorButton(value, label, { onStart, onInput, cls = '', alpha = true })
       onclick:async () => {
         try {
           const r = await new EyeDropper().open(), c = parseHex(r.sRGBHex); if (!c) return;
-          if (onStart) onStart(); [hh, sat, v] = hexToHsv(c); emit();
+          if (onStart) onStart(); [hh, sat, v] = hexToHsv(c); if (alpha && al <= 0) al = 1; emit();
         } catch (e) {} // Esc cancela
       } }) : null;
+    // sem cor: a opacidade vai a 0 e o rgb fica guardado; clicar de novo (ou escolher uma cor) devolve a cor
+    const noneBtn = alpha ? h('button', { type:'button', class:'cnone', title:'Sem cor', 'aria-label':'Sem cor', 'aria-pressed':String(noCol(cur)), onclick:() => {
+      if (onStart) onStart(); al = al <= 0 ? 1 : 0; emit();
+    } }) : null;
     // cores da marca: um clique troca a cor e mantém a opacidade
     // lista como a de estilos do Figma: grupos na mesma ordem da paleta da marca (aba Marca), com busca
     const lib = cls.includes('sw') ? null : brandLib();
-    const pick = c => { if (onStart) onStart(); [hh, sat, v] = hexToHsv(c); emit(); };
+    const pick = c => { if (onStart) onStart(); [hh, sat, v] = hexToHsv(c); if (alpha && al <= 0) al = 1; emit(); };
     const libList = h('div', { class:'cp-list' }), libQ = h('input', { type:'text', class:'cp-q', placeholder:'Buscar cor da marca', spellcheck:'false', 'aria-label':'Buscar cor da marca' });
     const fillLib = () => {
       const q = libQ.value.trim().toLowerCase().replace(/^#/, ''), now = cur.slice(0, 7).toLowerCase();
@@ -6873,7 +7088,7 @@ function colorButton(value, label, { onStart, onInput, cls = '', alpha = true })
     const brandSws = lib && lib.length ? [h('div', { class:'cp-lib' }, [libQ, libList])] : [];
     if (brandSws.length) fillLib();
     const pop = h('div', { class:'cp-pop', role:'dialog', 'aria-label':label }, [
-      h('div', { class:'cp-row' }, [h('span', { class:'cp-lbl', text:'HEX' }), h('span', { class:'cp-rr' }, [h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hexIn]), eye])]),
+      h('div', { class:'cp-row' }, [h('span', { class:'cp-lbl', text:'HEX' }), h('span', { class:'cp-rr' }, [h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hexIn]), noneBtn, eye])]),
       sv, hue,
       alpha ? h('div', { class:'cp-row' }, [h('span', { class:'cp-lbl', text:'OPAC.' }), alp, h('span', { class:'hexwrap pctwrap' }, [pct, h('i', { text:'%' })])]) : null,
       ...brandSws
@@ -6886,6 +7101,7 @@ function colorButton(value, label, { onStart, onInput, cls = '', alpha = true })
       hue.firstChild.style.left = hh / 360 * 100 + '%';
       if (alp) { alp.style.setProperty('--top', base); alp.firstChild.style.left = al * 100 + '%'; if (document.activeElement !== pct) pct.value = Math.round(al * 100); }
       hexIn.value = base.slice(1).toUpperCase();
+      if (noneBtn) noneBtn.setAttribute('aria-pressed', String(al <= 0));
       return withA(base, al);
     };
     const emit = () => { const c = paint(); cur = c; btn.setColor(c); onInput(c); };
@@ -6895,8 +7111,8 @@ function colorButton(value, label, { onStart, onInput, cls = '', alpha = true })
       mv(e); el.addEventListener('pointermove', mv);
       el.addEventListener('pointerup', () => el.removeEventListener('pointermove', mv), { once:true });
     });
-    drag(sv, (x, y) => { sat = x; v = 1 - y; });
-    drag(hue, x => { hh = x * 360; });
+    drag(sv, (x, y) => { sat = x; v = 1 - y; if (alpha && al <= 0) al = 1; });
+    drag(hue, x => { hh = x * 360; if (alpha && al <= 0) al = 1; });
     if (alp) {
       drag(alp, x => { al = Math.round(x * 100) / 100; });
       const setPct = () => { const n = parseFloat(pct.value); if (!isFinite(n)) return; const a = clamp(n, 0, 100) / 100; if (a === al) return; if (onStart) onStart(); al = a; emit(); };
@@ -6908,7 +7124,7 @@ function colorButton(value, label, { onStart, onInput, cls = '', alpha = true })
     const commit = () => {
       const c = parseHex(hexIn.value);
       if (c) {
-        const a = alpha && c.length === 9 ? colA(c) : al, nc = withA(c, a);
+        const a = alpha && c.length === 9 ? colA(c) : al <= 0 && c.slice(0, 7) !== withA(cur, 1) ? 1 : al, nc = withA(c, a);
         if (nc !== cur) { if (onStart) onStart(); [hh, sat, v] = hexToHsv(c); al = a; cur = nc; btn.setColor(nc); onInput(nc); }
       }
       paint();
@@ -6939,7 +7155,7 @@ function colorF(L, k, label) {
   const id = fid(L, k);
   const setAll = c => { for (const o of peersOf(L)) o[k] = c; };
   const six = () => String(L[k]).slice(1, 7).toUpperCase();
-  const show = () => { hex.value = six(); if (document.activeElement !== pct) pct.value = Math.round(colA(L[k]) * 100); };
+  const show = () => { hex.value = six(); if (document.activeElement !== pct) pct.value = Math.round(colA(L[k]) * 100); row.classList.toggle('is-none', noCol(L[k])); none.setAttribute('aria-pressed', String(noCol(L[k]))); };
   const inp = colorButton(L[k], `${label} (seletor)`, { onStart:pushUndo, onInput:c => { setAll(c); show(); changed(); } });
   inp.id = id;
   const hex = h('input', { type:'text', class:'hex', value:six(), maxlength:32, spellcheck:'false', 'aria-label':`${label} (hex)`, title:'Cole ou digite o hex, com ou sem #' });
@@ -6964,8 +7180,12 @@ function colorF(L, k, label) {
   });
   pct.addEventListener('blur', () => show());
   pct.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); pct.blur(); } else if (e.key === 'Escape') { pct.blur(); } });
+  // sem cor (amostra branca cortada de vermelho): opacidade 0, o rgb fica guardado; clicar de novo devolve a cor
+  const none = h('button', { type:'button', class:'cnone', title:'Sem cor', 'aria-label':`${label}: sem cor`, 'aria-pressed':String(noCol(L[k])),
+    onclick:() => { pushUndo(); put(withA(L[k], noCol(L[k]) ? 1 : 0)); } });
   // as cores da marca ficam na lista do seletor (colorButton)
-  return field(label, h('div', { class:'colorctl' }, [inp, h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hex]), h('span', { class:'hexwrap pctwrap' }, [pct, h('i', { text:'%' })])]), id);
+  const row = h('div', { class:'colorctl' + (noCol(L[k]) ? ' is-none' : '') }, [inp, h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hex]), h('span', { class:'hexwrap pctwrap' }, [pct, h('i', { text:'%' })]), none]);
+  return field(label, row, id);
 }
 function selectF(L, k, label, opts, o = {}) {
   const id = fid(L, k);
@@ -7039,7 +7259,19 @@ function segF(L, k, label, opts) {
   draw();
   return field(label, wrap, null, true);
 }
-function checkF(L, k, label) {
+// "Cantos": uma barra para todos; "Cada canto" abre quatro (sup. esq., sup. dir., inf. dir., inf. esq.)
+function cornersF(L, fmt) {
+  const sep = !!L.radSep, names = ['Sup. esquerdo', 'Sup. direito', 'Inf. direito', 'Inf. esquerdo'];
+  const btn = h('button', { class:'btn small', text:sep ? 'Todos iguais' : 'Cada canto', title:sep ? 'Volta a um raio só' : 'Ajusta cada canto separado', onclick:() => {
+    pushUndo();
+    for (const o of peersOf(L)) {
+      if (!o.radSep) { for (const k of RAD_KEYS) o[k] = o.radius || 0; o.radSep = true; }
+      else { o.radius = o.rTL ?? o.radius ?? 0; o.radSep = false; }
+    }
+    changed({ props:true });
+  } });
+  return [sep ? null : rangeF(L, 'radius', 'Cantos', 0, 600, 1, fmt), ...(sep ? RAD_KEYS.map((k, i) => { if (L[k] == null) L[k] = L.radius || 0; return rangeF(L, k, names[i], 0, 600, 1, fmt); }) : []), h('div', { class:'row' }, [btn])].filter(Boolean);
+}function checkF(L, k, label) {
   const id = fid(L, k);
   const inp = h('input', { type:'checkbox', id, checked:!!L[k] });
   inp.addEventListener('change', () => { pushUndo(); for (const o of peersOf(L)) o[k] = inp.checked; RT.layout.clear(); changed(); if (k === 'stroke' || k === 'tint' || k === 'fill') renderProps(); });
@@ -7261,9 +7493,9 @@ function presetGrid(L, k, keys, map, onPick) {
   // Sem escolha, só a do preset escolhido começa aberta; na busca todas aparecem abertas
   const fold = (cat, name, cs) => {
     const key = `cat:${k}:${cat}`, cur = cs.includes(L[k]) ? map[L[k]].label : '', open = FOLD[key] ?? !!cur;
-    // como no Figma: dentro da seção, seta à esquerda; a categoria aberta vira um bloco destacado com os presets dela
+    // mesma seta das seções, à direita; a categoria aberta vira um bloco destacado com os presets dela
     const hd = h('button', { type:'button', class:'chip-cat' + (open ? '' : ' shut'), 'aria-expanded':String(open), title:(open ? 'Fechar ' : 'Abrir ') + name, onclick:() => { foldSave(key, !open); fill(); } },
-      [h('span', { class:'fold-btn fold-chev', 'aria-hidden':'true', html:FOLD_CHEV }), h('span', { text:name }), h('small', { class:cur && !open ? 'cur' : null, text:cur && !open ? cur : String(cs.length) })]);
+      [h('span', { text:name }), h('small', { class:cur && !open ? 'cur' : null, text:cur && !open ? cur : String(cs.length) }), h('span', { class:'fold-btn fold-chev', 'aria-hidden':'true', html:FOLD_CHEV })]);
     if (!open) { wrap.append(hd); return; }
     dest = h('div', { class:'cat-box' }, [hd]); wrap.append(dest);
     cs.forEach(one); dest = null;
@@ -7320,9 +7552,9 @@ function renderProps() {
   const L = selL();
   if (!L) { box.append(h('div', { class:'props-empty', text:'Selecione uma camada.' })); return; }
   const gid = wholeGroup(); // grupo inteiro selecionado: a aba Animação é a do grupo
-  const head = h('section', { class:'sec sec-head', style:`--tc:${gid ? 'var(--c-group)' : TYPE_COLOR[L.type]}` }, [
+  const head = h('section', { class:'sec sec-head', style:`--tc:${gid ? 'var(--c-group)' : TYPE_COLOR[typeKey(L)]}` }, [
     h('div', { class:'lhead' }, [
-      h('span', { class:'type-chip', style:`color:${gid ? 'var(--c-group)' : TYPE_COLOR[L.type]}`, text:gid ? 'Grupo' : TYPE_LABEL[L.type] }),
+      h('span', { class:'type-chip', style:`color:${gid ? 'var(--c-group)' : TYPE_COLOR[typeKey(L)]}`, text:gid ? 'Grupo' : TYPE_LABEL[typeKey(L)] }),
       gid ? (() => { const i = h('input', { type:'text', id:'f-g-' + gid + '-name', value:groupName(gid), 'aria-label':'Nome do grupo' }); i.addEventListener('input', () => { gmeta(gid, true).name = i.value.trim() || undefined; renderLayers(); renderTimeline(); autosave(); }); return i; })()
         : (() => { const i = h('input', { type:'text', id:fid(L, 'name'), value:L.name, 'aria-label':'Nome da camada' }); i.addEventListener('input', () => { L.name = i.value; renderLayers(); autosave(); }); return i; })(),
       L.type !== 'bg' ? h('button', { class:'icon-btn', title:'Duplicar', html:ICONS.copy, onclick:() => duplicateLayer(L) }) : null,
@@ -7338,7 +7570,7 @@ function renderProps() {
     h('button', { role:'tab', 'aria-selected':String(propTab === k), text:t, onclick:() => { propTab = k; renderProps(); } })));
   head.append(tabs);
   // como no Figma: o nome e as abas ficam sempre no topo; alinhar, tamanho da seleção e layout automático são do conteúdo e estilo
-  if (propTab !== 'anim') box.append(...[alignBar(), pickedLayers().length > 1 ? scaleBar() : null, flowSec()].filter(Boolean));
+  if (propTab !== 'anim') box.append(...[alignBar(), pathfinderSec(), pickedLayers().length > 1 ? scaleBar() : null, flowSec()].filter(Boolean));
 
   if (propTab === 'anim' && gid) { box.append(...groupAnimSecs(gid, head, box)); return; }
   if (gid) { box.append(...groupStyleSecs(gid)); return; }
@@ -7371,7 +7603,7 @@ function renderProps() {
     ]));
   } else {
     box.append(styleProps(L));
-    box.append(...styleExtras(L)); // moldura, vídeo e sombra
+    box.append(...styleExtras(L)); // ajustes da imagem
   }
 }
 // aba Animação do grupo inteiro: age sobre o conjunto e se soma à animação de cada item (que não muda)
@@ -7398,15 +7630,12 @@ function groupAnimSecs(gid, head, box) {
       ...rhythm('out', .4, 6, () => seekOut(G))]),
   ];
 }
-// aba "Conteúdo e estilo" do grupo inteiro: opacidade, mesclagem e sombra do conjunto (por fora da de cada item, que continua como está)
+// aba "Conteúdo e estilo" do grupo inteiro: opacidade, mesclagem, sombra e desfoque do conjunto (por fora da de cada item, que continua como está)
 function groupStyleSecs(gid) {
   const G = gview(gid); G.opacity ??= 1;
-  const sh = h('section', { class:'sec' }, [h('h3', { text:'Sombra do grupo' }),
-    chipPick(G, 'shadow', Object.entries(SHADOWS).map(([k, s]) => [k, s.label]), (v, o) => { o.shColor = v === 'none' ? null : autoShadowHex(o, v); }, () => seekLayer(G))]);
-  if (G.shadow && G.shadow !== 'none') sh.append(colorF(G, 'shColor', 'Cor da sombra'));
   return [h('section', { class:'sec' }, [h('h3', { text:'Aparência do grupo' }),
     h('p', { class:'hint', text:'Vale para o conjunto inteiro, sem mexer nos itens. Cada item pode ter a própria sombra por dentro.' }),
-    rangeF(G, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'), ...blendF(G)]), sh, blurSec(G, true)];
+    rangeF(G, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'), ...blendF(G), ...fxFields(G)])];
 }
 function syncPosFields(L) {
   const p = posOf(L);
@@ -7428,20 +7657,22 @@ function posNote(L) {
 function styleProps(L) {
   const sec = h('section', { class:'sec' }), put = (...xs) => sec.append(...xs.filter(Boolean));
   const px = v => Math.round(v) + 'px';
-  // tipos misturados: só o que todos têm em comum (opacidade e posição)
+  // tipos misturados: só o que todos têm em comum (opacidade, mesclagem, sombra e desfoque; a posição fica em Posição, no topo)
   if (peersAny(L).some(o => o.type !== L.type)) {
-    put(h('h3', { text:`${peersAny(L).length} elementos` }),
-      h('p', { class:'hint', text:'Tipos diferentes: aqui ficam só as opções em comum. Escolha um tipo só para ver as demais.' }),
+    put(h('h3', { text:'Aparência' }),
+      h('p', { class:'hint', text:`${peersAny(L).length} elementos de tipos diferentes: aqui ficam só as opções em comum. Escolha um tipo só para ver as demais.` }),
       rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
-      ...blendF(L),
-      h('h3', { text:'Posição (move todos juntos)' }),
-      ...posFields(L));
+      ...blendF(L), ...fxFields(L));
     return sec;
   }
+  // em todos os tipos: Posição (alignBar, no topo) → conteúdo → Aparência (opacidade, mesclagem, sombra, desfoque) → Contorno
+  const look = () => [h('h3', { text:'Aparência' }), rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'), ...blendF(L), ...fxFields(L)];
   if (L.type === 'text') {
     put(h('h3', { text:'Texto' }), richF(L, 'Texto (Enter quebra a linha)'), fontF(L),
       selectF(L, 'weight', 'Peso do texto', WEIGHTS.map(([v, t]) => [v, `${t} ${v}`]), { num:true, props:true }),
-      h('h3', { text:'Tipografia' }),
+      colorF(L, 'color', 'Cor'),
+      L.in === 'highlight' || L.out === 'highlight' ? colorF(L, 'hl', 'Marca-texto') : null,
+      lineF(L),
       rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true }),
       rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
       rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
@@ -7454,48 +7685,37 @@ function styleProps(L) {
       })(),
       segF(L, 'align', 'Alinhamento', [['left', 'Esq.'], ['center', 'Centro'], ['right', 'Dir.']]),
       h('div', { class:'checks' }, [checkF(L, 'upper', 'Caixa alta'), checkF(L, 'italic', 'Itálico')]),
-      h('h3', { text:'Aparência' }),
-      colorF(L, 'color', 'Cor'),
-      L.in === 'highlight' || L.out === 'highlight' ? colorF(L, 'hl', 'Marca-texto') : null,
-      lineF(L),
-      rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
-      ...blendF(L),
-      h('h3', { text:'Posição' }),
-      ...posFields(L));
+      ...strokeSecs(L),
+      ...look());
   } else if (L.type === 'cta') {
     put(h('h3', { text:'Texto' }), textF(L, 'text', 'Texto do botão'), fontF(L),
       selectF(L, 'weight', 'Peso', [[400, 'Regular'], [500, 'Medium'], [600, 'Semibold'], [700, 'Bold'], [800, 'Extrabold']], { num:true }),
       rangeF(L, 'size', 'Tamanho', 16, 120, 1, px),
-      h('h3', { text:'Forma' }),
+      colorF(L, 'color', 'Cor do texto'),
+      h('h3', { text:'Botão' }),
+      colorF(L, 'bg', 'Fundo'),
       rangeF(L, 'radius', 'Arredondado', 0, 999, 1, v => v >= 999 ? 'pílula' : px(v)),
       rangeF(L, 'padX', 'Folga lateral', 10, 160, 1, px), rangeF(L, 'padY', 'Folga vertical', 6, 80, 1, px),
-      h('h3', { text:'Cores' }),
-      colorF(L, 'bg', 'Fundo'), colorF(L, 'color', 'Texto'),
       lineF(L),
-      h('h3', { text:'Aparência' }),
-      rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
-      ...blendF(L),
-      h('h3', { text:'Posição' }),
-      ...posFields(L));
+      ...strokeSecs(L),
+      ...look());
   } else if (L.type === 'logo') {
+    const drawn = L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble';
+    if (!L.tintColor) L.tintColor = S.brand.colors[1];
     put(
-      h('h3', { text:'Logo' }),
+      h('h3', { text:L.svg ? 'SVG' : 'Logo' }),
       h('p', { class:'hint', text:L.svg ? 'Este SVG é só desta camada. Tem as mesmas animações do logo.' : 'O arquivo do logo é trocado em Marca, na coluna da esquerda.' }),
       rangeF(L, 'size', 'Tamanho', .04, .95, .005, v => Math.round(v * 100) + '%'),
-      rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
-      ...blendF(L),
-      (L.tintColor || (L.tintColor = S.brand.colors[1]), h('h3', { text:'Cor do logo' })),
-      checkF(L, 'tint', 'Pintar o logo de uma cor só'),
+      checkF(L, 'tint', L.svg ? 'Pintar o SVG de uma cor só' : 'Pintar o logo de uma cor só'),
       L.tint ? colorF(L, 'tintColor', 'Cor') : null,
       L.tint ? h('p', { class:'hint', text:'Troca todas as cores do logo por esta. Serve para logo preto, branco ou de outra marca.' }) : null,
-      (L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble') ? h('h3', { text:'Traço' }) : null,
-      (L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble') ? checkF(L, 'drawOrig', 'Usar as cores originais do SVG') : null,
-      (L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble') ? rangeF(L, 'drawWidth', 'Espessura', 1, 16, .5, v => v + 'px') : null,
-      (L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble') && !L.drawOrig ? colorF(L, 'drawColor', 'Cor do traço') : null,
-      usesLine(L) ? h('h3', { text:'Linha' }) : null,
+      // "Desenhar" e "Montar" desenham o traço do logo antes da cor
+      drawn ? checkF(L, 'drawOrig', 'Traço com as cores originais do SVG') : null,
+      drawn ? rangeF(L, 'drawWidth', 'Espessura do traço', 1, 16, .5, v => v + 'px') : null,
+      drawn && !L.drawOrig ? colorF(L, 'drawColor', 'Cor do traço') : null,
       lineF(L),
-      h('h3', { text:'Posição' }),
-      ...posFields(L));
+      ...strokeSecs(L),
+      ...look());
   } else if (L.type === 'shape') {
     const pct = v => Math.round(v * 100) + '%', k = L.kind;
     if (L.fill == null) L.fill = true;
@@ -7503,7 +7723,8 @@ function styleProps(L) {
     if (L.strokeGap == null) L.strokeGap = 1;
     if (L.strokeCap == null) L.strokeCap = 'round';
     if (L.strokeJoin == null) L.strokeJoin = 'round';
-    const filled = k !== 'line' && L.fill, stroked = !filled || L.stroke;
+    // arquivo antigo / caminho aberto com fill:false: o preenchimento vira "sem cor" e o contorno que era obrigatório fica ligado
+    if (L.fill === false && k !== 'line') { L.fill = true; L.mode = 'solid'; L.c1 = withA(L.c1 || S.brand.colors[2], 0); L.stroke = true; }
     put(h('h3', { text:'Forma' }),
       segF(L, 'kind', 'Tipo', Object.entries(SHAPE_KINDS)),
       k === 'custom' ? textF(L, 'd', 'Caminho SVG (atributo d do <path>)', true) : null,
@@ -7511,30 +7732,16 @@ function styleProps(L) {
       k === 'custom' ? h('p', { class:'hint', text:'Desenhe com a caneta (P) ou cole o d de qualquer path (Figma, Illustrator, Inkscape). Clique duplo no palco edita os pontos. Ele é vetorial: escala sem perder qualidade e "Desenhar traço" percorre o contorno.' }) : null,
       rangeF(L, 'size', k === 'line' || k === 'custom' ? 'Tamanho' : 'Largura', .03, 1.6, .005, pct, { cap:SZ_MAX }),
       resizable(L) ? rangeF(L, 'mh', 'Altura', .03, 2.6, .005, pct, { cap:MH_MAX }) : null,
-      k === 'rect' ? rangeF(L, 'radius', 'Cantos', 0, 600, 1, px) : null,
+      ...(k === 'rect' ? cornersF(L, px) : []),
       k === 'polygon' || k === 'star' ? rangeF(L, 'points', 'Pontas', 3, 12, 1, v => String(Math.round(v))) : null,
       k === 'star' ? rangeF(L, 'inner', 'Profundidade', .1, .95, .01, pct) : null,
       rangeF(L, 'rot', 'Rotação', -180, 180, 1, v => Math.round(v) + '°'),
-      k !== 'line' ? checkF(L, 'fill', 'Preenchimento') : null,
-      filled ? h('h3', { text:'Cor (mesmas animações do fundo)' }) : null);
-    if (filled) fillProps(L, sec);
-    put(h('h3', { text:k === 'line' ? 'Traço' : 'Contorno' }),
-      filled ? checkF(L, 'stroke', 'Contorno') : null,
-      stroked ? rangeF(L, 'strokeW', 'Espessura', 1, 80, .5, v => v + 'px') : null,
-      stroked ? colorF(L, 'strokeColor', 'Cor do traço') : null,
-      stroked ? segF(L, 'strokeDash', 'Estilo', Object.entries(STROKE_STYLES)) : null,
-      stroked && L.strokeDash && L.strokeDash !== 'solid' ? rangeF(L, 'strokeGap', 'Espaçamento', .4, 3, .05, v => v.toFixed(2) + '×') : null,
-      stroked && L.strokeDash !== 'dot' ? segF(L, 'strokeCap', 'Pontas', [['round', 'Redonda'], ['butt', 'Reta'], ['square', 'Quadrada']]) : null,
-      stroked && k !== 'line' && k !== 'ellipse' ? segF(L, 'strokeJoin', 'Cantos', [['round', 'Redondo'], ['miter', 'Vivo'], ['bevel', 'Chanfro']]) : null,
-      L.in === 'draw' && !stroked ? h('p', { class:'hint', text:'"Desenhar traço" usa a cor 2 como traço de apoio. Ative Contorno para mantê-lo.' }) : null,
-      h('h3', { text:'Aparência' }),
-      rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, pct),
-      ...blendF(L),
-      lineF(L),
-      h('h3', { text:'Posição' }),
-      ...posFields(L),
-      checkF(L, 'keepIn', 'Manter dentro da margem'),
-      h('p', { class:'hint', text:'Precisa da margem ligada. Se a forma não couber, ela encolhe.' }));
+      k !== 'line' ? h('h3', { text:'Preenchimento' }) : null);
+    if (k !== 'line') fillProps(L, sec);
+    put(...strokeSecs(L),
+      L.in === 'draw' && !strokeOn(L) ? h('p', { class:'hint', text:'"Desenhar traço" usa a cor 2 como traço de apoio. Ative Contorno para mantê-lo.' }) : null,
+      ...look(),
+      lineF(L));
   } else if (L.type === 'image') {
     const pct = v => Math.round(v * 100) + '%';
     L.mask = L.mask || 'fit'; if (L.zoom == null) L.zoom = 1; if (L.ix == null) L.ix = 0; if (L.iy == null) L.iy = 0;
@@ -7546,35 +7753,53 @@ function styleProps(L) {
         L.mask = v; changed({ props:true });
       } })));
     put(
-      uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem', 'image/*', async f => { const src = await imageSrc(f); pushUndo(); L.src = src; delete L.cut; await getImage(L.src); changed({ props:true }); }),
-      cutoutF(L),
+      h('h3', { text:L.video ? 'Vídeo' : 'Imagem' }),
+      ...mediaFields(L),
       h('h3', { text:'Máscara' }),
       field('Forma', maskSeg, null),
       rangeF(L, 'size', masked(L) ? 'Largura' : 'Tamanho', .03, 1.6, .005, pct, { cap:SZ_MAX }),
       masked(L) ? rangeF(L, 'mh', 'Altura', .03, 2.6, .005, pct, { cap:MH_MAX }) : null,
-      L.mask !== 'circle' ? rangeF(L, 'radius', 'Cantos', 0, 600, 1, px) : null,
-      h('h3', { text:'Imagem dentro da máscara' }),
+      ...(L.mask !== 'circle' ? cornersF(L, px) : []),
+      // a imagem dentro da máscara (antes uma seção à parte)
       rangeF(L, 'zoom', 'Zoom', .2, 5, .01, v => v.toFixed(2) + '×'),
-      rangeF(L, 'ix', 'Horizontal', -1, 1, .005, pct),
-      rangeF(L, 'iy', 'Vertical', -1, 1, .005, pct),
+      rangeF(L, 'ix', 'Imagem ↔', -1, 1, .005, pct),
+      rangeF(L, 'iy', 'Imagem ↕', -1, 1, .005, pct),
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Preencher a máscara', onclick:() => { pushUndo(); setFrame(L, { zoom:1, ix:0, iy:0 }); changed({ props:true }); } })]),
       h('p', { class:'hint', text:'A imagem nunca distorce. No palco: a alça do canto aumenta tudo, as das laterais mudam a máscara, a roda do mouse dá zoom na imagem e Alt + arrastar move a imagem dentro.' }),
-      h('h3', { text:'Aparência' }),
-      rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
-      ...blendF(L),
-      lineF(L),
-      h('h3', { text:'Posição' }),
-      ...posFields(L),
-      checkF(L, 'keepIn', 'Manter dentro da margem'),
-      h('p', { class:'hint', text:'Precisa da margem ligada. Se a imagem não couber, ela encolhe.' }));
+      ...strokeSecs(L),
+      ...look(),
+      lineF(L));
   }
   return sec;
 }
 function bgProps(L) {
   const sec = h('section', { class:'sec' }, [h('h3', { text:'Fundo' })]);
   fillProps(L, sec);
-  sec.append(h('h3', { text:'Aparência' }), ...blendF(L));
+  sec.append(...blendF(L));
   return sec;
+}
+// Contorno de qualquer elemento (texto, logo, botão, imagem/vídeo, forma), como no Figma: junto com a cor, não no lugar dela.
+// Linha só tem traço (sempre ligado); o resto liga e desliga em "Contorno". Tirar a cor = botão "sem cor" do campo de cor.
+function strokeSecs(L) {
+  const t = L.type, shape = t === 'shape', line = shape && L.kind === 'line';
+  if (L.strokeW == null) L.strokeW = shape ? 8 : 4;
+  if (!L.strokeColor) L.strokeColor = shape ? S.brand.colors[1] : '#ffffff';
+  if (L.strokeDash == null) L.strokeDash = 'solid';
+  if (L.strokeGap == null) L.strokeGap = 1;
+  if (L.strokeCap == null) L.strokeCap = 'round';
+  if (L.strokeJoin == null) L.strokeJoin = 'round';
+  if (L.strokePos == null || (t === 'text' && L.strokePos === 'inside')) L.strokePos = 'center';
+  const on = strokeOn(L), dashes = t !== 'text' && t !== 'logo', round = shape && L.kind === 'ellipse' || t === 'image' && L.mask === 'circle';
+  const pos = t === 'text' ? [['center', 'Centro'], ['outside', 'Fora']] : [['inside', 'Dentro'], ['center', 'Centro'], ['outside', 'Fora']];
+  return [h('h3', { text:line ? 'Traço' : 'Contorno' }),
+    line ? null : checkF(L, 'stroke', 'Contorno'),
+    on ? rangeF(L, 'strokeW', 'Espessura', 1, 80, .5, v => v + 'px') : null,
+    on ? colorF(L, 'strokeColor', 'Cor do traço') : null,
+    on && !line && t !== 'logo' ? segF(L, 'strokePos', 'Posição', pos) : null,
+    on && dashes ? segF(L, 'strokeDash', 'Estilo', Object.entries(STROKE_STYLES)) : null,
+    on && dashes && L.strokeDash !== 'solid' ? rangeF(L, 'strokeGap', 'Espaçamento', .4, 3, .05, v => v.toFixed(2) + '×') : null,
+    on && dashes && L.strokeDash !== 'dot' ? segF(L, 'strokeCap', 'Pontas', [['round', 'Redonda'], ['butt', 'Reta'], ['square', 'Quadrada']]) : null,
+    on && !line && !round && t !== 'logo' ? segF(L, 'strokeJoin', 'Cantos', [['round', 'Redondo'], ['miter', 'Vivo'], ['bevel', 'Chanfro']]) : null];
 }
 // cor animada: o mesmo motor do fundo, também usado nas formas
 function fillProps(L, sec) {
@@ -7597,16 +7822,14 @@ function renderAll() { renderFormats(); renderAdds(); renderBrand(); renderLayer
    quando o conteúdo muda. O estado fica no navegador por título ('mola-fold'); sem escolha, o que é raro começa fechado
    (FOLD_SHUT). Fechado, o cabeçalho mostra o valor atual (preset escolhido, data-sum ou FOLD_SUM). */
 const FOLD = (() => { try { const o = JSON.parse(localStorage.getItem('mola-fold')); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } })();
-const FOLD_SHUT = new Set(['props:Enquanto está na tela', 'props:Marca à mão', 'props:Movimento dentro da imagem', 'props:Saída', 'props:Tempo', 'props:Imagem dentro da máscara',
-  'props:Ajustes', 'props:Moldura', 'props:Sombra', 'props:Desfoque', 'left:Marca', 'left:Trilha', 'left:Arquivo']);
+const FOLD_SHUT = new Set(['props:Enquanto está na tela', 'props:Marca à mão', 'props:Movimento dentro da imagem', 'props:Saída', 'props:Tempo',
+  'props:Ajustes', 'left:Marca', 'left:Trilha', 'left:Arquivo']);
 const FOLD_SUM = {
   'left:Trilha': () => S && S.audio ? S.audio.name : 'sem música',
   'left:Camadas': () => S ? String(S.layers.filter(l => l.type !== 'bg').length) : '',
 };
-// + abre, − fecha (do lado direito, como no Figma); o CSS mostra um ou outro pela classe .shut
-const FOLD_ICON = '<svg class="i-plus" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg><svg class="i-minus" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 8h10"/></svg>';
-// nível de dentro (h3.sub, categorias das animações): seta à esquerda, como nos grupos de estilos do Figma
-const FOLD_CHEV = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4.5 10 8l-3.5 3.5"/></svg>';
+// seta à direita em todos os níveis (pedido do usuário: o + / − confundia): para baixo = fechada, gira para cima ao abrir (.shut no CSS)
+const FOLD_CHEV = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.25 8 9.75l3.5-3.5"/></svg>';
 const foldOpen = k => FOLD[k] ?? !FOLD_SHUT.has(k);
 function foldSave(k, open) { FOLD[k] = open; try { localStorage.setItem('mola-fold', JSON.stringify(FOLD)); } catch (e) {} }
 // o título sem o que vem junto (Ver, small); "Entrada do grupo" divide o estado com "Entrada"
@@ -7631,10 +7854,10 @@ function foldHead(el, key) {
   if (!el._fold) {
     el._fold = true; el.classList.add('fold-h');
     const inner = el.classList.contains('sub');
-    el._btn = h('button', { type:'button', class:'fold-btn' + (inner ? ' fold-chev' : ''), html:inner ? FOLD_CHEV : FOLD_ICON });
+    el._btn = h('button', { type:'button', class:'fold-btn' + (inner ? ' fold-chev' : ''), html:FOLD_CHEV });
     el._sum = h('span', { class:'fold-sum' }); // logo depois do título; também empurra o resto para a direita
     const t = [...el.childNodes].find(n => n.nodeType === 3 && n.textContent.trim()); if (t) t.after(el._sum); else el.prepend(el._sum);
-    if (inner) el.prepend(el._btn); else el.append(el._btn);
+    el.append(el._btn);
     // o cabeçalho inteiro abre e fecha; os botões dele (Ver) continuam sendo deles
     el.addEventListener('click', e => { const c = e.target.closest('button, input, select, a, [contenteditable]'); if (c && c !== el._btn) return; foldToggle(el); });
   }
@@ -7789,8 +8012,13 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (typing || overlayOpen() || RT.exporting) return;
+  if (e.altKey && e.shiftKey && !mod) { // Pathfinder, como no Figma
+    const op = { KeyU:'union', KeyS:'subtract', KeyI:'intersect', KeyE:'exclude' }[e.code];
+    if (op && pfTargets().length) { e.preventDefault(); pathfinder(op); return; }
+  }
   if (mod && !e.altKey) {
     if (k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+    else if (k === 'e' && !e.shiftKey && pfTargets().length) { e.preventDefault(); pathfinder('flatten'); }
     else if (k === 'y') { e.preventDefault(); redo(); }
     else if (k === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); }
     else if (k === 'd') { e.preventDefault(); const L = selL(); if (L && L.type !== 'bg') duplicateLayer(L); }
@@ -7835,7 +8063,7 @@ const KEYS = [
   ['Tempo do elemento', [['I', 'Entra na agulha'], ['O', 'Sai na agulha'], ['Clique duplo na barra', 'Leva a agulha até ele'], ['Shift ao arrastar', 'Desliga o ímã da timeline'], ['Esc ao arrastar', 'Cancela']]],
   ['Palco', [['← ↑ → ↓', 'Move 1 px (Shift: 10 px)'], ['Arrastar no vazio', 'Seleciona por área'], ['Shift + clique', 'Soma ou tira da seleção'], ['Ctrl + clique', 'Escolhe um item dentro do grupo'], ['Clique duplo / Enter', 'Edita o texto'], ['Ctrl ao arrastar', 'Desliga as guias'], ['Alt + arrastar imagem', 'Move a imagem na máscara'], ['Roda na imagem', 'Zoom na máscara'], ['Alças (8 pontos)', 'Cantos escalam; lados mudam largura, altura ou quebra do texto'], ['Alt ao puxar a alça', 'Escala a partir do centro'], ['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco'], ['Ctrl + \\', 'Esconde ou mostra todos os painéis'], ['P', 'Caneta (modos Caneta, Curvas e Mão livre no topo do palco)'], ['Shift + P', 'Caneta à mão livre'], ['Clique duplo na forma', 'Edita os pontos (qualquer forma vira vetor)'], ['Arrastar a linha', 'Curva o trecho (na edição de pontos)'], ['Clique duplo no ponto', 'Curva / canto']]],
   ['Editar', [['Ctrl + Z', 'Desfazer'], ['Ctrl + Shift + Z', 'Refazer'], ['Ctrl + C / X / V', 'Copiar, recortar, colar (vale entre arquivos)'], ['Ctrl + D', 'Duplicar'], ['Delete', 'Apagar'], ['Ctrl + A', 'Selecionar tudo'], ['Esc', 'Tirar a seleção / sair do texto'], ['/', 'Buscar animação']]],
-  ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Shift + A', 'Layout automático (sem nada selecionado: o quadro todo)'], ['Arrastar o espaço rosa', 'Muda o espaço do layout'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear']]],
+  ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Alt + Shift + U S I E', 'Pathfinder: unir, subtrair, interseção, excluir (formas)'], ['Ctrl + E', 'Pathfinder: achatar as formas em um vetor'], ['Shift + A', 'Layout automático (sem nada selecionado: o quadro todo)'], ['Arrastar o espaço rosa', 'Muda o espaço do layout'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear']]],
   ['Arquivo', [['Ctrl + S', 'Salvar agora (já salva sozinho)'], ['Ctrl + Shift + S', 'Salvar cópia'], ['Ctrl + Shift + E', 'Exportar MP4'], ['Ctrl + V', 'Colar imagem ou SVG'], ['?', 'Este painel']]],
 ];
 function showKeys(on) {
@@ -8122,47 +8350,81 @@ function adjSec(L) {
     h('p', { class:'hint', text:adjGL() ? 'Clique duplo numa barra volta ao zero. Vale também para vídeo.' : 'Este navegador não tem WebGL2: os ajustes não aparecem.' }));
   return sec;
 }
+// só o que é grande e raro fica numa seção à parte (Ajustes da imagem); o resto entrou nas seções de styleProps
 function styleExtras(L) {
-  const out = [];
-  if (L.type === 'image') {
-    out.push(adjSec(L));
-    const sec = h('section', { class:'sec' }, [h('h3', { text:'Moldura' }),
-      chipPick(L, 'device', Object.entries(DEVICES), (v, o) => {
-        if (v === 'phone') { o.mask = 'rect'; o.mh = +(o.size * 2.05).toFixed(4); o.radius = Math.round(o.size * W() * .12); o.zoom = 1; o.ix = 0; o.iy = 0; }
-        if (v === 'browser') { o.mask = 'rect'; if (o.mh == null) { const G = blockGeom(o); o.mh = +((G ? G.h / W() : o.size * .62)).toFixed(4); } o.radius = 0; }
-      }, () => seekLayer(L))]);
-    if (L.device === 'phone') sec.append(h('p', { class:'hint', text:'Print comprido de app ou site: use "Rolar a tela" em Movimento dentro da imagem, na aba Animação.' }));
-    out.push(sec);
-    if (L.video) out.push(h('section', { class:'sec' }, [h('h3', { text:'Vídeo' }),
-      h('p', { class:'hint', text:`${fmtSec(L.vdur || 0)} de vídeo, sem som. Começa quando a camada entra e repete se for mais curto.` }),
-      uploadF('Trocar vídeo', 'video/*', async f => {
-        toast('Abrindo o vídeo…');
-        try { const id = await putMedia(f), p = await videoPoster(await mediaUrl(id)); pushUndo(); L.video = id; L.src = p.src; L.vdur = p.dur; await getImage(L.src); changed({ props:true }); toast('Vídeo trocado'); }
-        catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
-      })]));
-  }
-  if (L.type !== 'bg' && !NOBOX(L)) {
-    const sec = h('section', { class:'sec' }, [h('h3', { text:'Sombra' }),
-      chipPick(L, 'shadow', Object.entries(SHADOWS).map(([k, s]) => [k, s.label]), (v, o) => { o.shColor = v === 'none' ? null : autoShadowHex(o, v); }, () => seekLayer(L))]);
-    if (L.shadow && L.shadow !== 'none') sec.append(colorF(L, 'shColor', 'Cor da sombra'));
-    out.push(sec);
-  }
-  if (!NOBOX(L)) out.push(blurSec(L));
-  return out;
+  return L.type === 'image' ? [adjSec(L)] : [];
 }
-// desfoque da camada e do fundo (vidro): presets rápidos + valor livre em px
-function blurSec(L, grp) {
-  const row = k => {
-    const cur = L[k] ??= 0;
-    const chips = h('div', { class:'chips' }, BLURS[k].map(([v, t]) => h('button', { class:'chip', 'aria-pressed':String(cur === v), title:v ? `${t}: ${v} px` : t, onclick:() => {
-      pushUndo(); for (const o of peersOf(L)) o[k] = v; changed(); renderProps();
-    } }, [h('span', { text:t })])));
-    return [rangeF(L, k, k === 'lblur' ? 'Da camada' : 'Do fundo', 0, 800, 1, v => Math.round(v || 0) + ' px', { after:renderProps }), chips];
+// chipPick numa linha só (poucas opções curtas: moldura, presets do desfoque)
+function segPick(L, k, opts, after, seek, def = 'none', peers = peersOf) {
+  const wrap = h('div', { class:'segs' + (opts.length <= 4 && opts.every(o => String(o[1]).length <= 10) ? ' tight' : ''), role:'group' });
+  opts.forEach(([v, t, tip]) => wrap.append(h('button', { 'aria-pressed':String((L[k] ?? def) === v), text:t, title:tip || t, onclick:() => {
+    pushUndo();
+    for (const o of peers(L)) { o[k] = v; if (after) after(v, o); }
+    RT.layout.clear(); changed({ layers:true }); renderProps();
+    if (seek) seek(v);
+  } })));
+  return wrap;
+}
+// corte do vídeo: início e fim do trecho (no vídeo original). A barra da camada acompanha sozinha (vidFitEnd)
+function vidCutFields(L) {
+  const d = L.vdur || 60, step = .05;
+  const fix = o => { const od = o.vdur || d; o.vIn = clamp(o.vIn || 0, 0, od - .1); if (o.vOut != null) { o.vOut = clamp(o.vOut, 0, od); if (o.vOut - o.vIn < .1) o.vOut = Math.min(od, o.vIn + .1); if (o.vOut >= od - 1e-3) o.vOut = null; } if (!o.vIn) delete o.vIn; if (o.vOut == null) delete o.vOut; vidFitEnd(o); };
+  const look = edge => {
+    pause(); const { a, b } = vidCut(L), s = L.start, e = (L.end ?? S.duration) - 1e-3;
+    T = clamp(edge ? s + (b - a) - 1 / fps() : restTime(L), s, e); needs = true;
   };
-  const sec = h('section', { class:'sec' }, [h('h3', { text:grp ? 'Desfoque do grupo' : 'Desfoque' }), ...row('lblur')]);
-  if (L.type !== 'bg') sec.append(...row('bblur'),
-    h('p', { class:'hint', text:'Borra o que está atrás, no formato do elemento. Com preenchimento meio transparente, vira vidro.' }));
-  return sec;
+  const len = () => { const { a, b } = vidCut(L); return b - a; };
+  const edit = edge => { peersOf(L).filter(o => o.video).forEach(fix); look(edge); upd(); renderTimeline(); };
+  const inF = rangeF(L, 'vIn', 'Começa em', 0, d, step, v => fmtSec(v || 0), { onInput:() => edit(0) });
+  const outF = rangeF(L, 'vOut', 'Termina em', 0, d, step, v => fmtSec(v ?? d), { onInput:() => edit(1) });
+  const inR = inF.querySelector('input[type=range]'), outR = outF.querySelector('input[type=range]'), nums = [inF, outF].map(f => f.querySelector('.num'));
+  const note = h('p', { class:'hint' });
+  const upd = () => {
+    const n = len(), on = (L.end ?? S.duration) - L.start;
+    inR.value = L.vIn || 0; outR.value = L.vOut ?? d;
+    if (document.activeElement !== nums[0]) nums[0].value = fmtSec(L.vIn || 0);
+    if (document.activeElement !== nums[1]) nums[1].value = fmtSec(L.vOut ?? d);
+    note.textContent = `Trecho de ${fmtSec(n)} (o vídeo tem ${fmtSec(d)}). ${n < on - .05 ? 'Repete até a camada sair.' : n > on + .05 ? 'O vídeo final acaba antes do fim do trecho.' : 'As bordas da barra na timeline também cortam.'}`;
+  };
+  upd();
+  return [inF, outF, note];
+}
+// topo da seção Imagem/Vídeo: trocar o arquivo, remover fundo, moldura
+function mediaFields(L) {
+  return [
+    L.video ? h('p', { class:'hint', text:'Vídeo sem som. Começa quando a camada entra.' }) : null,
+    ...(L.video ? vidCutFields(L) : []),
+    L.video ? uploadF('Trocar vídeo', 'video/*', async f => {
+      toast('Abrindo o vídeo…');
+      try { const id = await putMedia(f), p = await videoPoster(await mediaUrl(id)); pushUndo(); L.video = id; L.src = p.src; L.vdur = p.dur; delete L.vIn; delete L.vOut; vidFitEnd(L); await getImage(L.src); changed({ layers:true, props:true }); toast('Vídeo trocado'); }
+      catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
+    }) : uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem', 'image/*', async f => { const src = await imageSrc(f); pushUndo(); L.src = src; delete L.cut; await getImage(L.src); changed({ props:true }); }),
+    cutoutF(L),
+    field('Moldura', segPick(L, 'device', Object.entries(DEVICES), (v, o) => {
+      if (v === 'phone') { o.mask = 'rect'; o.mh = +(o.size * 2.05).toFixed(4); o.radius = Math.round(o.size * W() * .12); o.zoom = 1; o.ix = 0; o.iy = 0; }
+      if (v === 'browser') { o.mask = 'rect'; if (o.mh == null) { const G = blockGeom(o); o.mh = +((G ? G.h / W() : o.size * .62)).toFixed(4); } o.radius = 0; }
+    }, () => seekLayer(L)), null, true),
+    L.device === 'phone' ? h('p', { class:'hint', text:'Print comprido de app ou site: use "Rolar a tela" em Movimento dentro da imagem, na aba Animação.' }) : null];
+}
+// sombra e desfoque, no fim de "Aparência" (antes eram seções fechadas à parte): sombra num menu; desfoque = barra livre + presets numa linha.
+// Valem para toda a seleção, de qualquer tipo (como a opacidade)
+function fxFields(L) {
+  const sid = fid(L, 'shadow');
+  const sel = h('select', { id:sid }, Object.entries(SHADOWS).map(([k, s]) => h('option', { value:k, text:s.label, selected:(L.shadow || 'none') === k })));
+  sel.addEventListener('change', () => {
+    pushUndo(); const v = sel.value;
+    for (const o of peersAny(L)) { o.shadow = v; o.shColor = v === 'none' ? null : autoShadowHex(o, v); }
+    RT.layout.clear(); changed({ layers:true }); renderProps(); seekLayer(L);
+  });
+  const out = [field('Sombra', sel, sid), L.shadow && L.shadow !== 'none' ? colorF(L, 'shColor', 'Cor da sombra') : null];
+  // desfoque da camada e do fundo (vidro), em px
+  for (const k of L.type === 'bg' ? ['lblur'] : ['lblur', 'bblur']) {
+    L[k] ??= 0;
+    out.push(rangeF(L, k, k === 'lblur' ? 'Desfoque' : 'Borrar atrás', 0, 800, 1, v => Math.round(v || 0) + ' px', { after:renderProps }),
+      segPick(L, k, BLURS[k].map(([v, t]) => [v, t, v ? `${t}: ${v} px` : t]), null, null, 0, peersAny));
+  }
+  if (L.type !== 'bg' && L.bblur > 0) out.push(h('p', { class:'hint', text:'Borra o que está atrás, no formato do elemento. Com preenchimento meio transparente, vira vidro.' }));
+  return out.filter(Boolean);
 }
 
 /* ------------ adicionar: câmera, transição, vídeo e preço de/por ------------ */

@@ -530,9 +530,17 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .cp-rr{display:inline-flex;align-items:center;gap:4px}
 .cp-eye{width:var(--ctl);height:var(--ctl)}
 .cp-eye svg{width:14px;height:14px}
+/* sem cor: quadrado branco cortado por uma diagonal vermelha (amostra e botão) */
+:root{--slash:linear-gradient(to top right,transparent calc(50% - 1px),var(--danger) calc(50% - 1px),var(--danger) calc(50% + 1px),transparent calc(50% + 1px))}
+.cpick.none{background:var(--slash),#fff}
+.cnone{width:var(--ctl);height:var(--ctl);padding:0;border:1px solid transparent;border-radius:var(--r);background:var(--raised);cursor:pointer;display:inline-grid;place-items:center}
+.cnone::before{content:"";width:16px;height:16px;border-radius:3px;border:1px solid var(--line-2);background:var(--slash),#fff}
+.cnone:hover{border-color:var(--line-2)}
+.cnone:focus-visible,.cnone[aria-pressed="true"]{border-color:var(--accent)}
+.colorctl.is-none .hexwrap{opacity:.5}
 
 /* ===== Recursos novos: câmera, transição, trilha, variações, exportar, meus elementos ===== */
-:root{--c-camera:#7FD4E8;--c-fx:#FF8F6B}
+:root{--c-camera:#7FD4E8;--c-fx:#FF8F6B;--c-video:#B8E05C;--c-svg:#E6EAF2}
 .adds-sub{grid-column:1/-1;font-size:10px;font-weight:600;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;padding:8px 2px 1px}
 .add.my{position:relative;cursor:pointer}
 .add.my img.gl{width:auto;max-width:100%;height:24px;object-fit:contain}
@@ -578,7 +586,7 @@ input[type=range]{accent-color:var(--accent)}
 .sec .row > output{font:11px var(--f-mono);color:var(--muted);min-width:40px;text-align:center;font-variant-numeric:tabular-nums}
 
 /* campo de cor ocupa a linha toda: amostra | hex (estica) | opacidade */
-.colorctl{display:grid;grid-template-columns:34px minmax(0,1fr) 72px;gap:6px;width:100%}
+.colorctl{display:grid;grid-template-columns:34px minmax(0,1fr) 72px var(--ctl);gap:6px;width:100%}
 .colorctl > .hexwrap{min-width:0}
 .colorctl .hexwrap input.hex{flex:1;width:auto;min-width:0}
 .colorctl .pctwrap{justify-content:flex-end}
@@ -598,14 +606,13 @@ input[type=range]{accent-color:var(--accent)}
 .fold-sum{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-weight:500}
 .fold-h.shut.has-sum > small{display:none}
 .fold-btn{flex:none;width:24px;height:24px;margin-right:-6px;padding:0;border:0;border-radius:var(--r);background:transparent;color:var(--muted);display:grid;place-items:center}
-.fold-btn svg{width:16px;height:16px}
-.fold-btn .i-plus,.shut .fold-btn .i-minus{display:none}
-.shut .fold-btn .i-plus{display:block}
+.fold-btn svg{width:16px;height:16px;transition:transform .12s;transform:rotate(180deg)}
+.shut .fold-btn svg{transform:none}
 .fold-h:hover .fold-btn,.chip-cat:hover .fold-btn{color:var(--fg)}
 .fold-btn:hover,.chip-cat:hover .fold-btn{background:var(--line)}
 .folded{display:none!important}
 .sec.sec-shut{padding-bottom:8px}
-/* subtítulo dentro de uma seção (Luz, Cor, Detalhes em Ajustes) e categorias das grades de animação: um nível abaixo, mesmo + / − */
+/* subtítulo dentro de uma seção (Luz, Cor, Detalhes em Ajustes) e categorias das grades de animação: um nível abaixo, mesma seta */
 .sec > h3.sub{border-top:0;margin-top:0;padding-top:0;min-height:28px;color:var(--muted);font-weight:500}
 .chip-cat{font:500 11px var(--f-ui);letter-spacing:0;text-transform:none;color:var(--muted);padding:8px 0 2px}
 button.chip-cat{display:flex;align-items:center;gap:8px;height:28px;margin:0;padding:0;border:0;background:transparent;text-align:left;cursor:pointer;min-width:0}
@@ -634,12 +641,10 @@ button.chip-cat:hover{color:var(--fg)}
 .sec h3 small{white-space:nowrap}
 .fold-h.shut.has-sum .h3r small{display:none}
 
-/* ===== Nível de dentro (como os grupos de estilos do Figma): seta à esquerda e o grupo aberto vira um bloco destacado ===== */
-.fold-btn.fold-chev{margin:0 -4px 0 -6px}
-.fold-chev svg{transition:transform .12s;transform:rotate(90deg)}
-.shut .fold-chev svg{transform:none}
-button.chip-cat{gap:4px}
-.cat-box{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin:2px -8px;padding:0 8px 8px;border-radius:6px;background:var(--raised)}
+/* ===== Nível de dentro (como os grupos de estilos do Figma): mesma seta à direita e o grupo aberto vira um bloco destacado ===== */
+.fold-btn.fold-chev{margin:0 -4px 0 0}
+button.chip-cat{gap:8px}
+.cat-box{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin:0 -8px;padding:0 8px 8px;border-radius:6px;background:var(--raised)}
 .cat-box > .chip-cat{grid-column:1/-1}
 .cat-box .chip{background:var(--raised-2)}
 .cat-box .chip:hover{background:var(--line-2)}
@@ -651,3 +656,6 @@ button.chip-cat{gap:4px}
 
 /* a barra de rolagem das colunas não empurra o conteúdo quando aparece (antes dava um tranco para o lado ao abrir uma seção) */
 .left,.right{scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
+.pfrow{display:flex;flex-wrap:wrap;gap:6px}
+.pfrow .btn{display:inline-flex;align-items:center;gap:5px}
+.pfrow .btn svg{width:14px;height:14px;flex:none}
