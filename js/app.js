@@ -3851,6 +3851,23 @@ function startResize(ev, pt, hd) {
 }
 // deslocamento do centro calculado no espaço da forma (sem giro) -> na tela
 const rotV = (D, dx, dy) => D.rotA ? rotPt({ x:dx, y:dy }, { x:0, y:0 }, D.rotA) : { x:dx, y:dy };
+// alça de lado de máscara/forma com "Manter dentro da margem": a borda puxada para na margem em vez de o bloco ser empurrado e encolhido.
+// ext = tamanho puxado (px na tela) no eixo; devolve o que cabe (nunca menos que o tamanho de antes)
+function marginCap(D, axis, ext, alt) {
+  const L = D.L, M = marginBox(), cur = axis === 'x' ? D.b0.w : D.b0.h;
+  if (!M || freeType(L) || inFlow(L) || ext <= cur) return ext;
+  const { hx, hy } = D, lo = axis === 'x' ? M.x0 : M.y0, hi = axis === 'x' ? M.x1 : M.y1;
+  const fits = a => {
+    const c = alt ? 0 : (axis === 'x' ? D.A.x + hx * a / 2 - D.C.x : D.A.y + hy * a / 2 - D.C.y), v = axis === 'x' ? rotV(D, c, 0) : rotV(D, 0, c);
+    const cs = axis === 'x' ? D.C.x + v.x : D.C.y + v.y;
+    return cs - a / 2 >= lo - .5 && cs + a / 2 <= hi + .5;
+  };
+  if (fits(ext)) return ext;
+  if (!fits(cur)) return cur;
+  let ok = cur, bad = ext;
+  for (let n = 0; n < 24 && bad - ok > .05; n++) { const m = (ok + bad) / 2; if (fits(m)) ok = m; else bad = m; }
+  return ok;
+}
 // puxa a alça: o lado oposto fica parado (Alt: o centro fica parado)
 function resizeTo(D, pt, ev) {
   const p = 14, { hx, hy, L } = D, alt = ev.altKey, q0 = D.items[0], span = alt ? 2 : 1;
@@ -3864,7 +3881,8 @@ function resizeTo(D, pt, ev) {
     RT.layout.clear(); return;
   }
   if (D.how === 'wid' || D.how === 'hei' || D.how === 'thick') {
-    const dist = hx ? (ex - A.x) * hx : (ey - A.y) * hy;
+    let dist = hx ? (ex - A.x) * hx : (ey - A.y) * hy;
+    if (D.how === 'wid' || D.how === 'hei') dist = marginCap(D, hx ? 'x' : 'y', span * dist, alt) / span;
     // fora do formato principal a máscara muda só neste formato (fpos ww/hh, px do bloco antes da escala)
     if (D.how === 'wid') {
       let aw; // largura que valeu de fato
