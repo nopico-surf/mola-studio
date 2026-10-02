@@ -7466,6 +7466,9 @@ function colorButton(value, label, { onStart, onInput, cls = '', alpha = true })
           h('i', { class:'cp-dot', style:`background:${x.c}` }), h('span', { class:'cp-nm', text:x.n }), h('span', { class:'cp-hx', text:x.c.slice(1).toUpperCase() })])));
       }
       if (!libList.firstChild) libList.append(h('div', { class:'cp-empty', text:'Nenhuma cor' }));
+      // Scroll até o item selecionado
+      const selected = libList.querySelector('.cp-it.on');
+      if (selected) selected.scrollIntoView({ behavior:'auto', block:'nearest' });
     };
     libQ.addEventListener('input', fillLib);
     libQ.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); closePicker(); btn.focus(); } });
