@@ -3539,34 +3539,35 @@ function drawOverlays() {
   const ub = selUnion();
   if (!playing) for (const o of S.layers) {
     if ((o.id === RT.selected && !ub) || o.type === 'bg' || !o._bounds || !o.visible || !RT.picks || !RT.picks.has(o.id) || !phase(o, T)) continue;
-    const b = visB(o), p = 14;
+    const b = visB(o), p = selPad(o);
     ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.55)';
     ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2); ctx.setLineDash([]);
   }
   const L = S.layers.find(l => l.id === RT.selected);
   // item escolhido sozinho dentro de um grupo/frame: o contorno do grupo continua à vista (sem alças), como no Figma
   const pb = !playing && !ub && L && L.grp && !wholeGroup() && pickedLayers().length === 1 ? parentBox(L.grp) : null;
-  if (pb) { const p = 14; ctx.setLineDash([]); ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = 'rgba(242,182,50,.6)'; const v = visRect(pb, L); ctx.strokeRect(v.x - p, v.y - p, v.w + p * 2, v.h + p * 2); }
+  if (pb) { const p = 0; ctx.setLineDash([]); ctx.lineWidth = 1.25 / OS; ctx.strokeStyle = 'rgba(242,182,50,.6)'; const v = visRect(pb, L); ctx.strokeRect(v.x - p, v.y - p, v.w + p * 2, v.h + p * 2); }
   // canto = quadrado (escala); lado = barra (muda largura, altura ou tamanho do frame)
-  const hdl = q => {
-    const s = hRad() * .75, bar = !(q.hx && q.hy), w = bar ? (q.hy === 0 ? s * .75 : s * 1.9) : s, hh = bar ? (q.hy === 0 ? s * 1.9 : s * .75) : s;
-    ctx.fillStyle = '#F2B632'; ctx.strokeStyle = '#101115'; ctx.lineWidth = hRad() / 11 * 1.5;
-    if (bar) { rrect(ctx, q.x - w, q.y - hh, w * 2, hh * 2, Math.min(w, hh)); ctx.fill(); ctx.stroke(); }
-    else { ctx.fillRect(q.x - w, q.y - hh, w * 2, hh * 2); ctx.strokeRect(q.x - w, q.y - hh, w * 2, hh * 2); }
+  const hdl = (q, a = 0) => { // a = giro da forma: as alças giram junto com a caixa
+    const s = hRad() * .75 * SEL_FINE, bar = !(q.hx && q.hy), w = bar ? (q.hy === 0 ? s * .75 : s * 1.9) : s, hh = bar ? (q.hy === 0 ? s * 1.9 : s * .75) : s;
+    ctx.fillStyle = '#F2B632'; ctx.strokeStyle = '#101115'; ctx.lineWidth = hRad() / 11;
+    ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(a);
+    rrect(ctx, -w, -hh, w * 2, hh * 2, bar ? Math.min(w, hh) : w * .3); ctx.fill(); ctx.stroke(); ctx.restore();
   };
   if (!playing && ub) {
-    const p = 14, uv = visRect(ub, L); ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
+    const p = 0, uv = visRect(ub, L); ctx.setLineDash([]); ctx.lineWidth = 1.25 / OS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
     ctx.strokeRect(uv.x - p, uv.y - p, uv.w + p * 2, uv.h + p * 2); ctx.setLineDash([]);
-    handlesOf(L).forEach(hdl);
+    handlesOf(L).forEach(q => hdl(q));
   } else if (!playing && L && L.type !== 'bg' && L._bounds && L.visible && !RT.vec) {
     const ph = phase(L, T);
     if (ph) {
-      const b = visB(L), p = 14;
-      ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
+      const b = visB(L), p = selPad(L);
+      ctx.setLineDash([]); ctx.lineWidth = 1.25 / OS;
+      ctx.strokeStyle = 'rgba(242,182,50,.9)';
       if (rotOf(L)) { const q = quadOf(L, p); ctx.beginPath(); q.forEach((v, i) => i ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y)); ctx.closePath(); ctx.stroke(); } // forma girada: a caixa gira junto
       else ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
       ctx.setLineDash([]);
-      handlesOf(L).forEach(hdl);
+      handlesOf(L).forEach(q => hdl(q, rotOf(L)));
     }
   }
   drawFlowGaps(ctx, 1 / OS * dpr); // espaços do layout automático
@@ -3591,7 +3592,7 @@ function drawOverlays() {
   // passar o mouse (no palco, na lista ou na timeline): contorno fino e o nome, para saber quem vai ser clicado
   const hv = !playing && !RT.drag && RT.hover && !isPicked(RT.hover) ? S.layers.find(l => l.id === RT.hover) : null;
   if (hv && hv.type !== 'bg' && hv.visible && hv._bounds && phase(hv, T)) {
-    const b = visB(hv), p = 6 * px;
+    const b = visB(hv), p = selPad(hv);
     ctx.setLineDash([]); ctx.lineWidth = 1.5 * px; ctx.strokeStyle = 'rgba(242,182,50,.85)';
     ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
     ctx.font = `600 ${11 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
@@ -3602,13 +3603,13 @@ function drawOverlays() {
   // edição de texto aberta: contorno cheio e etiqueta, para saber que dá para digitar
   const ed = !playing && RT.editId ? S.layers.find(l => l.id === RT.editId) : null;
   if (ed && ed.visible && ed._bounds && ed.id === RT.selected && phase(ed, T)) {
-    const b = visB(ed), p = 10 * px, txt = 'Editando texto · Esc para sair';
-    ctx.setLineDash([]); ctx.lineWidth = 2.5 * px; ctx.strokeStyle = '#F2B632';
+    const b = visB(ed), p = 0, txt = 'Editando texto · Esc para sair';
+    ctx.setLineDash([]); ctx.lineWidth = 1.25 * px; ctx.strokeStyle = '#F2B632';
     ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
-    ctx.font = `600 ${11 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    const tw = ctx.measureText(txt).width, th = 20 * px, ty = b.y - p - th - 4 * px < 0 ? b.y + b.h + p + 4 * px : b.y - p - th - 4 * px;
-    ctx.fillStyle = '#F2B632'; rrect(ctx, b.x - p, ty, tw + 14 * px, th, 4 * px); ctx.fill();
-    ctx.fillStyle = '#1B1403'; ctx.fillText(txt, b.x - p + 7 * px, ty + th / 2);
+    ctx.font = `600 ${10.5 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(txt).width, th = 18 * px, ty = b.y - p - th - 3 * px < 0 ? b.y + b.h + p + 3 * px : b.y - p - th - 3 * px;
+    ctx.fillStyle = '#F2B632'; rrect(ctx, b.x - p, ty, tw + 12 * px, th, 4 * px); ctx.fill();
+    ctx.fillStyle = '#1B1403'; ctx.fillText(txt, b.x - p + 6 * px, ty + th / 2);
   }
   // seleção por área: retângulo e quem vai entrar nela
   if (RT.marq) {
@@ -3748,6 +3749,14 @@ function hitTest(pt) {
 }
 // alças: canto = escala tudo; lateral/baixo = largura/altura da máscara da imagem; lateral do texto = largura máx. (quebra de linha)
 const hRad = () => 11 * W() / (cv.getBoundingClientRect().width || 1);
+// caixa de seleção rente ao elemento, alças delicadas (SEL_FINE = escala delas).
+// Forma com traço: o traço passa metade para fora da geometria, então a caixa abre essa metade para ficar rente ao que se vê
+const SEL_FINE = .55;
+function selPad(L) {
+  if (!L || L.type !== 'shape' || L.kind === 'line' || !(L.stroke || L.fill === false)) return 0;
+  const g = L._bounds && L.size ? L._bounds.w / (L.size * W()) : 1;
+  return Math.max(3, L.strokeW || 8) / 2 * (isFinite(g) && g > 0 ? g : 1);
+}
 const masked = L => L.type === 'image' && (L.mask === 'rect' || L.mask === 'circle');
 const resizable = L => masked(L) || L.type === 'shape' && L.kind !== 'custom' && L.kind !== 'line';
 // largura (size) e altura (mh) de forma/imagem não têm teto (pedido do usuário: esticar o quanto quiser além da borda;
@@ -3775,12 +3784,12 @@ const ROT_CUR = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="htt
 const HDIR = { nw:[-1, -1], n:[0, -1], ne:[1, -1], e:[1, 0], se:[1, 1], s:[0, 1], sw:[-1, 1], w:[-1, 0] };
 const HCUR = { nw:'nwse-resize', se:'nwse-resize', ne:'nesw-resize', sw:'nesw-resize', n:'ns-resize', s:'ns-resize', e:'ew-resize', w:'ew-resize' };
 function handlesOf(L) {
-  const ub = playing ? null : selUnion(), p = 14;
+  const ub = playing ? null : selUnion(), p = ub ? 0 : selPad(L);
   if (RT.pen || RT.vec) return []; // caneta e edição de pontos: sem alças de escala
   if (!ub && (!L || L.type === 'bg' || L.locked || !L._bounds || !L.visible || playing || !phase(L, T))) return [];
   const b = ub || L._bounds, x0 = b.x - p, y0 = b.y - p, x1 = b.x + b.w + p, y1 = b.y + b.h + p, mx = b.x + b.w / 2, my = b.y + b.h / 2;
   const at = { nw:[x0, y0], n:[mx, y0], ne:[x1, y0], e:[x1, my], se:[x1, y1], s:[mx, y1], sw:[x0, y1], w:[x0, my] };
-  const min = hRad() * 1.9; // alça de lado que encostaria nas de canto some (elemento pequeno no zoom baixo)
+  const min = hRad() * 1.9 * SEL_FINE; // alça de lado que encostaria nas de canto some (elemento pequeno no zoom baixo)
   // padrão: só o canto escala; o lado só existe onde muda outra coisa (frame: tamanho; texto: largura da caixa; máscara, forma e linha: largura ou altura)
   const sideOk = k => { const [kx, ky] = HDIR[k]; if (kx && ky) return true; if (ub) return !!ub.gid; if (L.type === 'text') return ky === 0; return resizable(L) || (L.type === 'shape' && L.kind === 'line'); };
   const cm = camOf(L), ra = ub ? 0 : rotOf(L), rc = { x:mx, y:my }; // x/y = onde a alça aparece na tela (com giro e câmera); lx/ly = o mesmo ponto no espaço da camada, sem giro (as contas de escala partem dele)
@@ -3796,7 +3805,7 @@ function handleAt(pt) {
   if (cs.length) {
     const rr = hRad() * 3.6, q = cs.filter(c => d(c) <= rr).sort((a, b) => d(a) - d(b))[0];
     if (q) { // dentro da caixa continua sendo mover
-      const l = rotPt(camInv(camOf(L), pt), boxC(L._bounds), -rotOf(L)), b = L._bounds, p = 14;
+      const l = rotPt(camInv(camOf(L), pt), boxC(L._bounds), -rotOf(L)), b = L._bounds, p = selPad(L);
       if (l.x < b.x - p || l.x > b.x + b.w + p || l.y < b.y - p || l.y > b.y + b.h + p) return { k:'rot', rot:true, hx:0, hy:0, x:q.x, y:q.y };
     }
   }
@@ -3844,7 +3853,7 @@ function startResize(ev, pt, hd) {
     if (resizable(L) && L.mh == null) L.mh = (S.format === baseFmt() ? b.h : blockGeom(L).h) / W(); // fora do principal a altura na tela pode estar esticada
   }
   const items = (grp ? freePicked().filter(o => o._bounds) : [L]).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y, ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2, s0:{ ...size0(o), strokeW:o.strokeW } }; });
-  RT.drag = { L, mode:'rs', how, hx, hy, pt0:pt, rotA:ra, items, off:{ x:pt.x - hd.x, y:pt.y - hd.y }, b0:{ w:b.w, h:b.h }, C:{ x:cx, y:cy }, g0:grp ? null : geomNow(L),
+  RT.drag = { L, mode:'rs', how, hx, hy, pad:grp ? 0 : selPad(L), pt0:pt, rotA:ra, items, off:{ x:pt.x - hd.x, y:pt.y - hd.y }, b0:{ w:b.w, h:b.h }, C:{ x:cx, y:cy }, g0:grp ? null : geomNow(L),
     A:{ x:cx - hx * b.w / 2, y:cy - hy * b.h / 2 }, H0:{ x:cx + hx * b.w / 2, y:cy + hy * b.h / 2 }, s0:items[0].s0, k:b.k || 1, bw:b.w / (b.k || 1),
     fl:grp ? flowScale(items.map(q => q.o)) : null, fg:grp && b.gid || null }; // grupo com layout: o espaço (e o frame) escala junto
   // frame do grupo com layout: os lados mudam o tamanho dele; os cantos escalam tudo junto (como antes)
@@ -3872,7 +3881,7 @@ function marginCap(D, axis, ext, alt) {
 }
 // puxa a alça: o lado oposto fica parado (Alt: o centro fica parado)
 function resizeTo(D, pt, ev) {
-  const p = 14, { hx, hy, L } = D, alt = ev.altKey, q0 = D.items[0], span = alt ? 2 : 1;
+  const p = D.pad, { hx, hy, L } = D, alt = ev.altKey, q0 = D.items[0], span = alt ? 2 : 1;
   const ex = pt.x - D.off.x - hx * p, ey = pt.y - D.off.y - hy * p; // onde a borda puxada está agora
   const A = alt ? D.C : D.A;
   if (D.how === 'frame') { flowResize(D, ex, ey, alt); return; }
