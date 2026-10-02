@@ -110,6 +110,17 @@
         "3019"
       ],
       "port": 3019
+    },
+    {
+      "name": "mola-frame",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3023"
+      ],
+      "port": 3023
     }
   ]
 }

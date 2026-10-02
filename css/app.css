@@ -96,6 +96,8 @@ input.sw-lbl:focus{color:var(--fg)}
 .row > *{min-width:0}
 .row > .btn{flex:none}
 .row > input{flex:1 1 auto}
+.row.row-wrap{flex-wrap:wrap}
+.hint.hint-pad{padding:8px var(--pad) 0}
 .fontrow{display:grid;grid-template-columns:78px 1fr;gap:8px;align-items:center}
 .fontrow label{color:var(--muted);font-size:12px}
 input[type=text],input[type=number],select,textarea{background:var(--bg);border:1px solid var(--line-2);border-radius:6px;padding:6px 8px;width:100%;min-width:0}
@@ -417,7 +419,7 @@ details.adv > div{display:flex;flex-direction:column;gap:10px;margin-top:10px}
 /* ===== Densidade e proporções no padrão do Figma (painéis 11px, controles de 28px, seções de 16px) ===== */
 :root{--f-ui:"Inter","Instrument Sans",ui-sans-serif,system-ui,sans-serif;--r:5px;--ctl:28px;--pad:16px}
 body{font-size:11px;line-height:1.4;letter-spacing:.005em}
-.app{grid-template-columns:240px minmax(0,1fr) 300px;grid-template-rows:48px minmax(0,1fr)}
+.app{--lw:240px;--rw:300px;--th:48px;grid-template-columns:var(--lw) minmax(0,1fr) var(--rw);grid-template-rows:var(--th) minmax(0,1fr)}
 .top{gap:10px;padding-inline:12px}
 .btn{padding:0 8px;height:24px;font-size:11px;border-radius:5px}
 .btn.small{height:24px;padding:0 8px;font-size:11px}
@@ -470,7 +472,7 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .mpop{width:232px}
 .ctx button{font-size:11px;padding:6px 8px}
 .cp-pop{width:232px}
-@media (max-width:1180px){.app{grid-template-columns:220px minmax(0,1fr) 280px}}
+@media (max-width:1180px){.app{--lw:220px;--rw:280px}}
 
 /* campos de cor (Base, Luz, Cor 1…): mais ar entre um e outro, com divisor */
 .field:has(> .colorctl){align-items:start;padding-block:16px;margin-block:0}
@@ -586,3 +588,64 @@ input[type=range]{accent-color:var(--accent)}
 .sec-head .tabs button[aria-selected="true"]{background:var(--tc);color:var(--bg);font-weight:700}
 #stageBox.pen,#stageBox.pen #cv{cursor:crosshair!important}
 #stageBox.hand,#stageBox.hand #cv{cursor:grab!important}
+
+/* ===== Seções que abrem e fecham, como no Figma: título à esquerda, + (abre) / − (fecha) à direita, o cabeçalho inteiro clicável.
+   Fechada, mostra o valor atual (preset escolhido) logo depois do título ===== */
+.sec > h3.fold-h{justify-content:flex-start;cursor:pointer;user-select:none}
+.sec > h3.fold-h > .see,.sec > h3.fold-h > .h3r{margin-left:0}
+.fold-sum{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-weight:500}
+.fold-h.shut.has-sum > small{display:none}
+.fold-btn{flex:none;width:24px;height:24px;margin-right:-6px;padding:0;border:0;border-radius:var(--r);background:transparent;color:var(--muted);display:grid;place-items:center}
+.fold-btn svg{width:16px;height:16px}
+.fold-btn .i-plus,.shut .fold-btn .i-minus{display:none}
+.shut .fold-btn .i-plus{display:block}
+.fold-h:hover .fold-btn,.chip-cat:hover .fold-btn{color:var(--fg)}
+.fold-btn:hover,.chip-cat:hover .fold-btn{background:var(--line)}
+.folded{display:none!important}
+.sec.sec-shut{padding-bottom:8px}
+/* subtítulo dentro de uma seção (Luz, Cor, Detalhes em Ajustes) e categorias das grades de animação: um nível abaixo, mesmo + / − */
+.sec > h3.sub{border-top:0;margin-top:0;padding-top:0;min-height:28px;color:var(--muted);font-weight:500}
+.chip-cat{font:500 11px var(--f-ui);letter-spacing:0;text-transform:none;color:var(--muted);padding:8px 0 2px}
+button.chip-cat{display:flex;align-items:center;gap:8px;height:28px;margin:0;padding:0;border:0;background:transparent;text-align:left;cursor:pointer;min-width:0}
+button.chip-cat:hover{color:var(--fg)}
+.chip-cat small{margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:500 11px var(--f-ui);color:var(--faint)}
+.chip-cat.shut small.cur{color:var(--accent)}
+
+/* ===== Painéis que se escondem: botões no transporte (colunas, barra de cima, timeline) e Ctrl + \ esconde tudo ===== */
+.app.no-left{--lw:0px}.app.no-right{--rw:0px}.app.no-top{--th:0px}
+.app.no-left>.left,.app.no-right>.right,.app.no-top>.top{display:none}
+.app.no-ui{--lw:0px;--rw:0px;--th:0px}
+.app.no-ui>.top,.app.no-ui>.left,.app.no-ui>.right,.app.no-ui .transport,.app.no-ui .tl,.app.no-ui .tl-grip{display:none!important}
+.panes{display:inline-flex;align-items:center;flex:none;border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.panes button{border:0;background:var(--raised);color:var(--faint);height:24px;width:28px;padding:0;display:grid;place-items:center}
+.panes button+button{border-left:1px solid var(--line)}
+.panes button:hover{background:var(--raised-2);color:var(--fg)}
+.panes button[aria-pressed="true"]{color:var(--fg)}
+.panes svg{width:16px;height:16px}
+.panes button[aria-pressed="false"] .pf{opacity:0}
+.ui-back{position:absolute;right:12px;bottom:12px;z-index:3;display:flex;align-items:center;gap:8px;height:28px;padding:0 5px 0 12px;border-radius:999px;border:1px solid var(--line-2);background:rgba(22,24,29,.92);color:var(--muted);font-size:11px;font-weight:600;opacity:.6;transition:opacity .15s}
+.ui-back:hover,.ui-back:focus-visible{opacity:1;color:var(--fg)}
+.ui-back kbd{font:500 10px/1.6 var(--f-mono);background:var(--raised-2);border:1px solid var(--line-2);border-radius:999px;padding:0 7px;color:var(--fg)}
+/* janela estreita: o transporte quebra em duas linhas em vez de passar por cima da coluna da direita */
+.transport{flex-wrap:wrap;row-gap:6px}
+/* cabeçalho fechado com resumo: o resumo vale mais que a dica ("no fim do vídeo" volta ao abrir); dica nunca quebra linha */
+.sec h3 small{white-space:nowrap}
+.fold-h.shut.has-sum .h3r small{display:none}
+
+/* ===== Nível de dentro (como os grupos de estilos do Figma): seta à esquerda e o grupo aberto vira um bloco destacado ===== */
+.fold-btn.fold-chev{margin:0 -4px 0 -6px}
+.fold-chev svg{transition:transform .12s;transform:rotate(90deg)}
+.shut .fold-chev svg{transform:none}
+button.chip-cat{gap:4px}
+.cat-box{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin:2px -8px;padding:0 8px 8px;border-radius:6px;background:var(--raised)}
+.cat-box > .chip-cat{grid-column:1/-1}
+.cat-box .chip{background:var(--raised-2)}
+.cat-box .chip:hover{background:var(--line-2)}
+.sec > h3.sub.sub-open{margin-left:-8px;margin-right:-8px;padding:0 8px;border-radius:6px 6px 0 0;background:var(--raised)}
+.sec > .in-sub{margin:-8px -8px 0;padding:8px 8px 0;background:var(--raised)}
+.sec > .in-sub-end{padding-bottom:8px;border-radius:0 0 6px 6px}
+.sec > h3.sub.in-sub-end{border-radius:6px}
+.sec > h3.sub:not(:first-child){margin-top:4px}
+
+/* a barra de rolagem das colunas não empurra o conteúdo quando aparece (antes dava um tranco para o lado ao abrir uma seção) */
+.left,.right{scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
