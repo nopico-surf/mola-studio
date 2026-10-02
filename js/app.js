@@ -8713,9 +8713,9 @@ const GF_LIST = [...new Set(GOOGLE_SUGGEST)];
 let gfOn = -1;
 function gfClose() { $('#gfonts').hidden = true; $('#gfont').setAttribute('aria-expanded', 'false'); gfOn = -1; }
 function gfOpen() {
-  const inp = $('#gfont'), pop = $('#gfonts'), q = inp.value.trim().toLowerCase();
-  const items = GF_LIST.filter(f => !S.brand.loaded.some(l => l.family === f) && f.toLowerCase().includes(q))
-    .sort((a, b) => (b.toLowerCase().startsWith(q) - a.toLowerCase().startsWith(q))).slice(0, 60);
+  const inp = $('#gfont'), pop = $('#gfonts'), q = fold(inp.value.trim());
+  const items = GF_LIST.filter(f => !S.brand.loaded.some(l => l.family === f) && fold(f).includes(q))
+    .sort((a, b) => (fold(b).startsWith(q) - fold(a).startsWith(q))).slice(0, 60);
   if (!items.length) { gfClose(); return; }
   pop.replaceChildren(...items.map(f => h('button', { type:'button', role:'option', onmousedown:e => { e.preventDefault(); inp.value = f; gfClose(); addGoogle(); } }, f)));
   const r = inp.getBoundingClientRect(), row = inp.parentElement.getBoundingClientRect(), below = innerHeight - r.bottom - 12, above = r.top - 12, up = below < 160 && above > below;
