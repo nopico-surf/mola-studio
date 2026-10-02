@@ -590,7 +590,7 @@ async function openCutout(L) {
     if (!st.hover || !st.ready || st.pan) return;
     const r = st.size / 2 * st.z, [x, y] = st.hover;
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.beginPath(); ctx.arc(x, y, r + 1, 0, Math.PI * 2); ctx.stroke();
-    ctx.strokeStyle = st.tool === 'erase' ? '#fff' : '#F2B632'; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = st.tool === 'erase' ? '#fff' : uiC('sel'); ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
     if (st.hard < .98) { ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.arc(x, y, Math.max(1, r * st.hard), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); }
   }
 

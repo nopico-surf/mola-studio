@@ -4,7 +4,13 @@
    ============================================================ */
 const $ = (s, r = document) => r.querySelector(s);
 const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+// cores da interface que o canvas usa (seleção, margem, quadro): vêm do CSS (--sel, --margin-rgb, --frame-rgb) para o tema valer também no palco
+const UI_V = { sel:['--sel', '#F2B632'], selInk:['--sel-ink', '#1B1403'], bg:['--bg', '#101115'], selRgb:['--sel-rgb', '242,182,50'], marginRgb:['--margin-rgb', '111,211,166'], frameRgb:['--frame-rgb', '143,176,255'] }, UI_CACHE = {};
+const uiC = k => UI_CACHE[k] || (UI_CACHE[k] = getComputedStyle(document.documentElement).getPropertyValue(UI_V[k][0]).trim() || UI_V[k][1]);
+const uiA = (k, a) => `rgba(${uiC(k + 'Rgb')},${a})`;
 const lerp = (a, b, t) => a + (b - a) * t;
+// caixa que envolve várias caixas { x, y, w, h } (seleção, grupo, margem, guias: uma conta só)
+const unionBox = bs => { const x = Math.min(...bs.map(b => b.x)), y = Math.min(...bs.map(b => b.y)); return { x, y, w:Math.max(...bs.map(b => b.x + b.w)) - x, h:Math.max(...bs.map(b => b.y + b.h)) - y }; };
 const uid = () => 'l' + Math.random().toString(36).slice(2, 9);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const rand = (i, j) => { const x = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return x - Math.floor(x); };
@@ -281,7 +287,7 @@ const DEMO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">
 let S;                     // projeto
 let T = 0, playing = false, needs = true;
 const RT = { logo:null, images:new Map(), layout:new Map(), fontsOk:new Set(), fontsBad:new Set(), selected:null, dirtyUndo:false, exporting:false, drag:null, guide:null,
-  rev:0, imgRev:0, gBox:new Map(), noGrp:false }; // rev: sobe a cada mudança (caixa dos grupos); noGrp: ao medir posições de repouso o grupo não se anima
+  rev:0, gRev:0, imgRev:0, gBox:new Map(), noGrp:false }; // rev: sobe a cada mudança (caixa dos grupos); gRev: sobe a cada movimento do mouse num arrasto; noGrp: ao medir posições de repouso o grupo não se anima
 const undoStack = [];
 
 function defaultBrand() {
@@ -296,14 +302,27 @@ function marginSides() {
   const m = S.margin || {}, d = m.px ?? 64, v = k => Math.max(0, m[k] ?? d);
   return { on:!!m.on, top:v('top'), right:v('right'), bottom:v('bottom'), left:v('left') };
 }
-function marginBox(fmt = S.format) {
+/* ------------ carrossel ------------
+   S.slides = quantos slides lado a lado (ausente = 1, quadro normal). Cada slide tem o tamanho do formato e o quadro inteiro
+   é a soma deles (FW). x vai de 0 a N em larguras de slide, então tamanhos (fração da largura) continuam sendo do slide e mudar
+   o número de slides não mexe em nada. Os elementos podem atravessar de um slide para o outro (carrossel emendado); a margem,
+   o alinhamento ao quadro e os layouts automáticos valem por slide; a exportação sai um arquivo por slide. */
+const SLIDES_MAX = 10;
+const slides = () => (S && S.slides > 1 ? Math.min(SLIDES_MAX, Math.round(S.slides)) : 1);
+function FW() { return W() * slides(); }
+const slideAt = px => clamp(Math.floor(px / W()), 0, slides() - 1); // slide de um ponto (px do quadro inteiro)
+const slideShift = (B, s) => (B && s ? { ...B, x0:B.x0 + s * W(), x1:B.x1 + s * W() } : B);
+// margem do slide em que fica px; sem margem, o próprio slide
+const marginAt = (px, fmt) => marginBox(fmt, slideAt(px));
+const areaAt = (px, fmt = S.format) => marginAt(px, fmt) || slideShift({ x0:0, y0:0, x1:W(), y1:FORMATS[fmt].h }, slideAt(px));
+function marginBox(fmt = S.format, si = 0) {
   const m = marginSides(); if (!m.on) return null;
   const w = FORMATS[fmt].w, hh = FORMATS[fmt].h;
   const x0 = Math.min(m.left, w - 1), y0 = Math.min(m.top, hh - 1);
-  return { x0, y0, x1:Math.max(x0 + 1, w - m.right), y1:Math.max(y0 + 1, hh - m.bottom) };
+  return slideShift({ x0, y0, x1:Math.max(x0 + 1, w - m.right), y1:Math.max(y0 + 1, hh - m.bottom) }, si);
 }
 function fitInMargin(ax, ay, w, h, fmt) {
-  const M = marginBox(fmt); if (!M) return { ax, ay, k:1 };
+  const M = marginAt(ax, fmt); if (!M) return { ax, ay, k:1 };
   const aw = Math.max(1, M.x1 - M.x0), ah = Math.max(1, M.y1 - M.y0), k = Math.min(1, aw / Math.max(w, 1), ah / Math.max(h, 1));
   const hw = w * k / 2, hh = h * k / 2;
   return { ax:clamp(ax, M.x0 + hw, M.x1 - hw), ay:clamp(ay, M.y0 + hh, M.y1 - hh), k };
@@ -352,13 +371,14 @@ function adaptLayout() {
     if (L.type === 'bg' || NOBOX(L)) continue;
     const r = restBoxIn(L, bf); if (!r) continue;
     const up = freeType(L) && r.t <= 1, dn = freeType(L) && r.b >= Hb - 1; // só imagem e forma sangram
-    all.push({ L, ...r, edge:up && dn ? 'cover' : up ? 'top' : dn ? 'bottom' : null,
+    all.push({ L, ...r, s0:slideAt(r.l + 1), s1:slideAt(r.r - 1), edge:up && dn ? 'cover' : up ? 'top' : dn ? 'bottom' : null,
       stretch:!L.rot && ((L.type === 'image' && L.mask === 'rect') || (L.type === 'shape' && L.kind === 'rect')) });
   }
   // cada camada se organiza só com quem aparece na tela junto com ela: cenas diferentes na mesma altura não se empurram
   // nem se espremem (a foto da cena 1 não comprime os textos da cena 2). Quem tem o mesmo conjunto faz a conta uma vez só
+  // no carrossel, slides diferentes também não aparecem juntos (cada slide se organiza sozinho)
   const span = holdSpan;
-  const meets = (p, q) => { const [a0, a1] = span(p.L), [b0, b1] = span(q.L); return Math.min(a1, b1) - Math.max(a0, b0) > .01; };
+  const meets = (p, q) => { const [a0, a1] = span(p.L), [b0, b1] = span(q.L); return Math.min(a1, b1) - Math.max(a0, b0) > .01 && p.s0 <= q.s1 && q.s0 <= p.s1; };
   const groups = new Map();
   for (const i of all) {
     const set = all.filter(j => j === i || meets(i, j)), key = set.map(j => j.L.id).join(',');
@@ -387,7 +407,7 @@ function adaptLayout() {
   // faixa útil do principal: cresce para caber o que estava fora dela (ex.: logo na faixa da interface, num 9:16)
   const cb = contentBand(bf), ct = contentBand(S.format), body = its.filter(i => !i.edge);
   const A = Math.min(cb.y0, ...body.map(i => i.t)), B = Math.max(cb.y1, ...body.map(i => i.b));
-  const M = marginBox() || { x0:0, x1:W() }, Mw = M.x1 - M.x0; // na horizontal é igual em todos os formatos
+  const M0 = marginBox() || { x0:0, x1:W() }, Mw = M0.x1 - M0.x0; // na horizontal é igual em todos os formatos (e slides)
   const len = s => s.b - s.a, wt = g => g * g * g / (g * g + GAP_TAU * GAP_TAU), least = g => Math.min(g, 12 + g * .25);
   const pic = i => i.L.type === 'image' || i.L.type === 'shape';
   // o que se sobrepõe na vertical vira um trecho rígido só; imagem ou forma sozinha na sua altura pode mudar.
@@ -471,7 +491,7 @@ function adaptLayout() {
   // com outra largura, fica apoiado na mesma borda: texto pelo alinhamento; o resto pela margem em que encosta
   // (a margem vem antes do alinhamento: texto "centro" encostado na margem esquerda continua na linha dos outros)
   const anchorX = (i, w2) => {
-    const lf = Math.abs(i.l - M.x0) < 16, rt = Math.abs(i.r - M.x1) < 16, own = i.L.type === 'text' ? i.L.align : 'center';
+    const M = areaAt(i.cx), lf = Math.abs(i.l - M.x0) < 16, rt = Math.abs(i.r - M.x1) < 16, own = i.L.type === 'text' ? i.L.align : 'center';
     const al = lf && rt ? own : lf ? 'left' : rt ? 'right' : own;
     let cx = al === 'left' ? i.l + w2 / 2 : al === 'right' ? i.r - w2 / 2 : i.cx;
     if (i.l >= M.x0 - 1 && i.r <= M.x1 + 1 && w2 <= Mw) cx = clamp(cx, M.x0 + w2 / 2, M.x1 - w2 / 2);
@@ -529,7 +549,8 @@ const fmtOwn = () => S.format !== baseFmt(); // mexer no palco agora grava só n
 const fOf = L => (fmtOwn() && L.fpos && L.fpos[S.format]) || {};
 function setFmt(L, patch) { L.fpos ||= {}; L.fpos[S.format] = { ...L.fpos[S.format], ...patch }; }
 // limite do centro (fração do quadro) ao mover: largo de propósito, forma e foto podem ir bem para fora do palco; só evita perder o elemento de vez
-const POS_LO = -3, POS_HI = 4, clampPos = v => clamp(v, POS_LO, POS_HI);
+// no carrossel o x vai até o último slide (+ a mesma folga)
+const POS_LO = -3, POS_HI = 4, posHi = () => POS_HI + slides() - 1, clampPos = v => clamp(v, POS_LO, posHi());
 // null mantém o eixo como está
 function setPos(L, x, y) {
   if (!fmtOwn()) { if (x != null) L.x = x; if (y != null) L.y = y; return; }
@@ -550,7 +571,7 @@ const size0 = o => ({ size:o.size, mh:o.mh, padX:o.padX, padY:o.padY, fs:fOf(o).
   mw:o.type === 'text' && (o.fixW || layoutText(o, o.upper ? o.text.toUpperCase() : o.text).nLines > 1) ? wrapW(o) : null });
 function scaleAny(L, s0, f) {
   if (!fmtOwn()) return scaleLayer(L, s0, f);
-  const s = +clamp(s0.fs * f, .05, L.type === 'text' || L.type === 'cta' ? 8 : Infinity).toFixed(4); setFmt(L, { s }); return s / s0.fs; // a escala que valeu de fato
+  const s = +clamp(s0.fs * f, .001, L.type === 'text' || L.type === 'cta' ? 8 : Infinity).toFixed(4); setFmt(L, { s }); return s / s0.fs; // a escala que valeu de fato
 }
 const ownPos = L => S.format !== baseFmt() && !!(L.fpos && L.fpos[S.format]);
 function resetPos(ls) {
@@ -693,7 +714,9 @@ function flowLayout(base, D) {
     const F = flowOf(gid), its = flowItems(gid, base), byL = new Map(its.map(i => [i.L, i])), blocks = new Map(), res = new Map();
     for (const kid of gkids(gid)) { const kr = solve(kid); if (kr.size) { const b = block(kid, kr); blocks.set(b.L, b); } }
     if (F && (its.length || blocks.size)) {
-      const boxed = D && D.boxGid === gid, items = [...its, ...blocks.values()], r = flowSolve(F, items, boxed ? null : M, D && D.flow === gid ? D.fz : null, boxed ? D.box : null);
+      const boxed = D && D.boxGid === gid, items = [...its, ...blocks.values()];
+      const Mg = M && slides() > 1 ? marginBox(fmt, slideAt(items.reduce((n, q) => n + q.cx, 0) / items.length)) : M; // carrossel: a margem do slide do grupo
+      const r = flowSolve(F, items, boxed ? null : Mg, D && D.flow === gid ? D.fz : null, boxed ? D.box : null);
       r.items = items;
       for (const q of r.rects) {
         const b = blocks.get(q.L);
@@ -735,6 +758,12 @@ function flowFill(gid, box) {
 function frameSolve(base, Hf, M, pos, sizes, D) {
   const FF = S.flow, Mb = M || { x0:0, y0:0, x1:W(), y1:Hf }, gap = FF.gap ?? 24, blocks = new Map(), bands = [], ids = new Set();
   const moving = D && D.flowB;
+  // carrossel: o tempo em que aparece, separado por slide (um bloco em outro slide não "aparece junto"; quem atravessa conta nos dois)
+  const spans = (L, it) => {
+    const sp = holdSpan(L); if (slides() < 2) return [sp];
+    const out = []; for (let s = slideAt(it.cx - it.w / 2 + 1); s <= slideAt(it.cx + it.w / 2 - 1); s++) out.push([sp[0] + s * 1e4, sp[1] + s * 1e4]);
+    return out;
+  };
   S.layers.forEach((L, i) => {
     if (!L.visible || L.type === 'bg' || NOBOX(L)) return;
     const g = L.grp ? gtop(L.grp) : null; if (g ? (gmeta(g) || {}).free : L.flowFree) return;
@@ -742,11 +771,11 @@ function frameSolve(base, Hf, M, pos, sizes, D) {
     { const s = pos.get(L.id)?.s; if (s) it = { ...it, w:it.w * s, h:it.h * s }; } // encolhido pela fila do grupo
     if (!g && freeType(L)) { // sangra pela borda: fica de fora (cobre o quadro inteiro = fundo; só em cima ou só embaixo = faixa)
       const t = it.cy - it.h / 2, b = it.cy + it.h / 2, up = t <= 1, dn = b >= Hf - 1;
-      if (up || dn) { if (!(up && dn)) bands.push({ up, t, b, sp:[holdSpan(L)] }); return; }
+      if (up || dn) { if (!(up && dn)) bands.push({ up, t, b, sp:spans(L, it) }); return; }
     }
     const q = pos.get(L.id), key = g ? 'g:' + g : L.id, bl = blocks.get(key) || { key, ms:[], sp:[], i };
     blocks.set(key, bl); ids.add(L.id); if (!sizes.has(L.id)) sizes.set(L.id, it.raw);
-    bl.ms.push({ L, it, cx:q ? q.cx : it.cx, cy:q ? q.cy : it.cy }); bl.sp.push(holdSpan(L));
+    bl.ms.push({ L, it, cx:q ? q.cx : it.cx, cy:q ? q.cy : it.cy }); bl.sp.push(...spans(L, it));
     if ((moving && moving.has(L.id)) || (g ? (gmeta(g) || {}).enter : L.flowEnter)) bl.forced = true; // voltando ao layout: linha própria
   });
   // o que está em cima de uma foto que sangra (em repouso) fica com ela, fora da coluna
@@ -829,7 +858,8 @@ function frameSolve(base, Hf, M, pos, sizes, D) {
   }
   // horizontal e saída: cada linha anda inteira
   for (const r of rows) {
-    const dx = FF.align === 'start' ? Mb.x0 - r.cl : FF.align === 'end' ? Mb.x1 - r.cr : FF.align === 'center' ? (Mb.x0 + Mb.x1 - r.cl - r.cr) / 2 : 0, dy = r.Y - r.ct;
+    const Mr = slideShift(Mb, slideAt((r.cl + r.cr) / 2)); // carrossel: a margem do slide da linha
+    const dx = FF.align === 'start' ? Mr.x0 - r.cl : FF.align === 'end' ? Mr.x1 - r.cr : FF.align === 'center' ? (Mr.x0 + Mr.x1 - r.cl - r.cr) / 2 : 0, dy = r.Y - r.ct;
     r.dx = dx; r.dy = dy;
     for (const b of r.bs) for (const m of b.ms) pos.set(m.L.id, { cx:m.cx + dx, cy:m.cy + dy });
   }
@@ -884,7 +914,8 @@ function flowGuess(gid, dir) {
   const B = v ? 'cx' : 'cy', C = v ? 'w' : 'h', near = f => its.every(i => Math.abs(f(i) - f(its[0])) < 6);
   let align = near(i => i[B]) ? 'center' : near(i => i[B] - i[C] / 2) ? 'start' : near(i => i[B] + i[C] / 2) ? 'end' : null;
   if (!align && v) { const al = new Set(its.map(i => i.L.type === 'text' ? i.L.align : 'center')); align = al.size === 1 ? ({ left:'start', right:'end' })[[...al][0]] : null; }
-  const lo = Math.min(...its.map(i => v ? i.cy - i.h / 2 : i.cx - i.w / 2)), hi = Math.max(...its.map(i => v ? i.cy + i.h / 2 : i.cx + i.w / 2)), mid = (lo + hi) / 2 / (v ? H() : W());
+  const lo = Math.min(...its.map(i => v ? i.cy - i.h / 2 : i.cx - i.w / 2)), hi = Math.max(...its.map(i => v ? i.cy + i.h / 2 : i.cx + i.w / 2));
+  const mid = v ? (lo + hi) / 2 / H() : ((lo + hi) / 2 - slideAt((lo + hi) / 2) * W()) / W(); // na horizontal, dentro do slide
   return { dir, gap:gs.length ? Math.round(gs[gs.length >> 1]) : 24, auto:false, align:align || 'center', pin:mid < .4 ? 'start' : mid > .6 ? 'end' : 'center' };
 }
 
@@ -1882,7 +1913,10 @@ function imgNow(src) { if (!src) return null; const i = RT.images.get(src); if (
 /* ============================================================
    Tempo das camadas
    ============================================================ */
+// imagem estática (S.still, Duração = 0): tudo na tela junto, em repouso. Duração e animações ficam guardadas para voltar ao vídeo
+const STILL_PH = { mode:'hold', p:1, inD:0, outD:0 };
 function phase(L, t) {
+  if (S.still) return STILL_PH;
   const end = L.end ?? S.duration;
   if (t < L.start || t > end + 1e-6) return null;
   let inD = L.in === 'cut' ? 0 : L.inDur / (spdOf(L, 'in') || 1), outD = L.out === 'cut' ? 0 : L.outDur / (spdOf(L, 'out') || 1);
@@ -1895,6 +1929,7 @@ function phase(L, t) {
 // trecho em que a camada fica parada na tela (sem a entrada e a saída). Os layouts só separam quem fica parado junto: numa emenda
 // um sai enquanto o outro entra, e esse cruzamento de frações de segundo ligava todas as cenas numa só (uma cena apertada desalinhava as outras)
 function holdSpan(L) {
+  if (S.still) return [0, 1];
   const s = L.start || 0, end = L.end ?? S.duration, ph = phase(L, s);
   if (!ph) return [s, end];
   const a = s + ph.inD, b = end - ph.outD;
@@ -1916,7 +1951,9 @@ function gwin(gid) {
 // presets do grupo: os de imagem (qualquer elemento serve: o grupo é uma imagem do conjunto)
 const G_KEYS = { in:BLOCK_IN.image, out:BLOCK_OUT.image, idle:IDLE_BY.image };
 // sombra, opacidade ou mesclagem do grupo inteiro (S.groups[gid].shadow / opacity / blend): o conjunto é desenhado junto, como na animação do grupo
-const gStyleOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.shadow && g.shadow !== 'none') || (g.opacity ?? 1) < 1 || !!blendOf(g) || blurOn(g)) && gleaves(gid).length > 1; };
+// giro do grupo (S.groups[gid].rot, graus, em torno do centro da caixa do conjunto): o conjunto já desenhado gira junto, como a forma (L.rot)
+const gRad = gid => { const g = S.groups && S.groups[gid]; return g && g.rot ? g.rot * Math.PI / 180 : 0; };
+const gStyleOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.shadow && g.shadow !== 'none') || (g.opacity ?? 1) < 1 || !!g.rot || !!blendOf(g) || blurOn(g)) && gleaves(gid).length > 1; };
 const gAnimOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.in || 'cut') !== 'cut' || (g.out || 'cut') !== 'cut' || (g.idle || 'none') !== 'none') && gleaves(gid).length > 1; };
 // o grupo como uma camada de tempo (start/end do conjunto + a animação dele): serve para `phase`, `idleState`, `spdOf`, `intOf` e para a barra
 function gpseudo(gid) {
@@ -1935,6 +1972,7 @@ const groupName = gid => (gmeta(gid) || {}).name || `Grupo ${groupNum(gid)}`;
 function idleState(L, t0, ph, tx, hh) {
   const I = intOf(L, 'idle'), sp = spdOf(L, 'idle'), tl = t0 * sp;
   const st = {}, hold = ph.mode === 'hold', th = (t0 - ph.inD) * sp, k = .4 + I;
+  if (S.still) return st;
   switch (L.idle) {
     case 'float': st.dy = Math.sin(tl * TAU / 3.4) * (tx ? 7 : 9) * k; break;
     case 'breathe': st.sc = 1 + Math.sin(tl * TAU / 3) * (tx ? .015 : .025) * k; break;
@@ -2651,7 +2689,7 @@ function blockGeom(L) {
   if (L.type === 'shape') {
     const w = L.size * W();
     if (L.kind === 'custom') { const b = customBox(L.d); return { w, h:w * b.h / b.w, cust:b }; }
-    if (L.kind === 'line') return { w, h:Math.max(4, L.strokeW || 8) };
+    if (L.kind === 'line') return { w, h:Math.max(1, L.strokeW || 8) };
     return { w, h:(L.kind === 'ellipse' && L.mh == null ? L.size : L.mh ?? L.size * .6) * W() };
   }
   if (L.type === 'cta') {
@@ -2971,7 +3009,7 @@ function noiseTile() {
   for (let i = 0; i < d.data.length; i += 4) { const v = Math.random() * 255; d.data[i] = d.data[i + 1] = d.data[i + 2] = v; d.data[i + 3] = 255; }
   x.putImageData(d, 0, 0); NOISE = c; return c;
 }
-function drawBg(ctx, L, t, R) { paintFill(ctx, L, t, W(), H()); }
+function drawBg(ctx, L, t, R) { paintFill(ctx, L, t, FW(), H()); }
 // preenchimento animado (usado pelo fundo e pelas formas): pinta o retângulo 0,0 → w,hh
 function paintFill(ctx, L, t, w, hh) {
   const m = L.motion ?? 1;
@@ -3020,10 +3058,13 @@ function paintFill(ctx, L, t, w, hh) {
    ============================================================ */
 function renderFrame(ctx, t, rs, isExport) {
   const R = { rs, export:!!isExport };
+  if (S.still) t = 0;
   RT.frameNo = (RT.frameNo || 0) + 1; // a adaptação ao formato (placement) é refeita uma vez por quadro
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.filter = 'none'; ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  // RT.only (PNG da seleção): só essas camadas, sobre fundo transparente
+  if (RT.only) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); }
   ctx.setTransform(rs, 0, 0, rs, 0, 0);
   const one = (c, L) => {
     try {
@@ -3034,9 +3075,9 @@ function renderFrame(ctx, t, rs, isExport) {
     c.filter = 'none'; c.globalAlpha = 1; c.globalCompositeOperation = 'source-over';
   };
   // câmera (camadas 'camera' e transições com movimento) mexe em todo o quadro; sombra e movimento da imagem são de cada camada
-  const cam = camAt(t), buf = cam.blur > .3 || cam.whip ? frameBuf(ctx.canvas, 0) : null, tc = buf ? buf.getContext('2d') : ctx;
+  const cam = camAt(t), buf = !RT.only && (cam.blur > .3 || cam.whip) ? frameBuf(ctx.canvas, 0) : null, tc = buf ? buf.getContext('2d') : ctx;
   if (buf) { tc.setTransform(1, 0, 0, 1, 0, 0); tc.fillStyle = '#000'; tc.fillRect(0, 0, buf.width, buf.height); tc.setTransform(rs, 0, 0, rs, 0, 0); }
-  const els = S.layers.filter(L => L.visible && !NOBOX(L));
+  const els = S.layers.filter(L => L.visible && !NOBOX(L) && (!RT.only || RT.only.has(L.id)));
   // grupo com animação própria: os itens são desenhados juntos, à parte, e o conjunto entra no lugar do primeiro item
   const gAct = new Map(), gDone = new Set();
   const gActive = gid => {
@@ -3046,7 +3087,7 @@ function renderFrame(ctx, t, rs, isExport) {
   drawItems(tc, els, null, { act:gActive, done:gDone }, els, t, R, cam, one, 0);
   if (buf) camComposite(ctx, buf, cam);
   // transições por cima de tudo
-  for (const L of S.layers) if (L.visible && L.type === 'fx') drawFx(ctx, L, t, R);
+  if (!S.still && !RT.only) for (const L of S.layers) if (L.visible && L.type === 'fx') drawFx(ctx, L, t, R);
 }
 
 /* ============================================================
@@ -3171,6 +3212,7 @@ function fxBlinds(c, L, u) {
 }
 function camAt(t) {
   const c = { s:1, dx:0, dy:0, r:0, par:0, blur:0, whip:0, wblur:0 };
+  if (S.still) return c;
   for (const L of S.layers) {
     if (!L.visible || !NOBOX(L)) continue;
     const end = L.end ?? S.duration; if (t < L.start || t > end) continue;
@@ -3189,9 +3231,9 @@ function applyCam(c, cam, L, depth) {
   const k = cam.par ? lerp(1, depth, cam.par) : 1, dx = cam.dx * k, dy = cam.dy * k, r = cam.r;
   let s = 1 + (cam.s - 1) * k;
   // o fundo sempre cobre o quadro: cresce o bastante para as bordas não aparecerem
-  if (L.type === 'bg') s = Math.max(s, 1 + 2 * Math.max(Math.abs(dx) / W(), Math.abs(dy) / H()) + Math.abs(r) * 2.2);
+  if (L.type === 'bg') s = Math.max(s, 1 + 2 * Math.max(Math.abs(dx) / FW(), Math.abs(dy) / H()) + Math.abs(r) * 2.2);
   if (s === 1 && !dx && !dy && !r) return;
-  const cx = W() / 2, cy = H() / 2;
+  const cx = FW() / 2, cy = H() / 2;
   c.translate(cx + dx, cy + dy); if (r) c.rotate(r); c.scale(s, s); c.translate(-cx, -cy);
 }
 function camComposite(ctx, buf, cam) {
@@ -3206,7 +3248,7 @@ function camComposite(ctx, buf, cam) {
       ctx.drawImage(buf, o, 0); ctx.drawImage(buf, o - (o >= 0 ? w : -w), 0);
     }
   } else {
-    const b = cam.blur * (w / W()), k = 1 + b * 3 / Math.min(w, hh);
+    const b = cam.blur * (w / FW()), k = 1 + b * 3 / Math.min(w, hh);
     ctx.filter = `blur(${b.toFixed(2)}px)`;
     ctx.drawImage(buf, -(k - 1) * w / 2, -(k - 1) * hh / 2, w * k, hh * k);
   }
@@ -3218,7 +3260,12 @@ function drawFx(ctx, L, t, R) {
   const bm = blendOf(L), buf = bm ? frameBuf(ctx.canvas, 6) : null, c = buf ? buf.getContext('2d') : ctx;
   if (buf) { c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, buf.width, buf.height); c.setTransform(R.rs, 0, 0, R.rs, 0, 0); }
   c.save(); c.globalAlpha = L.opacity ?? 1;
-  try { P.draw(c, L, (t - L.start) / Math.max(.05, end - L.start)); } catch (e) { console.error(e); }
+  // carrossel: a transição acontece em cada slide, do mesmo jeito
+  for (let s = 0; s < slides(); s++) {
+    c.save(); if (slides() > 1) { c.beginPath(); c.rect(s * W(), 0, W(), H()); c.clip(); c.translate(s * W(), 0); }
+    try { P.draw(c, L, (t - L.start) / Math.max(.05, end - L.start)); } catch (e) { console.error(e); }
+    c.restore();
+  }
   c.restore();
   if (buf) blendOnto(ctx, buf, bm);
 }
@@ -3328,12 +3375,11 @@ function drawLayerFx(tc, L, t, R, cam, depth, one) {
    do conjunto é animada pelo preset do grupo (mesmo motor dos blocos: drawState). O pivô é o centro da caixa do conjunto em repouso.
    Itens com mesclagem misturam só com o resto do grupo, não com o que está atrás dele. */
 function groupBox(gid, mem) {
-  const key = `${RT.rev}|${RT.imgRev}|${RT.fontsOk.size}|${S.format}|${mem.map(l => l.id).join()}`, c = RT.gBox.get(gid);
+  const key = `${RT.rev}|${RT.gRev}|${RT.imgRev}|${RT.fontsOk.size}|${S.format}|${mem.map(l => l.id).join()}`, c = RT.gBox.get(gid);
   if (c && c.S === S && c.key === key) return c.b;
   ensureBounds(mem, true); // posição de repouso de todos (quem não está na tela agora também conta)
   const bs = mem.map(l => l._bounds).filter(Boolean); if (!bs.length) return null;
-  const x0 = Math.min(...bs.map(b => b.x)), y0 = Math.min(...bs.map(b => b.y));
-  const b = { x:x0, y:y0, w:Math.max(...bs.map(q => q.x + q.w)) - x0, h:Math.max(...bs.map(q => q.y + q.h)) - y0 };
+  const b = unionBox(bs);
   // faixas: itens que não se cruzam na vertical (linhas do conjunto); servem para máscara e inclinação por linha
   b.bands = [];
   for (const q of [...bs].sort((u, v) => u.y - v.y)) {
@@ -3364,8 +3410,9 @@ function drawGroup(tc, gid, gp, els, t, R, cam, one, G, depth = 0) {
   bc.clearRect(0, 0, buf.width, buf.height); bc.setTransform(R.rs, 0, 0, R.rs, gpad, gpad);
   drawItems(bc, mem, gid, G, els, t, R, cam, one, depth);
   const B = groupBox(gid, mem); gL._bounds = B;
-  const pu = gpad * W() / (buf.width - 2 * gpad); // a margem em unidades do quadro
-  const blit = (c, x, y) => c.drawImage(buf, 0, 0, buf.width, buf.height, x - pu, y - pu, W() + 2 * pu, H() + 2 * pu);
+  const pu = gpad / R.rs; // a margem em unidades do quadro
+  // pela escala (não pelo tamanho do quadro): vale também em telas que mostram só parte do quadro (miniatura do carrossel)
+  const blit = (c, x, y) => c.drawImage(buf, 0, 0, buf.width, buf.height, x - pu, y - pu, buf.width / R.rs, buf.height / R.rs);
   const out = gsh || gbm || gop < 1 || blurOn(gm) ? frameBuf(tc.canvas, 1, gpad) : null, dst = out ? out.getContext('2d') : tc;
   if (out) {
     dst.setTransform(1, 0, 0, 1, 0, 0); dst.globalAlpha = 1; dst.filter = 'none'; dst.globalCompositeOperation = 'source-over';
@@ -3408,7 +3455,7 @@ function drawGroup(tc, gid, gp, els, t, R, cam, one, G, depth = 0) {
     if (s.cdy) c.translate(0, s.cdy);
     blit(c, -cx, -cy);
   };
-  const o = { piv:P && P.pivot ? (P.pivot === 'top' ? -hh / 2 : hh / 2) : 0, pad:80, color:S.brand.colors[2] };
+  const o = { piv:P && P.pivot ? (P.pivot === 'top' ? -hh / 2 : hh / 2) : 0, pad:80, color:S.brand.colors[2], rot:gRad(gid) };
   dst.save(); dst.translate(cx, cy);
   if (P && P.trail && ph.mode !== 'hold') for (let j = P.trail.n; j >= 1; j--) {
     const q = ph.p - j * P.trail.lag; if (q <= 0) continue;
@@ -3423,6 +3470,7 @@ function drawGroup(tc, gid, gp, els, t, R, cam, one, G, depth = 0) {
 /* ------------ movimento dentro da imagem (ao longo da barra inteira): muda zoom/ix/iy só enquanto desenha ------------ */
 const MOVES = { none:'Parada', in:'Aproximar', out:'Afastar', left:'Para a esquerda', right:'Para a direita', up:'Para cima', down:'Para baixo', scroll:'Rolar a tela' };
 function imageMotion(L, t) {
+  if (S.still) return null;
   const G = geomNow(L); if (!G || !G.img) return null;
   const iw = G.img.naturalWidth, ih = G.img.naturalHeight; if (!iw || !ih) return null;
   // parte do enquadramento do formato aberto; o resultado vai em L._pan (lido por panOf) só enquanto desenha
@@ -3509,7 +3557,7 @@ function drawMark(ctx, L, lay, ph, t, R) {
   if (!L.mark || L.mark === 'none' || !MARKS[L.mark]) return;
   const big = L.mark === 'circle' || L.mark === 'box' || L.mark === 'arrow', sp = spdOf(L, 'in') || 1;
   const t0 = L.start + ph.inD * .8, md = (big ? .8 : .55) / sp;
-  let pr = Ease.cubicOut(clamp((t - t0) / md)), a = 1;
+  let pr = S.still ? 1 : Ease.cubicOut(clamp((t - t0) / md)), a = 1;
   if (ph.mode === 'out') { pr *= 1 - clamp(ph.p * 1.5); a = 1 - clamp(ph.p * 1.4 - .3); }
   if (pr <= 0 || a <= 0) return;
   const key = [L.id, L.mark, lay.blockW.toFixed(1), lay.blockH.toFixed(1), lay.size, lay.nLines].join('|');
@@ -3542,13 +3590,13 @@ function fitStage() {
   if (!S) return;
   const box = $('#stageBox'), z = RT.zoom || 1;
   const bw = Math.max(100, box.clientWidth - STAGE_PAD * 2), bh = Math.max(100, box.clientHeight - STAGE_PAD * 2);
-  const k = Math.min(bw / W(), bh / H()) * z;
-  const cw = Math.max(40, Math.floor(W() * k)), ch = Math.max(40, Math.floor(H() * k));
+  const k = Math.min(bw / FW(), bh / H()) * z;
+  const cw = Math.max(40, Math.floor(FW() * k)), ch = Math.max(40, Math.floor(H() * k));
   cv.style.width = cw + 'px'; cv.style.height = ch + 'px';
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  RS = Math.min(1.5, (cw * dpr) / W());
-  cv.width = Math.round(W() * RS); cv.height = Math.round(H() * RS);
-  RT.fitK = Math.min(bw / W(), bh / H());
+  RS = Math.min(1.5, (cw * dpr) / FW());
+  cv.width = Math.round(FW() * RS); cv.height = Math.round(H() * RS);
+  RT.fitK = Math.min(bw / FW(), bh / H());
   updZoomUI(); needs = true;
 }
 new ResizeObserver(fitStage).observe($('#stageBox'));
@@ -3605,10 +3653,12 @@ function drawOverlays() {
   const sc = $('#stageScroll'), dpr = Math.min(2, window.devicePixelRatio || 1), vw = sc.clientWidth, vh = sc.clientHeight;
   if (ov.width !== Math.round(vw * dpr) || ov.height !== Math.round(vh * dpr)) { ov.width = Math.round(vw * dpr); ov.height = Math.round(vh * dpr); ov.style.width = vw + 'px'; ov.style.height = vh + 'px'; }
   const ctx = octx; ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, ov.width, ov.height);
-  const r = cv.getBoundingClientRect(), o = ov.getBoundingClientRect(), OS = dpr * r.width / W(); // OS = pixels do overlay por unidade do vídeo
+  const r = cv.getBoundingClientRect(), o = ov.getBoundingClientRect(), OS = dpr * r.width / FW(); // OS = pixels do overlay por unidade do vídeo
   const xf = [OS, 0, 0, OS, dpr * (r.left - o.left), dpr * (r.top - o.top)];
   ctx.save(); ctx.setTransform(...xf);
-  ctx.beginPath(); ctx.rect(0, 0, W(), H()); ctx.clip(); // área segura e margem ficam dentro do quadro; o resto (alças, contornos) passa da borda
+  ctx.beginPath(); ctx.rect(0, 0, FW(), H()); ctx.clip(); // área segura e margem ficam dentro do quadro; o resto (alças, contornos) passa da borda
+  for (let s = 0; s < slides(); s++) {
+  ctx.save(); ctx.translate(s * W(), 0); // carrossel: cada slide com a sua área segura e a sua margem
   if ($('#safe').checked && S.format === '9x16') {
     const w = W(), hh = H();
     ctx.fillStyle = 'rgba(229,118,106,.16)';
@@ -3620,49 +3670,58 @@ function drawOverlays() {
   }
   const M = marginBox();
   if (M && !playing) {
-    ctx.setLineDash([12, 10]); ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = 'rgba(111,211,166,.7)';
+    ctx.setLineDash([12, 10]); ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = uiA('margin', .7);
     ctx.strokeRect(M.x0, M.y0, M.x1 - M.x0, M.y1 - M.y0); ctx.setLineDash([]);
   }
+  ctx.restore();
+  }
+  // carrossel: divisa entre os slides (o que atravessa aparece cortado aqui no post)
+  if (slides() > 1) {
+    ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = uiA('frame', .75); ctx.setLineDash([]);
+    ctx.beginPath(); for (let s = 1; s < slides(); s++) { ctx.moveTo(s * W(), 0); ctx.lineTo(s * W(), H()); } ctx.stroke();
+  }
   ctx.restore(); ctx.save(); ctx.setTransform(...xf);
+  if (slides() > 1) { // número de cada slide, acima do quadro (o atual em destaque: é onde entra o que você adicionar)
+    const px = 1 / OS * dpr, cur = curSlide(); ctx.save();
+    ctx.font = `600 ${11 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    for (let s = 0; s < slides(); s++) { ctx.fillStyle = s === cur ? uiC('sel') : 'rgba(255,255,255,.5)'; ctx.fillText(`Slide ${s + 1}`, s * W() + 2 * px, -6 * px); }
+    ctx.restore();
+  }
   const ub = selUnion();
   if (!playing) for (const o of S.layers) {
     if ((o.id === RT.selected && !ub) || o.type === 'bg' || !o._bounds || !o.visible || !RT.picks || !RT.picks.has(o.id) || !phase(o, T)) continue;
-    const b = visB(o), p = selPad(o);
-    ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.55)';
-    ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2); ctx.setLineDash([]);
+    ctx.setLineDash([10, 8]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = uiA('sel', .55);
+    outlineBox(ctx, o._bounds, o, selPad(o)); ctx.setLineDash([]);
   }
   const L = S.layers.find(l => l.id === RT.selected);
   for (const o of offPicked()) { // escolhida e fora da tela neste momento: tracejada onde assenta, dá para arrastar
     const g = ghostB(o); if (!g) continue;
-    const b = visRect(g, o), p = selPad(o);
-    ctx.fillStyle = 'rgba(242,182,50,.07)'; ctx.fillRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
-    ctx.setLineDash([4, 7]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = 'rgba(242,182,50,.75)';
-    ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2); ctx.setLineDash([]);
+    const p = selPad(o);
+    ctx.fillStyle = uiA('sel', .07); outlineBox(ctx, g, o, p, undefined, true);
+    ctx.setLineDash([4, 7]); ctx.lineWidth = 2 / OS; ctx.strokeStyle = uiA('sel', .75);
+    outlineBox(ctx, g, o, p); ctx.setLineDash([]);
   }
   // item escolhido sozinho dentro de um grupo/frame: o contorno do grupo continua à vista (sem alças), como no Figma
   const pb = !playing && !ub && L && L.grp && !wholeGroup() && pickedLayers().length === 1 ? parentBox(L.grp) : null;
-  if (pb) { const p = 0; ctx.setLineDash([]); ctx.lineWidth = 1.25 / OS; ctx.strokeStyle = 'rgba(242,182,50,.6)'; const v = visRect(pb, L); ctx.strokeRect(v.x - p, v.y - p, v.w + p * 2, v.h + p * 2); }
+  if (pb) { ctx.setLineDash([]); ctx.lineWidth = 1.25 / OS; ctx.strokeStyle = uiA('sel', .6); outlineBox(ctx, pb, L, 0, 0); }
   // canto = quadrado (escala); lado = barra (muda largura, altura ou tamanho do frame)
-  const hdl = (q, a = 0) => { // a = giro da forma: as alças giram junto com a caixa
+  const hdl = q => { // q.a = giro com que a caixa aparece (forma e grupos): as alças giram junto
     const s = hRad() * .75 * SEL_FINE, bar = !(q.hx && q.hy), w = bar ? (q.hy === 0 ? s * .75 : s * 1.9) : s, hh = bar ? (q.hy === 0 ? s * 1.9 : s * .75) : s;
-    ctx.fillStyle = '#F2B632'; ctx.strokeStyle = '#101115'; ctx.lineWidth = hRad() / 11;
-    ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(a);
+    ctx.fillStyle = uiC('sel'); ctx.strokeStyle = uiC('bg'); ctx.lineWidth = hRad() / 11;
+    ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(q.a || 0);
     rrect(ctx, -w, -hh, w * 2, hh * 2, bar ? Math.min(w, hh) : w * .3); ctx.fill(); ctx.stroke(); ctx.restore();
   };
   if (!playing && ub) {
-    const p = 0, uv = visRect(ub, L); ctx.setLineDash([]); ctx.lineWidth = 1.25 / OS; ctx.strokeStyle = 'rgba(242,182,50,.9)';
-    ctx.strokeRect(uv.x - p, uv.y - p, uv.w + p * 2, uv.h + p * 2); ctx.setLineDash([]);
-    handlesOf(L).forEach(q => hdl(q));
+    ctx.setLineDash([]); ctx.lineWidth = 1.25 / OS; ctx.strokeStyle = uiA('sel', .9);
+    outlineBox(ctx, ub, L, 0, 0);
+    handlesOf(L).forEach(hdl);
   } else if (!playing && L && L.type !== 'bg' && L._bounds && L.visible && !RT.vec) {
     const ph = phase(L, T);
     if (ph) {
-      const b = visB(L), p = selPad(L);
       ctx.setLineDash([]); ctx.lineWidth = 1.25 / OS;
-      ctx.strokeStyle = 'rgba(242,182,50,.9)';
-      if (rotOf(L)) { const q = quadOf(L, p); ctx.beginPath(); q.forEach((v, i) => i ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y)); ctx.closePath(); ctx.stroke(); } // forma girada: a caixa gira junto
-      else ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
-      ctx.setLineDash([]);
-      handlesOf(L).forEach(q => hdl(q, rotOf(L)));
+      ctx.strokeStyle = uiA('sel', .9);
+      outlineBox(ctx, L._bounds, L, selPad(L)); // girada (forma ou grupo): a caixa gira junto
+      handlesOf(L).forEach(hdl);
     }
   }
   drawFlowGaps(ctx, 1 / OS * dpr); // espaços do layout automático
@@ -3673,45 +3732,45 @@ function drawOverlays() {
   // largura máx. do texto enquanto arrasta a alça lateral: onde as linhas quebram
   if (RT.drag && RT.drag.mode === 'rs' && RT.drag.how === 'tw' && RT.drag.L._bounds) {
     const D = RT.drag, b = D.L._bounds, cx = b.x + b.w / 2, hw = D.L.maxW * W() * D.k / 2;
-    ctx.setLineDash([8, 8]); ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = 'rgba(143,176,255,.9)';
+    ctx.setLineDash([8, 8]); ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = uiA('frame', .9);
     ctx.beginPath(); ctx.moveTo(cx - hw, 0); ctx.lineTo(cx - hw, H()); ctx.moveTo(cx + hw, 0); ctx.lineTo(cx + hw, H()); ctx.stroke(); ctx.setLineDash([]);
   }
-  const px = W() / (cv.getBoundingClientRect().width || 1); // 1 px da tela em unidades do vídeo
-  if (RT.drag && RT.drag.mode === 'rot' && RT.drag.show != null && RT.drag.L._bounds) { // ângulo enquanto gira
-    const c = camFwd(camOf(RT.drag.L), boxC(RT.drag.L._bounds)), txt = Math.round(RT.drag.show * 10) / 10 + '°';
+  const px = FW() / (cv.getBoundingClientRect().width || 1); // 1 px da tela em unidades do vídeo
+  if (RT.drag && RT.drag.mode === 'rot' && RT.drag.show != null) { // ângulo enquanto gira
+    const c = camFwd(RT.drag.cm, RT.drag.C), txt = Math.round(RT.drag.show * 10) / 10 + '°';
     ctx.font = `600 ${12 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(txt).width + 14 * px, th = 20 * px;
-    ctx.fillStyle = '#F2B632'; rrect(ctx, c.x - tw / 2, c.y - th / 2, tw, th, 4 * px); ctx.fill();
-    ctx.fillStyle = '#1B1403'; ctx.fillText(txt, c.x, c.y + px * .5);
+    ctx.fillStyle = uiC('sel'); rrect(ctx, c.x - tw / 2, c.y - th / 2, tw, th, 4 * px); ctx.fill();
+    ctx.fillStyle = uiC('selInk'); ctx.fillText(txt, c.x, c.y + px * .5);
   }
   // passar o mouse (no palco, na lista ou na timeline): contorno fino e o nome, para saber quem vai ser clicado
   const hv = !playing && !RT.drag && RT.hover && !isPicked(RT.hover) ? S.layers.find(l => l.id === RT.hover) : null;
   if (hv && hv.type !== 'bg' && hv.visible && hv._bounds && phase(hv, T)) {
     const b = visB(hv), p = selPad(hv);
-    ctx.setLineDash([]); ctx.lineWidth = 1.5 * px; ctx.strokeStyle = 'rgba(242,182,50,.85)';
-    ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
+    ctx.setLineDash([]); ctx.lineWidth = 1.5 * px; ctx.strokeStyle = uiA('sel', .85);
+    outlineBox(ctx, hv._bounds, hv, p);
     ctx.font = `600 ${11 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(hv.name).width, th = 18 * px, ty = b.y - p - th - 3 * px < 0 ? b.y + b.h + p + 3 * px : b.y - p - th - 3 * px;
-    ctx.fillStyle = '#F2B632'; rrect(ctx, b.x - p, ty, tw + 12 * px, th, 4 * px); ctx.fill();
-    ctx.fillStyle = '#1B1403'; ctx.fillText(hv.name, b.x - p + 6 * px, ty + th / 2);
+    ctx.fillStyle = uiC('sel'); rrect(ctx, b.x - p, ty, tw + 12 * px, th, 4 * px); ctx.fill();
+    ctx.fillStyle = uiC('selInk'); ctx.fillText(hv.name, b.x - p + 6 * px, ty + th / 2);
   }
   // edição de texto aberta: contorno cheio e etiqueta, para saber que dá para digitar
   const ed = !playing && RT.editId ? S.layers.find(l => l.id === RT.editId) : null;
   if (ed && ed.visible && ed._bounds && ed.id === RT.selected && phase(ed, T)) {
     const b = visB(ed), p = 0, txt = 'Editando texto · Esc para sair';
-    ctx.setLineDash([]); ctx.lineWidth = 1.25 * px; ctx.strokeStyle = '#F2B632';
-    ctx.strokeRect(b.x - p, b.y - p, b.w + p * 2, b.h + p * 2);
+    ctx.setLineDash([]); ctx.lineWidth = 1.25 * px; ctx.strokeStyle = uiC('sel');
+    outlineBox(ctx, ed._bounds, ed, p);
     ctx.font = `600 ${10.5 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(txt).width, th = 18 * px, ty = b.y - p - th - 3 * px < 0 ? b.y + b.h + p + 3 * px : b.y - p - th - 3 * px;
-    ctx.fillStyle = '#F2B632'; rrect(ctx, b.x - p, ty, tw + 12 * px, th, 4 * px); ctx.fill();
-    ctx.fillStyle = '#1B1403'; ctx.fillText(txt, b.x - p + 6 * px, ty + th / 2);
+    ctx.fillStyle = uiC('sel'); rrect(ctx, b.x - p, ty, tw + 12 * px, th, 4 * px); ctx.fill();
+    ctx.fillStyle = uiC('selInk'); ctx.fillText(txt, b.x - p + 6 * px, ty + th / 2);
   }
   // seleção por área: retângulo e quem vai entrar nela
   if (RT.marq) {
     const r = RT.marq;
-    for (const o of marqHits(r)) { const b = visB(o); ctx.setLineDash([]); ctx.lineWidth = 1.5 * px; ctx.strokeStyle = 'rgba(242,182,50,.85)'; ctx.strokeRect(b.x, b.y, b.w, b.h); }
-    ctx.fillStyle = 'rgba(242,182,50,.08)'; ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.setLineDash([]); ctx.lineWidth = 1 * px; ctx.strokeStyle = 'rgba(242,182,50,.9)'; ctx.strokeRect(r.x, r.y, r.w, r.h);
+    for (const o of marqHits(r)) { ctx.setLineDash([]); ctx.lineWidth = 1.5 * px; ctx.strokeStyle = uiA('sel', .85); outlineBox(ctx, o._bounds, o); }
+    ctx.fillStyle = uiA('sel', .08); ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.setLineDash([]); ctx.lineWidth = 1 * px; ctx.strokeStyle = uiA('sel', .9); ctx.strokeRect(r.x, r.y, r.w, r.h);
   }
   drawPenTool(ctx); // caneta e edição de pontos
   ctx.restore();
@@ -3729,8 +3788,9 @@ function updStageHint() {
       act = [n < 2 ? 'Cancelar' : 'Concluir', () => penToolFinish(false)];
       tools = PEN_MODES.map(([v, t]) => [t, PEN_MODE === v, () => setPenMode(v)]);
     } else if (RT.vec) {
-      msg = 'Arraste a linha para curvar · clique nela cria ponto · clique duplo no ponto: curva/canto · Delete apaga'; act = ['Concluir', vecExit];
+      msg = 'Arraste a linha para curvar · clique nela cria ponto · arraste no vazio seleciona vários pontos · Delete apaga'; act = ['Concluir', vecExit];
       const Lv = vecL(), s = Lv && vecSel(Lv);
+      if (Lv && RT.vec.multi) msg = `${vecAll(Lv).length} pontos escolhidos · arraste um para mover todos · Delete apaga`;
       if (s) { const q = Lv.vec[s.si].pts[s.pi], cur = hasH(q, 'i') || hasH(q, 'o'); tools = [['Canto', !cur, () => vecSetType(Lv, false)], ['Curva', cur, () => vecSetType(Lv, true)]]; }
     }
     else if (!els.length) { msg = 'Arquivo vazio. Arraste uma imagem para cá ou'; act = ['Adicionar título', () => addLayer(ADD_KINDS[0].mk(S.brand, S.brand.fonts))]; }
@@ -3747,6 +3807,7 @@ function updStageHint() {
 let lastNow = performance.now();
 function tick(now) {
   const dt = Math.min(.1, (now - lastNow) / 1000); lastNow = now;
+  if (S && S.still && (playing || T)) { playing = false; RT.stopAt = null; T = 0; updPlay(); needs = true; } // imagem: sem tempo
   if (playing && !RT.exporting) {
     T += dt;
     if (RT.stopAt != null && T >= RT.stopAt) { T = RT.stopAt; pause(); } // "Ver entrada/saída": toca só o trecho
@@ -3766,7 +3827,7 @@ function updTime() {
 const ICON_PLAY = '<svg viewBox="0 0 14 14" fill="currentColor"><path d="M3 1.5v11l9.5-5.5z"/></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 14 14" fill="currentColor"><rect x="2.5" y="1.5" width="3.2" height="11" rx=".6"/><rect x="8.3" y="1.5" width="3.2" height="11" rx=".6"/></svg>';
 function updPlay() { const b = $('#play'); b.innerHTML = playing ? ICON_PAUSE : ICON_PLAY; b.setAttribute('aria-label', playing ? 'Pausar' : 'Tocar'); }
-function play(from, until) { if (from != null) T = from; if (T >= S.duration - .01) T = 0; RT.stopAt = until ?? null; playing = true; updPlay(); needs = true; }
+function play(from, until) { if (S.still) return; if (from != null) T = from; if (T >= S.duration - .01) T = 0; RT.stopAt = until ?? null; playing = true; updPlay(); needs = true; }
 function pause() { playing = false; RT.stopAt = null; updPlay(); needs = true; }
 // nada toca sozinho: só a barra de espaço e o botão ▶. As ações só levam a agulha (pausada) a um quadro útil.
 function restTime(L) {
@@ -3789,7 +3850,7 @@ function previewOut(L) {
   play(clamp(end - ph.outD - .6, L.start, S.duration), Math.min(S.duration - .001, end + .35));
 }
 // quadro a quadro (vírgula/ponto, setas com o fundo selecionado); Shift anda 1 s
-function stepFrames(n) { pause(); const f = fps(); T = clamp((Math.round(T * f) + n) / f, 0, S.duration); RT.userSeek = true; needs = true; }
+function stepFrames(n) { if (S.still) return; pause(); const f = fps(); T = clamp((Math.round(T * f) + n) / f, 0, S.duration); RT.userSeek = true; needs = true; }
 const lastFrame = () => Math.max(0, (Math.round(S.duration * fps()) - 1) / fps());
 const fmtSec = v => v.toFixed(1).replace('.', ',') + 's';
 // quadro em que tudo que está na tela já entrou
@@ -3801,23 +3862,59 @@ function heroTime() {
 }
 
 /* ------------ arrastar no palco ------------ */
-function stagePt(ev) { const r = cv.getBoundingClientRect(); return { x:(ev.clientX - r.left) / r.width * W(), y:(ev.clientY - r.top) / r.height * H() }; }
-// A câmera mexe no desenho (zoom, deslocamento, giro, paralaxe), então contornos e alças ficam no que se vê na tela: `camFwd` leva um ponto
-// do espaço da camada para a tela e `camInv` volta. As contas de arrastar e escalar continuam no espaço da camada (`_bounds`).
-function camOf(L) {
-  const cam = camAt(T); if (!L || (cam.s === 1 && !cam.dx && !cam.dy && !cam.r)) return null;
+function stagePt(ev) { const r = cv.getBoundingClientRect(); return { x:(ev.clientX - r.left) / r.width * FW(), y:(ev.clientY - r.top) / r.height * H() }; }
+// carrossel: o último slide clicado no palco vira o atual (é onde entra o que for adicionado)
+$('#stageBox').addEventListener('pointerdown', ev => {
+  if (slides() < 2) return;
+  const p = stagePt(ev); if (p.x < 0 || p.x > FW() || p.y < 0 || p.y > H()) return;
+  const s = slideAt(p.x); if (s !== RT.slide) { RT.slide = s; needs = true; }
+}, true);
+// A câmera mexe no desenho (zoom, deslocamento, giro, paralaxe) e os grupos girados giram o conjunto por cima dela (`g`: do grupo mais de dentro
+// para o de fora, cada um com o pivô e o ângulo), então contornos e alças ficam no que se vê na tela: `camFwd` leva um ponto do espaço da camada
+// para a tela e `camInv` volta. As contas de arrastar e escalar continuam no espaço da camada (`_bounds`). `skip` = ids de quem se move junto:
+// o grupo que anda inteiro não conta (o giro dele acompanha o deslocamento, então um arrasto na tela é o mesmo no espaço da camada).
+function gRots(L, skip) {
+  const out = [];
+  for (let g = L && !RT.noGrp ? L.grp : null, n = 0; g && n < 20; g = gpar(g), n++) {
+    const a = gRad(g), p = a && gStyleOn(g) ? gPivot(g, true) : null; // o pivô vem do último quadro desenhado
+    if (p && !(skip && gleaves(g).every(l => skip.has(l.id)))) out.push({ gid:g, a, x:p.x, y:p.y });
+  }
+  return out;
+}
+// centro do conjunto (onde o grupo gira): a caixa de `drawGroup`; sem quadro desenhado ainda (`cached` desliga), mede os itens
+const gPivot = (gid, cached) => {
+  const c = RT.gBox.get(gid), b = c && c.S === S ? c.b : cached ? null : groupBox(gid, gleaves(gid).filter(l => l.visible && !NOBOX(l)));
+  return b ? boxC(b) : null;
+};
+function camOf(L, skip) {
+  const cam = camAt(T), g = gRots(L, skip); if (!L || (cam.s === 1 && !cam.dx && !cam.dy && !cam.r && !g.length)) return null;
   const els = S.layers.filter(l => l.visible && !NOBOX(l)), k = cam.par ? lerp(1, layerDepth(L, els.indexOf(L), els.length), cam.par) : 1;
-  return { s:1 + (cam.s - 1) * k, dx:cam.dx * k, dy:cam.dy * k, r:cam.r };
+  return { s:1 + (cam.s - 1) * k, dx:cam.dx * k, dy:cam.dy * k, r:cam.r, g, ga:g.reduce((n, e) => n + e.a, 0) };
 }
 function camFwd(c, p) {
   if (!c) return p;
-  const cx = W() / 2, cy = H() / 2, x = (p.x - cx) * c.s, y = (p.y - cy) * c.s, co = Math.cos(c.r), si = Math.sin(c.r);
-  return { x:cx + c.dx + x * co - y * si, y:cy + c.dy + x * si + y * co };
+  const cx = FW() / 2, cy = H() / 2, x = (p.x - cx) * c.s, y = (p.y - cy) * c.s, co = Math.cos(c.r), si = Math.sin(c.r);
+  p = { x:cx + c.dx + x * co - y * si, y:cy + c.dy + x * si + y * co };
+  for (const e of c.g || []) p = rotPt(p, e, e.a);
+  return p;
 }
 function camInv(c, p) {
   if (!c) return p;
-  const cx = W() / 2, cy = H() / 2, x = p.x - cx - c.dx, y = p.y - cy - c.dy, co = Math.cos(c.r), si = Math.sin(c.r);
+  for (let i = (c.g || []).length - 1; i >= 0; i--) p = rotPt(p, c.g[i], -c.g[i].a);
+  const cx = FW() / 2, cy = H() / 2, x = p.x - cx - c.dx, y = p.y - cy - c.dy, co = Math.cos(c.r), si = Math.sin(c.r);
   return { x:cx + (x * co + y * si) / c.s, y:cy + (-x * si + y * co) / c.s };
+}
+// só os giros dos grupos de fora de `gid` (sem câmera, sem o dele): onde o pivô dele está e onde o mouse gira em torno dele
+const camOuter = (c, gid) => { const up = new Set(); for (let g = gpar(gid), n = 0; g && n < 20; g = gpar(g), n++) up.add(g); return { s:1, dx:0, dy:0, r:0, g:(c ? c.g : []).filter(e => up.has(e.gid)), ga:0 }; };
+// contorno (rect b no espaço da camada, folga p) na tela: quatro cantos já com o giro da forma `a`, o dos grupos e a câmera
+const quadRect = (b, p, cm, a = 0) => { const c = { x:b.x + b.w / 2, y:b.y + b.h / 2 };
+  return [[b.x - p, b.y - p], [b.x + b.w + p, b.y - p], [b.x + b.w + p, b.y + b.h + p], [b.x - p, b.y + b.h + p]].map(([x, y]) => camFwd(cm, a ? rotPt({ x, y }, c, a) : { x, y })); };
+function pathQuad(ctx, q) { ctx.beginPath(); q.forEach((v, i) => i ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y)); ctx.closePath(); }
+// risca/preenche o contorno de um retângulo da camada: girado vira polígono, senão a caixa que envolve o que se vê
+function outlineBox(ctx, b, L, p = 0, a = rotOf(L), fill) {
+  const cm = camOf(L);
+  if (a || (cm && cm.ga)) { pathQuad(ctx, quadRect(b, p, cm, a)); if (fill) ctx.fill(); else ctx.stroke(); return; }
+  const v = visRect(b, L); if (fill) ctx.fillRect(v.x - p, v.y - p, v.w + p * 2, v.h + p * 2); else ctx.strokeRect(v.x - p, v.y - p, v.w + p * 2, v.h + p * 2);
 }
 // retângulo do espaço da camada -> caixa que envolve o que aparece na tela
 function visRect(b, L) {
@@ -3852,9 +3949,9 @@ function hitTest(pt) {
   for (let i = S.layers.length - 1; i >= 0; i--) {
     const L = S.layers[i]; if (!L.visible || L.locked || L.type === 'bg' || !L._bounds) continue;
     if (!phase(L, T)) continue;
-    const a = rotOf(L);
-    if (a) { // forma girada: testa no espaço dela, sem o giro
-      const q = rotPt(camInv(camOf(L), pt), boxC(L._bounds), -a), b = L._bounds, p = 16;
+    const a = rotOf(L), cm = camOf(L);
+    if (a || (cm && cm.ga)) { // forma ou grupo girado: testa no espaço da camada, sem o giro
+      const q = rotPt(camInv(cm, pt), boxC(L._bounds), -a), b = L._bounds, p = 16;
       if (q.x >= b.x - p && q.x <= b.x + b.w + p && q.y >= b.y - p && q.y <= b.y + b.h + p) return L;
       continue;
     }
@@ -3864,7 +3961,7 @@ function hitTest(pt) {
   return null;
 }
 // alças: canto = escala tudo; lateral/baixo = largura/altura da máscara da imagem; lateral do texto = largura máx. (quebra de linha)
-const hRad = () => 11 * W() / (cv.getBoundingClientRect().width || 1);
+const hRad = () => 11 * FW() / (cv.getBoundingClientRect().width || 1);
 // caixa de seleção rente ao elemento, alças delicadas (SEL_FINE = escala delas).
 // Forma com traço: o traço passa metade para fora da geometria, então a caixa abre essa metade para ficar rente ao que se vê
 const SEL_FINE = .55;
@@ -3877,24 +3974,20 @@ const masked = L => L.type === 'image' && (L.mask === 'rect' || L.mask === 'circ
 const resizable = L => masked(L) || L.type === 'shape' && L.kind !== 'custom' && L.kind !== 'line';
 // largura (size) e altura (mh) de forma/imagem não têm teto (pedido do usuário: esticar o quanto quiser além da borda;
 // os buffers de efeito já se limitam sozinhos em rasterFx)
-const SZ_MAX = Infinity, MH_MAX = Infinity;
-// caixa que envolve toda a seleção (grupo ou vários), só das camadas que estão na tela agora
+const SZ_MAX = Infinity, MH_MAX = Infinity, SZ_MIN = .0005; // sem mínimo de verdade: só evita tamanho zero (não dá para escalar de volta)
+// caixa que envolve toda a seleção (grupo ou vários), só das camadas que estão na tela agora (rg = o grupo, quando a seleção é ele inteiro)
 function selUnion() {
   const fb = flowFrameSel(); if (fb) return fb; // grupo com layout: a caixa é o frame dele
   const ls = freePicked().filter(o => o._bounds && o.visible && phase(o, T)); if (!ls.length || pickedLayers().length < 2) return null;
-  const x0 = Math.min(...ls.map(o => o._bounds.x)), y0 = Math.min(...ls.map(o => o._bounds.y));
-  return { x:x0, y:y0, w:Math.max(...ls.map(o => o._bounds.x + o._bounds.w)) - x0, h:Math.max(...ls.map(o => o._bounds.y + o._bounds.h)) - y0, ls };
+  return { ...unionBox(ls.map(o => o._bounds)), ls, rg:wholeGroup() };
 }
 // Oito alças em todo elemento (e na seleção de vários): canto = escala tudo de uma vez a partir do canto oposto; lado = depende do tipo
 // (imagem com máscara e forma: só largura ou só altura; texto: largura de quebra nas laterais; linha: comprimento e espessura; o resto escala).
 // Alt ao arrastar escala a partir do centro. [hx, hy] = para que lado a alça puxa.
-// rotação (só forma tem): L.rot em graus, em torno do centro. A caixa da seleção e as alças giram junto
+// rotação: forma (L.rot) e grupo inteiro (S.groups[gid].rot, `gRad`), em graus, em torno do centro. A caixa da seleção e as alças giram junto
 const rotOf = L => L && L.type === 'shape' && L.rot ? L.rot * Math.PI / 180 : 0;
 const boxC = b => ({ x:b.x + b.w / 2, y:b.y + b.h / 2 });
 const rotPt = (p, c, a) => { const co = Math.cos(a), si = Math.sin(a), x = p.x - c.x, y = p.y - c.y; return { x:c.x + x * co - y * si, y:c.y + x * si + y * co }; };
-// contorno da camada (com folga p) no que se vê na tela: quatro cantos, já com o giro e a câmera
-const quadOf = (L, p) => { const b = L._bounds, a = rotOf(L), c = boxC(b), cm = camOf(L);
-  return [[b.x - p, b.y - p], [b.x + b.w + p, b.y - p], [b.x + b.w + p, b.y + b.h + p], [b.x - p, b.y + b.h + p]].map(([x, y]) => camFwd(cm, a ? rotPt({ x, y }, c, a) : { x, y })); };
 const ROT_ARC = 'M5 12a7 7 0 0 1 12-4.9M19 12a7 7 0 0 1-12 4.9';
 const ROT_CUR = 'url("data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="' + ROT_ARC + '" fill="none" stroke="#101115" stroke-width="4.2" stroke-linecap="round"/><path d="' + ROT_ARC + '" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><path d="M13.5 3.5l4.2 3.3-4.9 1.8zM10.5 20.5l-4.2-3.3 4.9-1.8z" fill="#fff" stroke="#101115" stroke-width="1.2" stroke-linejoin="round"/></svg>') + '") 12 12, alias';
 const HDIR = { nw:[-1, -1], n:[0, -1], ne:[1, -1], e:[1, 0], se:[1, 1], s:[0, 1], sw:[-1, 1], w:[-1, 0] };
@@ -3910,36 +4003,46 @@ function handlesOf(L) {
   const sideOk = k => { const [kx, ky] = HDIR[k]; if (kx && ky) return true; if (ub) return !!ub.gid; if (L.type === 'text') return ky === 0; return resizable(L) || (L.type === 'shape' && L.kind === 'line'); };
   const cm = camOf(L), ra = ub ? 0 : rotOf(L), rc = { x:mx, y:my }; // x/y = onde a alça aparece na tela (com giro e câmera); lx/ly = o mesmo ponto no espaço da camada, sem giro (as contas de escala partem dele)
   return Object.keys(HDIR).filter(sideOk).filter(k => !(HDIR[k][0] === 0 && b.w / 2 + p < min) && !(HDIR[k][1] === 0 && b.h / 2 + p < min))
-    .map(k => { const v = camFwd(cm, ra ? rotPt({ x:at[k][0], y:at[k][1] }, rc, ra) : { x:at[k][0], y:at[k][1] }); return { k, hx:HDIR[k][0], hy:HDIR[k][1], x:v.x, y:v.y, lx:at[k][0], ly:at[k][1], grp:!!ub }; });
+    .map(k => { const v = camFwd(cm, ra ? rotPt({ x:at[k][0], y:at[k][1] }, rc, ra) : { x:at[k][0], y:at[k][1] }); return { k, hx:HDIR[k][0], hy:HDIR[k][1], x:v.x, y:v.y, lx:at[k][0], ly:at[k][1], grp:!!ub, a:ra + (cm ? cm.ga : 0) }; }); // a = giro com que a alça aparece
+}
+// quem gira (logo fora de uma quina, como no Figma): a forma sozinha ou o grupo inteiro
+function rotTarget() {
+  if (playing || RT.pen || RT.vec) return null;
+  const L = selL(), ub = L && selUnion();
+  if (ub) { const gid = ub.gid || ub.rg; return gid && freePicked().length === pickedLayers().length ? { gid, b:ub, p:0, a:0 } : null; } // grupo com item bloqueado não gira
+  return L && L.type === 'shape' && !L.locked && pickedLayers().length === 1 ? { L, b:L._bounds, p:selPad(L), a:rotOf(L) } : null;
 }
 function handleAt(pt) {
   const r = hRad() * 1.3, d = q => Math.hypot(pt.x - q.x, pt.y - q.y);
   const hs = handlesOf(selL()), hit = hs.filter(q => Math.abs(pt.x - q.x) <= r && Math.abs(pt.y - q.y) <= r).sort((a, b) => d(a) - d(b))[0];
   if (hit) return hit;
-  // forma: logo fora de uma quina (como no Figma) gira
-  const L = selL(), cs = L && L.type === 'shape' && !L.locked && !playing && pickedLayers().length === 1 ? hs.filter(q => q.hx && q.hy) : [];
+  const t = rotTarget(), L = selL(), cs = t ? hs.filter(q => q.hx && q.hy) : [];
   if (cs.length) {
     const rr = hRad() * 3.6, q = cs.filter(c => d(c) <= rr).sort((a, b) => d(a) - d(b))[0];
     if (q) { // dentro da caixa continua sendo mover
-      const l = rotPt(camInv(camOf(L), pt), boxC(L._bounds), -rotOf(L)), b = L._bounds, p = selPad(L);
+      const l = rotPt(camInv(camOf(L), pt), boxC(t.b), -t.a), b = t.b, p = t.p;
       if (l.x < b.x - p || l.x > b.x + b.w + p || l.y < b.y - p || l.y > b.y + b.h + p) return { k:'rot', rot:true, hx:0, hy:0, x:q.x, y:q.y };
     }
   }
   return null;
 }
-// gira a forma em torno do centro: Shift trava de 15 em 15°
+// gira em torno do centro (forma: o da caixa; grupo: o do conjunto, onde ele se desenha girado): Shift trava de 15 em 15°.
+// O ponteiro é lido no espaço em que o pivô vive (`D.cm`): o da camada para a forma, só os grupos de fora para o grupo
 function startRotate(ev, pt) {
-  const L = selL(), c = boxC(L._bounds), cm = camOf(L); pushUndo();
-  const p0 = cm ? camInv(cm, pt) : pt;
-  RT.drag = { L, mode:'rot', C:c, a0:Math.atan2(p0.y - c.y, p0.x - c.x), r0:L.rot || 0 };
+  const t = rotTarget(), L = selL(); pushUndo();
+  let O, C, cm;
+  if (t.gid) { O = gview(t.gid); C = gPivot(t.gid) || boxC(t.b); cm = camOuter(camOf(L), t.gid); }
+  else { O = L; C = boxC(L._bounds); cm = camOf(L); }
+  const p0 = camInv(cm, pt);
+  RT.drag = { L, O, mode:'rot', cm, C, a0:Math.atan2(p0.y - C.y, p0.x - C.x), r0:O.rot || 0 };
   cv.setPointerCapture(ev.pointerId);
 }
 function rotateTo(D, pt, ev) {
   let r = D.r0 + (Math.atan2(pt.y - D.C.y, pt.x - D.C.x) - D.a0) * 180 / Math.PI;
   if (ev.shiftKey) r = Math.round(r / 15) * 15;
   r = ((r + 180) % 360 + 360) % 360 - 180; r = Math.round(r * 10) / 10;
-  D.L.rot = r; D.show = r;
-  const i = document.getElementById(fid(D.L, 'rot')); if (i) { i.value = r; const o = i.parentElement.querySelector('.num'); if (o && document.activeElement !== o) o.value = Math.round(r) + '°'; }
+  D.O.rot = r; D.show = r;
+  const i = document.getElementById(fid(D.O, 'rot')); if (i) { i.value = r; const o = i.parentElement.querySelector('.num'); if (o && document.activeElement !== o) o.value = Math.round(r) + '°'; }
 }
 // devolve a escala que valeu de fato (os limites e o arredondamento do tamanho podem segurar um pouco)
 function scaleLayer(L, s0, f) {
@@ -3949,7 +4052,7 @@ function scaleLayer(L, s0, f) {
     return L.size / s0.size;
   }
   if (L.type === 'cta') { L.size = Math.round(clamp(s0.size * f, 8, 200)); L.padX = Math.round(s0.padX * f); L.padY = Math.round(s0.padY * f); return L.size / s0.size; }
-  L.size = clamp(s0.size * f, .03, SZ_MAX); if (s0.mh != null) L.mh = clamp(s0.mh * f, .03, MH_MAX);
+  L.size = clamp(s0.size * f, SZ_MIN, SZ_MAX); if (s0.mh != null) L.mh = clamp(s0.mh * f, SZ_MIN, MH_MAX);
   return L.size / s0.size;
 }
 // começa a puxar uma alça (vale no quadro e na mesa em volta dele)
@@ -3968,8 +4071,9 @@ function startResize(ev, pt, hd) {
     else if (L.type === 'text' && hy === 0) how = 'tw';
     if (resizable(L) && L.mh == null) L.mh = (S.format === baseFmt() ? b.h : blockGeom(L).h) / W(); // fora do principal a altura na tela pode estar esticada
   }
-  const items = (grp ? freePicked().filter(o => o._bounds) : [L]).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y, ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2, s0:{ ...size0(o), strokeW:o.strokeW } }; });
-  RT.drag = { L, mode:'rs', how, hx, hy, pad:grp ? 0 : selPad(L), pt0:pt, rotA:ra, items, off:{ x:pt.x - hd.x, y:pt.y - hd.y }, b0:{ w:b.w, h:b.h }, C:{ x:cx, y:cy }, g0:grp ? null : geomNow(L),
+  const items = (grp ? freePicked().filter(o => o._bounds) : [L]).map(o => { const q = posOf(o); return { o, n0:natBox(o), x0:q.x, y0:q.y, ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2, s0:{ ...size0(o), strokeW:o.strokeW } }; });
+  RT.drag = { L, mode:'rs', cm, how, hx, hy, pad:grp ? 0 : selPad(L), pt0:pt, rotA:ra, items, off:{ x:pt.x - hd.x, y:pt.y - hd.y }, b0:{ w:b.w, h:b.h }, C:{ x:cx, y:cy }, g0:grp ? null : geomNow(L),
+    gR:grp && cm ? cm.g.find(e => e.gid === (b.gid || b.rg)) : null, // grupo girado: o pivô anda quando o conjunto escala (ver `put` em resizeTo)
     A:{ x:cx - hx * b.w / 2, y:cy - hy * b.h / 2 }, H0:{ x:cx + hx * b.w / 2, y:cy + hy * b.h / 2 }, s0:items[0].s0, k:b.k || 1, bw:b.w / (b.k || 1),
     fl:grp ? flowScale(items.map(q => q.o)) : null, fg:grp && b.gid || null }; // grupo com layout: o espaço (e o frame) escala junto
   // frame do grupo com layout: os lados mudam o tamanho dele; os cantos escalam tudo junto (como antes)
@@ -3978,10 +4082,28 @@ function startResize(ev, pt, hd) {
 }
 // deslocamento do centro calculado no espaço da forma (sem giro) -> na tela
 const rotV = (D, dx, dy) => D.rotA ? rotPt({ x:dx, y:dy }, { x:0, y:0 }, D.rotA) : { x:dx, y:dy };
+// tamanho de verdade do bloco (px, antes de a margem encolher o desenho): é ele que fica gravado na camada
+function natBox(o) {
+  const pl = placeOf(o);
+  if (o.type === 'text') { const l = layoutText(o, o.upper ? o.text.toUpperCase() : o.text); return { w:l.blockW * pl.k, h:l.blockH * pl.k }; }
+  const G = geomNow(o); return G ? { w:G.w * pl.k, h:G.h * pl.k } : { w:0, h:0 };
+}
+// quanto o tamanho de verdade passa da margem (px; 0 = cabe ou já passava antes do arrasto). O desenho encolhe para caber, então sem isso o valor
+// gravado crescia sem aparecer e, ao desmarcar "Manter dentro da margem", o elemento pulava para o tamanho grande
+function natExcess(D) {
+  const M = marginBox(); if (!M) return 0;
+  let ex = 0;
+  for (const q of D.items) {
+    if (freeType(q.o) || inFlow(q.o) || !q.n0) continue;
+    const n = natBox(q.o);
+    ex = Math.max(ex, n.w - Math.max(M.x1 - M.x0, q.n0.w), n.h - Math.max(M.y1 - M.y0, q.n0.h));
+  }
+  return Math.max(0, ex);
+}
 // alça de lado de máscara/forma com "Manter dentro da margem": a borda puxada para na margem em vez de o bloco ser empurrado e encolhido.
 // ext = tamanho puxado (px na tela) no eixo; devolve o que cabe (nunca menos que o tamanho de antes)
 function marginCap(D, axis, ext, alt) {
-  const L = D.L, M = marginBox(), cur = axis === 'x' ? D.b0.w : D.b0.h;
+  const L = D.L, M = marginAt(D.C.x), cur = axis === 'x' ? D.b0.w : D.b0.h;
   if (!M || freeType(L) || inFlow(L) || ext <= cur) return ext;
   const { hx, hy } = D, lo = axis === 'x' ? M.x0 : M.y0, hi = axis === 'x' ? M.x1 : M.y1;
   const fits = a => {
@@ -4004,7 +4126,7 @@ function resizeTo(D, pt, ev) {
   if (D.how === 'tw') { // caixa de largura fixa: o lado oposto fica parado (Alt: os dois lados)
     // não passa da margem: o limite é a distância do lado parado (ou do centro, com Alt) até a margem; só a largura total deixava a borda
     // puxada passar dela e o texto, empurrado para dentro, crescia para o outro lado
-    const Mg = marginBox(), d = hx * (pt.x - D.pt0.x) / D.k * (alt ? 2 : 1);
+    const Mg = marginAt(D.C.x), d = hx * (pt.x - D.pt0.x) / D.k * (alt ? 2 : 1);
     let cap = Mg ? Mg.x1 - Mg.x0 : W();
     if (Mg && !inFlow(L)) {
       const room = alt ? 2 * Math.min(D.C.x - Mg.x0, Mg.x1 - D.C.x) : hx > 0 ? Mg.x1 - D.A.x : D.A.x - Mg.x0;
@@ -4018,36 +4140,48 @@ function resizeTo(D, pt, ev) {
   if (D.how === 'wid' || D.how === 'hei' || D.how === 'thick') {
     let dist = hx ? (ex - A.x) * hx : (ey - A.y) * hy;
     if (D.how === 'wid' || D.how === 'hei') dist = marginCap(D, hx ? 'x' : 'y', span * dist, alt) / span;
+    const apply = dist => {
     // fora do formato principal a máscara muda só neste formato (fpos ww/hh, px do bloco antes da escala)
     if (D.how === 'wid') {
       let aw; // largura que valeu de fato
-      if (fmtOwn()) { aw = clamp(span * dist, 8, W() * SZ_MAX); setFmt(L, { ww:+(D.g0.w * aw / D.b0.w).toFixed(2) }); }
-      else { L.size = clamp(D.s0.size * Math.max(8, span * dist) / D.b0.w, .03, SZ_MAX); aw = D.b0.w * L.size / D.s0.size; }
+      if (fmtOwn()) { aw = clamp(span * dist, SZ_MIN * W(), W() * SZ_MAX); setFmt(L, { ww:+(D.g0.w * aw / D.b0.w).toFixed(2) }); }
+      else { L.size = clamp(D.s0.size * Math.max(SZ_MIN * W(), span * dist) / D.b0.w, SZ_MIN, SZ_MAX); aw = D.b0.w * L.size / D.s0.size; }
       const v = rotV(D, alt ? 0 : A.x + hx * aw / 2 - D.C.x, 0); // o centro anda no espaço da forma; com giro, na diagonal
       setPos(L, +(q0.x0 + v.x / W()).toFixed(4), D.rotA ? +(q0.y0 + v.y / H()).toFixed(4) : null);
     } else {
       let ah;
-      if (D.how === 'hei' && fmtOwn()) { ah = clamp(span * dist, 8, W() * MH_MAX); setFmt(L, { hh:+(D.g0.h * ah / D.b0.h).toFixed(2) }); }
-      else if (D.how === 'hei') { L.mh = clamp(D.s0.mh * Math.max(8, span * dist) / D.b0.h, .03, MH_MAX); ah = D.b0.h * L.mh / D.s0.mh; }
-      else { const s = Math.max(4, D.s0.strokeW || 8); L.strokeW = clamp(Math.round(s * Math.max(2, span * dist) / D.b0.h), 1, 80); ah = D.b0.h * Math.max(4, L.strokeW) / s; }
+      if (D.how === 'hei' && fmtOwn()) { ah = clamp(span * dist, SZ_MIN * W(), W() * MH_MAX); setFmt(L, { hh:+(D.g0.h * ah / D.b0.h).toFixed(2) }); }
+      else if (D.how === 'hei') { L.mh = clamp(D.s0.mh * Math.max(SZ_MIN * W(), span * dist) / D.b0.h, SZ_MIN, MH_MAX); ah = D.b0.h * L.mh / D.s0.mh; }
+      else { const s = Math.max(1, D.s0.strokeW || 8); L.strokeW = clamp(Math.round(s * Math.max(1, span * dist) / D.b0.h), 1, 80); ah = D.b0.h * Math.max(1, L.strokeW) / s; }
       const v = rotV(D, 0, alt ? 0 : A.y + hy * ah / 2 - D.C.y);
       setPos(L, D.rotA ? +(q0.x0 + v.x / W()).toFixed(4) : null, +(q0.y0 + v.y / H()).toFixed(4));
+    }
+    };
+    apply(dist);
+    if ((D.how === 'wid' || D.how === 'hei') && natExcess(D) > .5) { // o tamanho gravado passaria da margem (o desenho só encolhe): para no limite
+      let ok = Math.min((hx ? D.b0.w : D.b0.h) / span, dist), bad = dist;
+      for (let n = 0; n < 20 && bad - ok > .05; n++) { const m = (ok + bad) / 2; apply(m); if (natExcess(D) > .5) bad = m; else ok = m; }
+      apply(ok);
     }
     return;
   }
   const vx = D.H0.x - A.x, vy = D.H0.y - A.y;
-  const f = Math.max(.05, hx && hy ? ((ex - A.x) * vx + (ey - A.y) * vy) / (vx * vx + vy * vy) : hx ? (ex - A.x) / vx : (ey - A.y) / vy);
+  const f = Math.max(.001, hx && hy ? ((ex - A.x) * vx + (ey - A.y) * vy) / (vx * vx + vy * vy) : hx ? (ex - A.x) / vx : (ey - A.y) / vy);
   const inFlowAny = !D.fg && D.items.every(q => inFlow(q.o) || (S.flow && RT.frameIds && RT.frameIds.has(q.o.id)));
   const put = f => {
-    for (const q of D.items) {
-      const a = scaleAny(q.o, q.s0, f);
-      const v = rotV(D, A.x + (q.ox - A.x) * a - q.ox, A.y + (q.oy - A.y) * a - q.oy);
-      setPos(q.o, +(q.x0 + v.x / W()).toFixed(5), +(q.y0 + v.y / H()).toFixed(5));
-    }
+    const as = D.items.map(q => scaleAny(q.o, q.s0, f));
+    // grupo girado: ao escalar em torno da quina parada o centro do giro anda e a quina sairia do lugar na tela;
+    // o deslocamento (1 - s)(I - R)(pivô - quina) devolve a quina ao lugar (translação não gira: o conjunto anda o mesmo na tela)
+    const e = D.gR, u = e ? { x:e.x - A.x, y:e.y - A.y } : null, ru = e ? rotPt(u, { x:0, y:0 }, e.a) : null;
+    D.gd = e ? { x:(1 - as[0]) * (u.x - ru.x), y:(1 - as[0]) * (u.y - ru.y) } : null;
+    D.items.forEach((q, i) => {
+      const v = rotV(D, A.x + (q.ox - A.x) * as[i] - q.ox, A.y + (q.oy - A.y) * as[i] - q.oy);
+      setPos(q.o, +(q.x0 + (v.x + (D.gd ? D.gd.x : 0)) / W()).toFixed(5), +(q.y0 + (v.y + (D.gd ? D.gd.y : 0)) / H()).toFixed(5));
+    });
     if (D.fl) D.fl(f);
     // forma girada não tem margem: a quina oposta já fica parada pela conta acima. Item de layout automático (frame ou coluna do quadro)
     // cresce mesmo no limite de baixo: quem decide o lugar é a fila, que reorganiza o resto (a quina não precisa ficar parada)
-    return D.rotA || inFlowAny ? 0 : rsPin(D, alt);
+    return inFlowAny ? 0 : Math.max(D.rotA ? 0 : rsPin(D, alt), natExcess(D));
   };
   // encostou na margem (texto, logo e botão não passam dela): para de crescer em vez de ser empurrado para dentro
   let fz = f;
@@ -4067,14 +4201,15 @@ function rsPin(D, alt) {
     const cx = rsPin.cx || (rsPin.cx = (() => { const c = document.createElement('canvas').getContext('2d'); c.canvas.width = c.canvas.height = 8; return c; })());
     renderFrame(cx, T, 8 / W(), false); // quadro mínimo: só para atualizar os _bounds
     const bs = D.items.map(q => q.o._bounds).filter(Boolean); if (!bs.length) return null;
-    return { x0:Math.min(...bs.map(b => b.x)), y0:Math.min(...bs.map(b => b.y)), x1:Math.max(...bs.map(b => b.x + b.w)), y1:Math.max(...bs.map(b => b.y + b.h)) };
+    const u = unionBox(bs); return { x0:u.x, y0:u.y, x1:u.x + u.w, y1:u.y + u.h };
   };
   // devolve quanto a quina (ou o centro) ainda ficou fora do lugar, em px (> 0 = a margem segurou)
   let left = 0;
   for (let n = 0; n < 4; n++) { // a margem pode segurar: tenta de novo com o que sobrou
     const b = box(); if (!b) return 0;
-    const dx = !hx ? 0 : alt ? D.C.x - (b.x0 + b.x1) / 2 : D.A.x - (hx > 0 ? b.x0 : b.x1);
-    const dy = !hy ? 0 : alt ? D.C.y - (b.y0 + b.y1) / 2 : D.A.y - (hy > 0 ? b.y0 : b.y1);
+    const gx = D.gd ? D.gd.x : 0, gy = D.gd ? D.gd.y : 0; // grupo girado: a quina parada vai para onde `put` a levou
+    const dx = !hx ? 0 : alt ? D.C.x + gx - (b.x0 + b.x1) / 2 : D.A.x + gx - (hx > 0 ? b.x0 : b.x1);
+    const dy = !hy ? 0 : alt ? D.C.y + gy - (b.y0 + b.y1) / 2 : D.A.y + gy - (hy > 0 ? b.y0 : b.y1);
     left = Math.max(Math.abs(dx), Math.abs(dy));
     if (left < .05 || n === 3) return left;
     for (const q of D.items) { const p = placeRaw(q.o); setPos(q.o, +(p.x + dx / W()).toFixed(5), +(p.y + dy / H()).toFixed(5)); }
@@ -4088,8 +4223,7 @@ function cvDown(ev) {
   if (hd) { hd.rot ? startRotate(ev, pt) : startResize(ev, pt, hd); return; }
   const gp = flowGapAt(pt); if (gp) { startGapDrag(ev, pt, gp); return; } // espaço do layout automático
   const L = hitTest(pt) || ghostAt(pt); // sem nada na tela ali, a seleção que está fora da tela também pega
-  if (!L) { marquee(ev); return; }
-  pt = camInv(camOf(L), pt); // arrastar parte do espaço da camada // no vazio: arrastar seleciona por área; só um clique solta a seleção (com Shift, não)
+  if (!L) { marquee(ev); return; } // no vazio: arrastar seleciona por área; só um clique solta a seleção (com Shift, não)
   if (ev.shiftKey) { toggleSel(L); return; }
   // grupo/frame: o primeiro clique pega o grupo inteiro, o clique duplo entra no item; vizinho de um item já escolhido sozinho pega só ele (arrastar troca de lugar na fila)
   const sel = pickedLayers(), deep = !!L.grp && !(isPicked(L.id) && sel.length > 1) && sel.length === 1 && sel[0].grp === L.grp;
@@ -4097,30 +4231,34 @@ function cvDown(ev) {
   if (only) select(L.id, true);
   else if (grp) { RT.selected = L.id; renderLayers(); renderProps(); needs = true; } else select(L.id);
   pushUndo();
-  if (ev.altKey && L.type === 'image') { const pn = panOf(L); RT.drag = { L, mode:'pan', pt0:pt, ix0:pn.ix, iy0:pn.iy, bw:L._bounds.w, bh:L._bounds.h }; }
-  else { const p = posOf(L); RT.drag = { L, mode:'move', tap:grp, pxy:[ev.clientX, ev.clientY], ox:pt.x - p.x * W(), oy:pt.y - p.y * H(), others:freePicked().filter(o => o !== L).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y }; }), x0:p.x, y0:p.y, ...snapSetup() }; RT.drag.fb = marginHold([L, ...RT.drag.others.map(q => q.o)]); flowGrab(RT.drag); }
+  // arrastar parte do espaço da camada; o grupo girado que anda inteiro não conta (deslocamento na tela = deslocamento no espaço dele)
+  const pan = ev.altKey && L.type === 'image', cm = camOf(L, pan ? null : new Set([L, ...freePicked()].map(o => o.id)));
+  pt = camInv(cm, pt);
+  if (pan) { const pn = panOf(L); RT.drag = { L, cm, mode:'pan', pt0:pt, ix0:pn.ix, iy0:pn.iy, bw:L._bounds.w, bh:L._bounds.h }; }
+  else { const p = posOf(L); RT.drag = { L, cm, mode:'move', tap:grp, pxy:[ev.clientX, ev.clientY], ox:pt.x - p.x * W(), oy:pt.y - p.y * H(), others:freePicked().filter(o => o !== L).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y }; }), x0:p.x, y0:p.y, ...snapSetup() }; RT.drag.fb = marginHold([L, ...RT.drag.others.map(q => q.o)]); flowGrab(RT.drag); }
   cv.setPointerCapture(ev.pointerId);
 }
 cv.addEventListener('pointerdown', cvDown);
 // caixa (px, no começo do arrasto) do que se move e respeita a margem: texto, logo, botão e foto com keepIn, fora de layout automático
 function marginHold(ls) {
   const bs = ls.filter(o => !freeType(o) && !inFlow(o) && bOf(o)).map(bOf); if (!bs.length) return null;
-  const x0 = Math.min(...bs.map(b => b.x)), y0 = Math.min(...bs.map(b => b.y));
-  return { x:x0, y:y0, w:Math.max(...bs.map(b => b.x + b.w)) - x0, h:Math.max(...bs.map(b => b.y + b.h)) - y0 };
+  return unionBox(bs);
 }
 // Guias ao arrastar: bordas e centro da seleção contra os elementos fora dela, o quadro e a margem (Ctrl desliga; Shift trava num eixo)
 function snapSetup() {
   const mv = freePicked().filter(o => o.visible && bOf(o)).map(bOf);
   if (!mv.length) return {};
-  const x0 = Math.min(...mv.map(b => b.x)), y0 = Math.min(...mv.map(b => b.y));
-  const b0 = { x:x0, y:y0, w:Math.max(...mv.map(b => b.x + b.w)) - x0, h:Math.max(...mv.map(b => b.y + b.h)) - y0 };
-  const tg = [{ x:0, y:0, w:W(), h:H(), c:'rgba(143,176,255,.9)' }];
-  const M = marginBox(); if (M) tg.push({ x:M.x0, y:M.y0, w:M.x1 - M.x0, h:M.y1 - M.y0, c:'rgba(111,211,166,.9)' });
+  const b0 = unionBox(mv);
+  const tg = [{ x:0, y:0, w:FW(), h:H(), c:uiA('frame', .9) }];
+  for (let s = 0; s < slides(); s++) { // carrossel: cada slide e a margem dele
+    if (slides() > 1) tg.push({ x:s * W(), y:0, w:W(), h:H(), c:uiA('frame', .9) });
+    const M = marginBox(S.format, s); if (M) tg.push({ x:M.x0, y:M.y0, w:M.x1 - M.x0, h:M.y1 - M.y0, c:uiA('margin', .9) });
+  }
   for (const o of S.layers) if (o.type !== 'bg' && o.visible && o._bounds && !isPicked(o.id) && phase(o, T)) tg.push({ x:o._bounds.x, y:o._bounds.y, w:o._bounds.w, h:o._bounds.h, c:'rgba(255,92,163,.95)' });
   return { b0, tg };
 }
 function snapMove(D, dx, dy) {
-  const U = D.b0, thr = 7 * W() / (cv.getBoundingClientRect().width || 1);
+  const U = D.b0, thr = 7 * FW() / (cv.getBoundingClientRect().width || 1);
   const three = (a, n) => [a, a + n / 2, a + n];
   const best = (vals, tgs) => { let b = null; for (const v of vals) for (const t of tgs) { const d = t - v; if (Math.abs(d) <= thr && (b === null || Math.abs(d) < Math.abs(b))) b = d; } return b; };
   const bx = best(three(U.x + dx, U.w), D.tg.flatMap(t => three(t.x, t.w))); if (bx !== null) dx += bx;
@@ -4145,7 +4283,7 @@ cv.addEventListener('pointermove', ev => {
     return;
   }
   const D = RT.drag, L = D.L;
-  if (D.mode === 'rs' || D.mode === 'pan' || D.mode === 'move' || D.mode === 'rot') pt = camInv(camOf(D.mode === 'rs' ? selL() : L), pt);
+  if (D.cm !== undefined) pt = camInv(D.cm, pt); // a conversão da tela para o espaço da camada fica congelada no começo do arrasto (o pivô de um grupo girado anda junto)
   if (D.mode === 'rs' && D.rotA) pt = rotPt(pt, D.C, -D.rotA); // alça de forma girada: a conta é no espaço dela
   if (D.tap && Math.hypot(ev.clientX - D.pxy[0], ev.clientY - D.pxy[1]) > 3) D.tap = false;
   // como no Figma: só arrasta depois de 3 px; senão o tremido do clique, com o ímã das guias, puxava a seleção para a guia mais perto
@@ -4165,14 +4303,14 @@ cv.addEventListener('pointermove', ev => {
     // margem: trava a caixa de tudo que se move junto (não só a do item clicado) e só no eixo em que ela cabe; o que passa da margem
     // não é puxado para dentro no primeiro movimento (o frame inteiro dava um pulo). Item de layout: quem respeita a margem é a fila
     if (D.fb) {
-      const M = marginBox(), U = D.fb, dx = (x - D.x0) * W(), dy = (y - D.y0) * H();
+      const U = D.fb, dx = (x - D.x0) * W(), dy = (y - D.y0) * H(), M = marginAt(U.x + dx + U.w / 2); // carrossel: a margem do slide para onde vai
       if (M && U.w <= M.x1 - M.x0 + .5) x = D.x0 + (clamp(U.x + dx, M.x0, M.x1 - U.w) - U.x) / W();
       if (M && U.h <= M.y1 - M.y0 + .5) y = D.y0 + (clamp(U.y + dy, M.y0, M.y1 - U.h) - U.y) / H();
       relock();
     }
     // um deslocamento só para todos: se um bate no limite, ninguém passa (senão desalinham)
     const its = [{ o:L, x0:D.x0, y0:D.y0 }, ...(D.others || [])];
-    const ddx = clamp(x - D.x0, Math.max(...its.map(q => POS_LO - q.x0)), Math.min(...its.map(q => POS_HI - q.x0)));
+    const ddx = clamp(x - D.x0, Math.max(...its.map(q => POS_LO - q.x0)), Math.min(...its.map(q => posHi() - q.x0)));
     const ddy = clamp(y - D.y0, Math.max(...its.map(q => POS_LO - q.y0)), Math.min(...its.map(q => POS_HI - q.y0)));
     for (const q of its) setPos(q.o, +(q.x0 + ddx).toFixed(4), +(q.y0 + ddy).toFixed(4));
     // quem está fora da tela anda junto: a caixa tracejada acompanha
@@ -4180,6 +4318,7 @@ cv.addEventListener('pointermove', ev => {
     D.gx = ddx; D.gy = ddy;
     syncPosFields(L);
   }
+  RT.gRev++; // arrastando, a caixa dos grupos (pivô do giro) se refaz a cada movimento
   needs = true;
 });
 // roda do mouse sobre a imagem selecionada: zoom da imagem dentro da máscara
@@ -4239,10 +4378,10 @@ $('#stageBox').addEventListener('pointermove', e => {
 // `L.vecD` = o d que saiu deles: se o d for trocado à mão no painel, os pontos são lidos de novo dele (`vecOf`/`vecParse`; arco não entra).
 // Criando (`RT.pen`) os pontos ficam no espaço do quadro e só viram camada no fim; editando (`RT.vec`) o resto da forma fica parado na tela
 // (`vecApply` refaz tamanho e posição pela caixa nova do d).
-const PEN_C = '#F2B632', vr2 = v => Math.round(v * 100) / 100;
+const PEN_C = uiC('sel'), vr2 = v => Math.round(v * 100) / 100;
 const hasH = (a, w) => Math.abs(a[w + 'x'] - a.x) + Math.abs(a[w + 'y'] - a.y) > .01;
 const vecPt = (x, y) => ({ x, y, ix:x, iy:y, ox:x, oy:y });
-const pxU = () => W() / (cv.getBoundingClientRect().width || 1); // 1 px da tela em unidades do vídeo
+const pxU = () => FW() / (cv.getBoundingClientRect().width || 1); // 1 px da tela em unidades do vídeo
 function snap45(a, p) { const r = Math.hypot(p.x - a.x, p.y - a.y), g = Math.round(Math.atan2(p.y - a.y, p.x - a.x) / (Math.PI / 4)) * Math.PI / 4; return { x:a.x + Math.cos(g) * r, y:a.y + Math.sin(g) * r }; }
 const bezAt = (a, b, t) => { const u = 1 - t; return { x:u * u * u * a.x + 3 * u * u * t * a.ox + 3 * u * t * t * b.ix + t * t * t * b.x, y:u * u * u * a.y + 3 * u * u * t * a.oy + 3 * u * t * t * b.iy + t * t * t * b.y }; };
 function vecD(paths) {
@@ -4450,7 +4589,49 @@ function vecL() {
   if (!L || RT.selected !== L.id || !L.visible || L.locked || !vecOf(L)) { vecExit(); return null; }
   return L;
 }
-const vecSel = L => { const s = RT.vec && RT.vec.sel, sp = s && L.vec[s.si]; return sp && sp.pts[s.pi] ? s : null; };
+// `RT.vec.sel` = um ponto escolhido (com alças à vista); `RT.vec.multi` = vários pontos ([{ si, pi }], sempre 2 ou mais, sem alças)
+const vecSel = L => { const V = RT.vec, s = V && !V.multi && V.sel, sp = s && L.vec[s.si]; return sp && sp.pts[s.pi] ? s : null; };
+const vecAll = L => {
+  const V = RT.vec; if (!V) return [];
+  const ok = s => L.vec[s.si] && L.vec[s.si].pts[s.pi];
+  if (V.multi) return V.multi.filter(ok);
+  const s = vecSel(L); return s ? [s] : [];
+};
+const vecIn = (L, si, pi) => vecAll(L).some(s => s.si === si && s.pi === pi);
+function vecSetSel(list) {
+  const seen = new Set(), out = list.filter(s => { const k = s.si + ':' + s.pi; if (seen.has(k)) return false; seen.add(k); return true; });
+  RT.vec.sel = out.length === 1 ? { si:out[0].si, pi:out[0].pi } : null;
+  RT.vec.multi = out.length > 1 ? out.map(s => ({ si:s.si, pi:s.pi })) : null;
+  needs = true;
+}
+// pontos cujo centro (na tela) cai dentro do retângulo r (espaço do palco)
+function vecInRect(L, M, r) {
+  const out = [];
+  L.vec.forEach((sp, si) => sp.pts.forEach((q, pi) => { const a = vecFwd(M, q.x, q.y); if (a.x >= r.x && a.x <= r.x + r.w && a.y >= r.y && a.y <= r.y + r.h) out.push({ si, pi }); }));
+  return out;
+}
+// arrastar no vazio (ou no corpo da forma) seleciona pontos por área, como a seleção normal; Shift soma; só um clique no vazio sai da edição
+function vecMarquee(e, L, M, onBody) {
+  const p0 = stagePt(e), add = e.shiftKey, x0 = e.clientX, y0 = e.clientY, base = add ? vecAll(L) : []; let moved = false;
+  const mv = ev => {
+    if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return;
+    moved = true; const p = stagePt(ev);
+    RT.vmarq = { x:Math.min(p0.x, p.x), y:Math.min(p0.y, p.y), w:Math.abs(p.x - p0.x), h:Math.abs(p.y - p0.y), base }; needs = true;
+  };
+  const up = () => {
+    removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+    const r = RT.vmarq; RT.vmarq = null; needs = true;
+    if (!RT.vec) return;
+    if (!moved || !r) {
+      if (add) return;
+      if (onBody) vecSetSel([]);
+      else { vecExit(); const o = hitTest(p0); if (o) select(o.id); else selectBg(); }
+      return;
+    }
+    vecSetSel([...base, ...vecInRect(L, M, r)]);
+  };
+  addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+}
 // alças à vista: as do ponto escolhido e as dos vizinhos que encostam nele (como no Figma)
 function vecKnobs(L, M) {
   const s = vecSel(L), out = []; if (!s) return out;
@@ -4532,16 +4713,25 @@ function vecDown(e, L, M, hit) {
       a.ox = a0.ox + dx * w1 / den; a.oy = a0.oy + dy * w1 / den; b.ix = b0.ix + dx * w2 / den; b.iy = b0.iy + dy * w2 / den;
       if (!ev.altKey) { if (linA) keepLined(a, 'o', lenA); if (linB) keepLined(b, 'i', lenB); }
     };
-    up0 = () => { if (!moved) { once(); vecSplit(L, hit); vecApply(L, M); RT.vec.sel = { si:hit.si, pi:hit.pi + 1 }; } };
+    up0 = () => { if (!moved) { once(); vecSplit(L, hit); vecApply(L, M); vecSetSel([{ si:hit.si, pi:hit.pi + 1 }]); } };
   } else {
-    if (hit.kind === 'p') RT.vec.sel = { si:hit.si, pi:hit.pi };
+    if (hit.kind === 'p') {
+      if (e.shiftKey && !alt) {
+        const all = vecAll(L), has = all.some(s => s.si === hit.si && s.pi === hit.pi);
+        vecSetSel(has ? all.filter(s => !(s.si === hit.si && s.pi === hit.pi)) : [...all, { si:hit.si, pi:hit.pi }]);
+        if (has) return; // Shift + clique num ponto já escolhido tira ele da seleção
+      }
+      else if (!(RT.vec.multi && vecIn(L, hit.si, hit.pi))) vecSetSel([{ si:hit.si, pi:hit.pi }]);
+    }
+    // vários pontos escolhidos: arrastar um leva todos (clicar sem arrastar volta a escolher só ele)
+    const grp = hit.kind === 'p' && !alt && RT.vec.multi && vecIn(L, hit.si, hit.pi) ? vecAll(L).map(s => { const o = L.vec[s.si].pts[s.pi]; return { q:o, st:{ ...o } }; }) : null;
     const q = L.vec[hit.si].pts[hit.pi], st = { ...q }, w = hit.w, lined = !!w && linedH(q, w), oLen = w ? hLen(q, oppH(w)) : 0;
     mv = ev => {
       let p = stagePt(ev);
       if (hit.kind === 'p' && !alt) { // ponto: leva as alças junto; Shift trava o eixo
         const p0 = vecFwd(M, st.x, st.y); if (ev.shiftKey) { if (Math.abs(p.x - p0.x) > Math.abs(p.y - p0.y)) p.y = p0.y; else p.x = p0.x; }
         const g = vecInv(M, p), dx = g.x - st.x, dy = g.y - st.y;
-        Object.assign(q, { x:st.x + dx, y:st.y + dy, ix:st.ix + dx, iy:st.iy + dy, ox:st.ox + dx, oy:st.oy + dy });
+        for (const o of grp || [{ q, st }]) Object.assign(o.q, { x:o.st.x + dx, y:o.st.y + dy, ix:o.st.ix + dx, iy:o.st.iy + dy, ox:o.st.ox + dx, oy:o.st.oy + dy });
       } else if (hit.kind === 'p') { // Alt + arrastar o ponto: puxa alças novas, simétricas
         if (ev.shiftKey) p = snap45(vecFwd(M, q.x, q.y), p);
         const g = vecInv(M, p); q.ox = g.x; q.oy = g.y; q.ix = 2 * q.x - g.x; q.iy = 2 * q.y - g.y;
@@ -4553,6 +4743,7 @@ function vecDown(e, L, M, hit) {
     };
     up0 = () => {
       if (moved || hit.kind !== 'p') return;
+      if (grp && !e.shiftKey) { vecSetSel([{ si:hit.si, pi:hit.pi }]); return; }
       const now = performance.now(), tp = RT.vec.tap, dbl = tp && tp.si === hit.si && tp.pi === hit.pi && now - tp.t < 400;
       RT.vec.tap = dbl ? null : { si:hit.si, pi:hit.pi, t:now };
       if (alt || dbl) { once(); vecToggle(L, hit.si, hit.pi); vecApply(L, M); } // Alt + clique ou clique duplo: curva <-> canto
@@ -4571,18 +4762,20 @@ function vecDown(e, L, M, hit) {
   needs = true;
 }
 function vecDelete(L) {
-  const s = vecSel(L); if (!s) return;
-  if (L.vec.reduce((a, p) => a + p.pts.length, 0) <= 2) { vecExit(); deleteLayer(L); return; }
+  const all = vecAll(L); if (!all.length) return;
+  const total = L.vec.reduce((a, p) => a + p.pts.length, 0);
+  if (total - all.length < 2) { vecExit(); deleteLayer(L); return; }
   const M = vecMap(L); pushUndo();
-  const sp = L.vec[s.si]; sp.pts.splice(s.pi, 1); if (sp.pts.length < 2) L.vec.splice(s.si, 1);
-  RT.vec.sel = null; vecApply(L, M); changed({ props:true });
+  all.sort((a, b) => b.si - a.si || b.pi - a.pi).forEach(s => L.vec[s.si].pts.splice(s.pi, 1));
+  L.vec = L.vec.filter(sp => sp.pts.length >= 2);
+  vecSetSel([]); vecApply(L, M); changed({ props:true });
 }
 let vecNT = null;
 function vecNudge(L, dx, dy) {
-  const s = vecSel(L); if (!s) return;
+  const all = vecAll(L); if (!all.length) return;
   if (!vecNT) pushUndo(); clearTimeout(vecNT); vecNT = setTimeout(() => { vecNT = null; }, 700);
-  const q = L.vec[s.si].pts[s.pi], M = vecMap(L), a = vecFwd(M, q.x, q.y), g = vecInv(M, { x:a.x + dx, y:a.y + dy }), ddx = g.x - q.x, ddy = g.y - q.y;
-  q.x += ddx; q.y += ddy; q.ix += ddx; q.iy += ddy; q.ox += ddx; q.oy += ddy;
+  const M = vecMap(L), q0 = L.vec[all[0].si].pts[all[0].pi], a = vecFwd(M, q0.x, q0.y), g = vecInv(M, { x:a.x + dx, y:a.y + dy }), ddx = g.x - q0.x, ddy = g.y - q0.y;
+  for (const s of all) { const q = L.vec[s.si].pts[s.pi]; q.x += ddx; q.y += ddy; q.ix += ddx; q.iy += ddy; q.ox += ddx; q.oy += ddy; }
   vecApply(L, M); changed();
 }
 // overlay (#ov, espaço do vídeo): caminho, pontos e alças
@@ -4618,10 +4811,15 @@ function drawPenTool(ctx) {
   }
   const L = vecL(), M = L && vecMap(L);
   if (M) {
-    const f = (x, y) => vecFwd(M, x, y), s = vecSel(L);
+    const f = (x, y) => vecFwd(M, x, y), pre = RT.vmarq ? new Set([...RT.vmarq.base, ...vecInRect(L, M, RT.vmarq)].map(k => k.si + ':' + k.pi)) : null;
     L.vec.forEach(sp => ctx.stroke(trace(sp.pts, sp.closed, f)));
     for (const k of vecKnobs(L, M)) knob(k.ax, k.ay, k.x, k.y);
-    L.vec.forEach((sp, si) => sp.pts.forEach((q, pi) => { const a = f(q.x, q.y); anchor(a.x, a.y, !!s && s.si === si && s.pi === pi); }));
+    L.vec.forEach((sp, si) => sp.pts.forEach((q, pi) => { const a = f(q.x, q.y); anchor(a.x, a.y, pre ? pre.has(si + ':' + pi) : vecIn(L, si, pi)); }));
+    if (RT.vmarq) {
+      const r = RT.vmarq;
+      ctx.fillStyle = uiA('sel', .08); ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.lineWidth = px; ctx.strokeRect(r.x, r.y, r.w, r.h);
+    }
   }
   ctx.restore();
 }
@@ -4631,9 +4829,11 @@ $('#stageBox').addEventListener('pointerdown', e => {
   if (RT.pen) { e.stopPropagation(); e.preventDefault(); penToolDown(e); return; }
   const L = vecL(), M = L && vecMap(L), hit = M && vecHit(L, M, stagePt(e));
   if (!hit) {
-    // clique no corpo da própria forma: move a forma e continua editando (as linhas e os pontos ficam à vista)
-    if (M && hitTest(stagePt(e)) === L) { e.stopPropagation(); e.preventDefault(); cvDown(e); return; }
-    vecExit(); return; // clique fora: sai da edição e o clique segue normal (seleciona outro, área, solta)
+    if (!M) { vecExit(); return; }
+    const onBody = hitTest(stagePt(e)) === L;
+    // Ctrl + arrastar no corpo da forma move a forma (continua editando); arrastar sem Ctrl seleciona pontos por área
+    if (onBody && (e.ctrlKey || e.metaKey)) { e.stopPropagation(); e.preventDefault(); cvDown(e); return; }
+    e.stopPropagation(); e.preventDefault(); vecMarquee(e, L, M, onBody); return;
   }
   e.stopPropagation(); e.preventDefault(); vecDown(e, L, M, hit);
 }, true);
@@ -4642,7 +4842,7 @@ $('#stageBox').addEventListener('pointermove', e => {
   if (e.buttons) return; // arrastando: o movimento tem que chegar à janela (curva da caneta, mão livre, pontos)
   e.stopPropagation();
   if (RT.pen) { RT.pen.cur = stagePt(e); RT.pen.shift = e.shiftKey; needs = true; return; }
-  const L = vecL(), M = L && vecMap(L), hit = M && vecHit(L, M, stagePt(e)), c = !hit ? (M && hitTest(stagePt(e)) === L ? 'move' : '') : hit.kind === 'seg' ? 'copy' : 'move';
+  const L = vecL(), M = L && vecMap(L), hit = M && vecHit(L, M, stagePt(e)), c = !hit ? (M && hitTest(stagePt(e)) === L && (e.ctrlKey || e.metaKey) ? 'move' : '') : hit.kind === 'seg' ? 'copy' : 'move';
   cv.style.cursor = c; $('#stageBox').style.cursor = c;
 }, true);
 addEventListener('keydown', e => {
@@ -4656,7 +4856,8 @@ addEventListener('keydown', e => {
     const L = vecL(); if (!L) return;
     if (k === 'Escape' || k === 'Enter') vecExit();
     else if (k === 'Backspace' || k === 'Delete') vecDelete(L);
-    else if (k.startsWith('Arrow') && vecSel(L)) { const s = e.shiftKey ? 10 : 1; vecNudge(L, ((k === 'ArrowRight') - (k === 'ArrowLeft')) * s, ((k === 'ArrowDown') - (k === 'ArrowUp')) * s); }
+    else if (k.startsWith('Arrow') && vecAll(L).length) { const s = e.shiftKey ? 10 : 1; vecNudge(L, ((k === 'ArrowRight') - (k === 'ArrowLeft')) * s, ((k === 'ArrowDown') - (k === 'ArrowUp')) * s); }
+    else if (mod && kl === 'a') vecSetSel(L.vec.flatMap((sp, si) => sp.pts.map((q, pi) => ({ si, pi }))));
     else ok = false;
   }
   if (ok) { e.preventDefault(); e.stopPropagation(); }
@@ -4725,13 +4926,14 @@ function pushUndo() {
   syncHist();
 }
 function applyState(s) {
-  const prevLogo = JSON.stringify(S.brand.logo);
+  const prevLogo = JSON.stringify(S.brand.logo), prevFit = S.format + '|' + slides();
   S = JSON.parse(s); RT.layout.clear();
   if (!S.layers.find(l => l.id === RT.selected)) RT.selected = S.layers[0]?.id;
   if (JSON.stringify(S.brand.logo) !== prevLogo) refreshLogo();
   ensureFonts(); S.layers.forEach(l => l.src && getImage(l.src));
   redoBase = s;
   renderAll(); needs = true; autosave();
+  if (S.format + '|' + slides() !== prevFit) fitStage(); // desfazer a troca de formato ou do número de slides muda o tamanho do palco
 }
 function undo() {
   const cur = JSON.stringify(S);
@@ -4800,7 +5002,7 @@ async function openState(st, id, name) {
   FILES.id = id; FILES.name = name; showFileName();
   DB.set('currentId', id);
   undoStack.length = 0; redoStack.length = 0; redoBase = null; syncHist();
-  S = st; RT.layout.clear();
+  S = st; RT.layout.clear(); RT.slide = 0;
   RT.selected = S.layers.find(l => l.type === 'logo')?.id || S.layers.find(l => l.type !== 'bg')?.id || S.layers[0]?.id;
   renderAll(); fitStage();
   await refreshLogo(); ensureFonts();
@@ -4958,34 +5160,45 @@ async function pickConfig(w, hh) {
   return null;
 }
 let cancelExport = false;
-async function encodeWebCodecs(canvas, ctx, w, hh, N, prog, mix) {
+// sl = slides que saem nesta passada (carrossel: um vídeo por slide, recortado do quadro inteiro; sem carrossel, [0] = o quadro)
+async function encodeWebCodecs(canvas, ctx, w, hh, N, prog, mix, sl = [0]) {
   if (!window.Mp4Muxer) return null;
   const pick = await pickConfig(w, hh); if (!pick) return null;
   // trilha: codifica antes (AAC, senão Opus); se falhar, o vídeo sai sem som em vez de não sair
   const apick = mix ? await pickAudio(mix.sampleRate) : null;
   let achunks = null;
   if (apick) try { achunks = await encodeAudio(mix, apick); } catch (e) { console.warn('áudio falhou', e); achunks = null; }
-  const opt = { target:new Mp4Muxer.ArrayBufferTarget(), video:{ codec:pick.mux, width:w, height:hh, frameRate:fps() }, fastStart:'in-memory', firstTimestampBehavior:'offset' };
-  if (achunks) opt.audio = { codec:apick.mux, sampleRate:mix.sampleRate, numberOfChannels:2 };
-  const muxer = new Mp4Muxer.Muxer(opt);
-  if (achunks) for (const [c, m] of achunks) muxer.addAudioChunk(c, m);
-  let err = null;
-  const enc = new VideoEncoder({ output:(chunk, meta) => muxer.addVideoChunk(chunk, meta), error:e => { err = e; } });
-  enc.configure(pick.cfg);
+  const cut = canvas.width > w; // o quadro tem mais de um slide
+  const outs = sl.map(s => {
+    const opt = { target:new Mp4Muxer.ArrayBufferTarget(), video:{ codec:pick.mux, width:w, height:hh, frameRate:fps() }, fastStart:'in-memory', firstTimestampBehavior:'offset' };
+    if (achunks) opt.audio = { codec:apick.mux, sampleRate:mix.sampleRate, numberOfChannels:2 };
+    const o = { s, muxer:new Mp4Muxer.Muxer(opt), err:null, cv:null };
+    if (achunks) for (const [c, m] of achunks) o.muxer.addAudioChunk(c, m);
+    if (cut) { o.cv = document.createElement('canvas'); o.cv.width = w; o.cv.height = hh; }
+    o.enc = new VideoEncoder({ output:(chunk, meta) => o.muxer.addVideoChunk(chunk, meta), error:e => { o.err = e; } });
+    o.enc.configure(pick.cfg);
+    return o;
+  });
+  const closeAll = () => outs.forEach(o => { try { o.enc.close(); } catch (e) {} });
+  const fail = () => { const o = outs.find(o => o.err); if (o) { closeAll(); throw o.err; } };
   for (let i = 0; i < N; i++) {
-    if (cancelExport) { try { enc.close(); } catch (e) {} return 'cancel'; }
+    if (cancelExport) { closeAll(); return 'cancel'; }
     const t = i / fps();
     await seekVideos(t);
     renderExportFrame(ctx, t);
-    const vf = new VideoFrame(canvas, { timestamp:Math.round(i * 1e6 / fps()), duration:Math.round(1e6 / fps()) });
-    enc.encode(vf, { keyFrame:i % (fps() * 2) === 0 }); vf.close();
-    while (enc.encodeQueueSize > 6) await sleep(1);
-    if (err) throw err;
+    for (const o of outs) {
+      if (o.cv) o.cv.getContext('2d').drawImage(canvas, o.s * w, 0, w, hh, 0, 0, w, hh);
+      const vf = new VideoFrame(o.cv || canvas, { timestamp:Math.round(i * 1e6 / fps()), duration:Math.round(1e6 / fps()) });
+      o.enc.encode(vf, { keyFrame:i % (fps() * 2) === 0 }); vf.close();
+    }
+    while (outs.some(o => o.enc.encodeQueueSize > 6)) await sleep(1);
+    fail();
     if (i % 3 === 0) { prog(i / N); await sleep(0); }
   }
-  await enc.flush(); if (err) throw err;
-  muxer.finalize(); enc.close();
-  return { blob:new Blob([muxer.target.buffer], { type:'video/mp4' }), ext:'mp4', audio:!!achunks,
+  await Promise.all(outs.map(o => o.enc.flush())); fail();
+  for (const o of outs) { o.muxer.finalize(); o.enc.close(); }
+  const blobs = outs.map(o => new Blob([o.muxer.target.buffer], { type:'video/mp4' }));
+  return { blob:blobs[0], blobs, ext:'mp4', audio:!!achunks,
     codec:(pick.cfg.codec.startsWith('avc1.64') ? 'H.264 High' : pick.cfg.codec.startsWith('avc') ? 'H.264' : 'VP9') + ` · ${(pick.cfg.bitrate / 1e6).toFixed(1)} Mbps` + (achunks ? ` · ${apick.mux === 'aac' ? 'AAC' : 'Opus'}` : mix ? ' · sem som (o navegador não codificou o áudio)' : '') };
 }
 async function encodeRecorder(canvas, ctx, prog) {
@@ -5004,15 +5217,26 @@ async function encodeRecorder(canvas, ctx, prog) {
 }
 // um vídeo do jeito que S está agora (formato e variação já aplicados)
 async function renderVideo(prog) {
-  const w = W(), hh = H(), N = Math.round(S.duration * fps());
+  const w = W(), hh = H(), N = Math.round(S.duration * fps()), n = slides();
   await document.fonts.ready; await videosReady();
-  const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = hh;
+  const canvas = document.createElement('canvas'); canvas.width = w * n; canvas.height = hh;
   const ctx = canvas.getContext('2d');
   let mix = null;
   if (hasAudio()) try { mix = await buildMix(48000); } catch (e) { console.warn('trilha falhou', e); }
   let res = null;
-  try { res = await encodeWebCodecs(canvas, ctx, w, hh, N, prog, mix); } catch (e) { console.warn('WebCodecs falhou', e); res = null; }
+  try { res = await encodeWebCodecs(canvas, ctx, w, hh, N, prog, mix, [...Array(n).keys()]); } catch (e) { console.warn('WebCodecs falhou', e); res = null; }
   if (res === 'cancel' || cancelExport) return 'cancel';
+  // carrossel: a placa pode recusar vários codificadores ao mesmo tempo; tenta um slide por vez (mais lento, mas sai)
+  if (!res && n > 1) {
+    const blobs = []; let r = null;
+    for (let s = 0; s < n; s++) {
+      try { r = await encodeWebCodecs(canvas, ctx, w, hh, N, p => prog((s + p) / n), mix, [s]); } catch (e) { console.warn('WebCodecs falhou', e); r = null; }
+      if (!r || r === 'cancel' || cancelExport) break;
+      blobs.push(r.blob);
+    }
+    if (r === 'cancel' || cancelExport) return 'cancel';
+    return r && blobs.length === n ? { ...r, blob:blobs[0], blobs } : null; // gravar em tempo real só serve para um quadro
+  }
   if (!res) { $('#mMeta').textContent += ' · gravando em tempo real, sem som'; try { res = await encodeRecorder(canvas, ctx, prog); } catch (e) { res = null; } }
   return res;
 }
@@ -5026,7 +5250,7 @@ async function saveOut(dir, blob, fname) {
 async function runExport(fmts, vars) {
   const jobs = []; for (const v of vars) for (const f of fmts) jobs.push({ f, v });
   if (!jobs.length) return;
-  const many = jobs.length > 1;
+  const many = jobs.length > 1 || slides() > 1; // carrossel: um arquivo por slide
   let dir = null;
   if (many && window.showDirectoryPicker) {
     try { dir = await window.showDirectoryPicker({ id:'mola-export', mode:'readwrite' }); }
@@ -5036,20 +5260,22 @@ async function runExport(fmts, vars) {
   pause(); RT.exporting = true; cancelExport = false;
   const fmt0 = S.format, m = $('#modal');
   if (!FORMATS[S.base] && hasContent()) S.base = fmt0; // os outros formatos se reorganizam a partir do aberto
-  m.hidden = false; $('#mTitle').textContent = many ? `Exportando ${jobs.length} vídeos` : 'Exportando vídeo';
+  m.hidden = false; $('#mTitle').textContent = many ? `Exportando ${jobs.length * slides()} vídeos` : 'Exportando vídeo';
   $('#mVideo').hidden = true; $('#mSave').hidden = true; $('#mBar').style.width = '0%'; $('#mClose').textContent = 'Cancelar';
   const prog = p => { $('#mBar').style.width = (clamp(p) * 100).toFixed(1) + '%'; };
   const done = []; let fail = false, last = null;
   try {
     for (let j = 0; j < jobs.length && !cancelExport; j++) {
       const { f, v } = jobs[j]; S.format = f; RT.layout.clear();
-      $('#mMeta').textContent = `${many ? `${j + 1} de ${jobs.length} · ` : ''}${v ? v.name + ' · ' : ''}${W()}×${H()} · ${fps()} fps · ${S.duration}s${(MBLUR[S.mblur] || MBLUR.off).n > 1 ? ' · desfoque de movimento' : ''}`;
+      $('#mMeta').textContent = `${many ? `${j + 1} de ${jobs.length} · ` : ''}${v ? v.name + ' · ' : ''}${slides() > 1 ? `${slides()} slides de ` : ''}${W()}×${H()} · ${fps()} fps · ${S.duration}s${(MBLUR[S.mblur] || MBLUR.off).n > 1 ? ' · desfoque de movimento' : ''}`;
       const res = await withVariant(v, () => renderVideo(p => prog((j + p) / jobs.length)));
       if (res === 'cancel' || cancelExport) break;
       if (!res) { fail = true; break; }
       const nm = outName(), fname = `${v ? nm.replace(/-(\d+x\d+)$/, `-${fileSafe(v.name)}-$1`) : nm}.${res.ext}`;
       last = { ...res, fname, w:W(), hh:H() };
-      if (many) { await saveOut(dir, res.blob, fname); done.push(fname); }
+      // carrossel: nome-4x5-01.mp4, nome-4x5-02.mp4… (na ordem dos slides)
+      const parts = res.blobs && res.blobs.length > 1 ? res.blobs.map((b, s) => [b, fname.replace(/(\.\w+)$/, `-${String(s + 1).padStart(2, '0')}$1`)]) : [[res.blob, fname]];
+      if (many) for (const [b, fn] of parts) { await saveOut(dir, b, fn); done.push(fn); }
     }
   } finally { S.format = fmt0; RT.layout.clear(); RT.exporting = false; needs = true; fitStage(); }
   $('#mClose').textContent = 'Fechar';
@@ -5068,11 +5294,12 @@ async function runExport(fmts, vars) {
 function exportVideo() {
   if (RT.exporting || document.querySelector('.xsheet')) return;
   pause();
+  if (S.still) { exportStill(); return; }
   const ex = S.export || {}, rows = varRows();
   const fm = new Set((ex.fmts || [S.format]).filter(f => FORMATS[f])); if (!fm.size) fm.add(S.format);
   let all = !!ex.vars && rows.length > 0, mb = MBLUR[S.mblur] ? S.mblur : 'off';
   const close = () => ov.remove();
-  const count = () => fm.size * (all ? rows.length + 1 : 1);
+  const count = () => fm.size * (all ? rows.length + 1 : 1) * slides(); // carrossel: um vídeo por slide
   const summary = h('p', { class:'hint xsum' });
   const go = h('button', { class:'btn primary', onclick:() => {
     S.export = { fmts:[...fm], vars:all }; S.mblur = mb; autosave(); close();
@@ -5080,7 +5307,7 @@ function exportVideo() {
   } });
   const upd = () => {
     const n = count();
-    summary.textContent = `${n} vídeo${n > 1 ? 's' : ''}, ${hasAudio() ? 'com som' : 'sem som'}.${n > 1 ? (window.showDirectoryPicker ? ' Você escolhe a pasta onde salvar.' : ' Cada um baixa separado.') : ''}`;
+    summary.textContent = `${n} vídeo${n > 1 ? 's' : ''}${slides() > 1 ? ` (carrossel: um por slide, ${slides()} slides)` : ''}, ${hasAudio() ? 'com som' : 'sem som'}.${n > 1 ? (window.showDirectoryPicker ? ' Você escolhe a pasta onde salvar.' : ' Cada um baixa separado.') : ''}`;
     go.textContent = n > 1 ? `Exportar ${n} vídeos` : 'Exportar MP4';
   };
   const chips = (opts, isOn, onPick) => {
@@ -5109,15 +5336,132 @@ $('#export').onclick = exportVideo;
 // nome dos arquivos exportados: nome do arquivo + formato (ex.: "Promo junho-4x5")
 const outName = () => `${(FILES.name || 'mola').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'mola'}-${FORMATS[S.format].label.replace(':', 'x')}`;
 // quadro da agulha em PNG, na resolução do vídeo (capa, miniatura, post estático)
-async function saveFramePng() {
-  pause(); await document.fonts.ready; await seekVideos(T);
-  const c = document.createElement('canvas'); c.width = W(); c.height = H();
-  renderFrame(c.getContext('2d'), T, 1, true); needs = true;
-  const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+// com algo selecionado, sai só a seleção (fundo transparente, recortada nela); sem seleção, o quadro todo
+async function saveSelectionPng(sel) {
+  await document.fonts.ready; await seekVideos(T);
+  ensureBounds(sel);
+  const bs = sel.map(l => l._bounds).filter(Boolean); if (!bs.length) { toast('A seleção não está na tela'); return; }
+  const fxs = sel.some(l => (l.shadow && l.shadow !== 'none') || l.lblur);
+  const pad = Math.ceil(Math.max(fxs ? 96 : 8, ...sel.map(l => (strokeSee(l) ? skW(l) : 0) * 1.2)));
+  const fw = FW(), fh = H();
+  const x0 = Math.max(0, Math.floor(Math.min(...bs.map(o => o.x)) - pad)), y0 = Math.max(0, Math.floor(Math.min(...bs.map(o => o.y)) - pad));
+  const x1 = Math.min(fw, Math.ceil(Math.max(...bs.map(o => o.x + o.w)) + pad)), y1 = Math.min(fh, Math.ceil(Math.max(...bs.map(o => o.y + o.h)) + pad));
+  if (x1 <= x0 || y1 <= y0) { toast('A seleção está fora do quadro'); return; }
+  const c = document.createElement('canvas'); c.width = fw; c.height = fh;
+  RT.only = new Set(sel.map(l => l.id));
+  try { renderFrame(c.getContext('2d'), T, 1, true); } finally { RT.only = null; needs = true; }
+  const out = document.createElement('canvas'); out.width = x1 - x0; out.height = y1 - y0;
+  out.getContext('2d').drawImage(c, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+  const blob = await new Promise(r => out.toBlob(r, 'image/png'));
   if (!blob) { toast('Não consegui gerar a imagem'); return; }
-  saveFile(blob, `${outName()}-${T.toFixed(1).replace('.', ',')}s.png`);
+  await saveFile(blob, `${outName()}-selecao-${T.toFixed(1).replace('.', ',')}s.png`);
 }
-$('#pngBtn').onclick = saveFramePng;
+async function saveFramePng(mode) {
+  pause();
+  const sel = mode === 'frame' ? [] : pickedLayers().filter(l => l.visible);
+  if (sel.length) return saveSelectionPng(sel);
+  const n = slides();
+  // carrossel: uma imagem por slide (escolhe a pasta antes de desenhar, enquanto o clique ainda vale)
+  let dir = null;
+  if (n > 1 && window.showDirectoryPicker) {
+    try { dir = await window.showDirectoryPicker({ id:'mola-export', mode:'readwrite' }); }
+    catch (e) { if (e && e.name === 'AbortError') return; dir = null; }
+  }
+  await document.fonts.ready; await seekVideos(T);
+  const c = document.createElement('canvas'); c.width = FW(); c.height = H();
+  renderFrame(c.getContext('2d'), T, 1, true); needs = true;
+  const nm = `${outName()}-${T.toFixed(1).replace('.', ',')}s`;
+  if (n < 2) {
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    if (!blob) { toast('Não consegui gerar a imagem'); return; }
+    saveFile(blob, `${nm}.png`); return;
+  }
+  const one = document.createElement('canvas'); one.width = W(); one.height = H();
+  const x = one.getContext('2d');
+  for (let s = 0; s < n; s++) {
+    x.clearRect(0, 0, one.width, one.height); x.drawImage(c, s * W(), 0, W(), H(), 0, 0, W(), H());
+    const blob = await new Promise(r => one.toBlob(r, 'image/png'));
+    if (!blob) { toast('Não consegui gerar a imagem'); return; }
+    await saveOut(dir, blob, `${nm}-${String(s + 1).padStart(2, '0')}.png`);
+  }
+  toast(dir ? `${n} imagens salvas na pasta "${dir.name}"` : `${n} imagens baixadas, uma por slide`);
+}
+$('#pngBtn').onclick = () => saveFramePng();
+$('#svgBtn').onclick = () => exportSvg();
+// imagem estática: Exportar abre a escolha de formatos e variações e sai um PNG por formato, variação e slide
+function exportStill() {
+  const ex = S.export || {}, rows = varRows();
+  const fm = new Set((ex.fmts || [S.format]).filter(f => FORMATS[f])); if (!fm.size) fm.add(S.format);
+  let all = !!ex.vars && rows.length > 0;
+  const close = () => ov.remove();
+  const count = () => fm.size * (all ? rows.length + 1 : 1) * slides();
+  const summary = h('p', { class:'hint xsum' });
+  const go = h('button', { class:'btn primary', onclick:() => {
+    S.export = { ...S.export, fmts:[...fm], vars:all }; autosave(); close();
+    runStill(Object.keys(FORMATS).filter(f => fm.has(f)), all ? [null, ...rows] : [null]);
+  } });
+  const upd = () => {
+    const n = count();
+    summary.textContent = `${n} imagem${n > 1 ? 'ns' : ''} PNG${slides() > 1 ? ` (carrossel: uma por slide, ${slides()} slides)` : ''}.${n > 1 ? (window.showDirectoryPicker ? ' Você escolhe a pasta onde salvar.' : ' Cada uma baixa separada.') : ''}`;
+    go.textContent = n > 1 ? `Exportar ${n} imagens` : 'Exportar PNG';
+  };
+  const chips = (opts, isOn, onPick) => {
+    const w = h('div', { class:'chips' });
+    const draw = () => { w.innerHTML = ''; opts.forEach(([k, t]) => w.append(h('button', { class:'chip', 'aria-pressed':String(isOn(k)), onclick:() => { onPick(k); draw(); upd(); } }, [h('span', { text:t })]))); };
+    draw(); return w;
+  };
+  const card = h('div', { class:'files-card xcard', role:'dialog', 'aria-modal':'true', 'aria-label':'Exportar imagem' }, [
+    h('div', { class:'files-head' }, [h('h2', { text:'Exportar imagem' }), h('div', { class:'spacer' }), h('button', { class:'btn small ghost', text:'Fechar', onclick:close })]),
+    h('h3', { text:'Formatos' }),
+    chips(Object.entries(FORMATS).map(([k, f]) => [k, f.label]), k => fm.has(k), k => { if (fm.has(k)) { if (fm.size > 1) fm.delete(k); } else fm.add(k); }),
+    h('p', { class:'hint', text:`Cada formato se reorganiza a partir do ${fmtLabel(baseFmt())} (o principal). O que você ajustou num formato fica só nele.` }),
+    h('h3', { text:'Variações de texto' }),
+    rows.length ? chips([['one', 'Só a atual'], ['all', `Todas (${rows.length + 1})`]], k => (k === 'all') === all, k => { all = k === 'all'; })
+      : h('p', { class:'hint', text:'Nenhuma variação ainda. Crie em "Variações", no topo, para exportar várias versões de uma vez.' }),
+    summary,
+    h('div', { class:'row', style:'justify-content:flex-end' }, [h('button', { class:'btn', text:'Cancelar', onclick:close }), go]),
+  ]);
+  const ov = h('div', { class:'files xsheet', onpointerdown:e => { if (e.target === ov) close(); }, onkeydown:e => { e.stopPropagation(); if (e.key === 'Escape') close(); } }, [card]);
+  document.body.append(ov); upd(); go.focus();
+}
+async function runStill(fmts, vars) {
+  const jobs = []; for (const v of vars) for (const f of fmts) jobs.push({ f, v });
+  if (!jobs.length) return;
+  const n = slides(), many = jobs.length > 1 || n > 1;
+  let dir = null;
+  if (many && window.showDirectoryPicker) {
+    try { dir = await window.showDirectoryPicker({ id:'mola-export', mode:'readwrite' }); }
+    catch (e) { if (e && e.name === 'AbortError') return; dir = null; }
+  }
+  if (saveT) await flushSave();
+  pause(); RT.exporting = true;
+  const fmt0 = S.format;
+  if (!FORMATS[S.base] && hasContent()) S.base = fmt0; // os outros formatos se reorganizam a partir do aberto
+  let done = 0, fail = false;
+  try {
+    await document.fonts.ready; await videosReady();
+    for (const { f, v } of jobs) {
+      S.format = f; RT.layout.clear();
+      await withVariant(v, async () => {
+        await seekVideos(0);
+        const c = document.createElement('canvas'); c.width = FW(); c.height = H();
+        renderFrame(c.getContext('2d'), 0, 1, true);
+        const nm0 = outName(), nm = v ? nm0.replace(/-(\d+x\d+)$/, `-${fileSafe(v.name)}-$1`) : nm0;
+        const one = n > 1 ? document.createElement('canvas') : c;
+        if (n > 1) { one.width = W(); one.height = H(); }
+        for (let s = 0; s < n; s++) {
+          if (n > 1) { const x = one.getContext('2d'); x.clearRect(0, 0, one.width, one.height); x.drawImage(c, s * W(), 0, W(), H(), 0, 0, W(), H()); }
+          const blob = await new Promise(r => one.toBlob(r, 'image/png'));
+          if (!blob) { fail = true; return; }
+          await saveOut(many ? dir : null, blob, `${nm}${n > 1 ? '-' + String(s + 1).padStart(2, '0') : ''}.png`); done++;
+        }
+      });
+      if (fail) break;
+    }
+  } finally { S.format = fmt0; RT.layout.clear(); RT.exporting = false; needs = true; fitStage(); }
+  if (fail) { toast('Não consegui gerar a imagem'); return; }
+  if (many) toast(dir ? `${done} imagens salvas na pasta "${dir.name}"` : `${done} imagens baixadas`);
+}
 $('#mClose').onclick = () => { if (RT.exporting) { cancelExport = true; return; } $('#modal').hidden = true; const v = $('#mVideo'); v.pause(); };
 $('#mSave').onclick = () => lastExport && saveFile(lastExport.blob, lastExport.fname);
 
@@ -5590,7 +5934,8 @@ function alignLayers(mode) {
   if (S.flow && RT.frameIds && ls.every(l => RT.frameIds.has(l.id)) && (['t', 'cv', 'b', 'dv'].includes(mode) || (S.flow.align || 'keep') !== 'keep')) { toast('Layout do quadro ligado: a posição vem da coluna (clique no vazio para ver as opções)'); return; }
   ensureBounds(ls);
   const U = selUnits(ls); if (!U.length) return;
-  const ref = U.length > 1 ? { x0:Math.min(...U.map(u => u.x0)), y0:Math.min(...U.map(u => u.y0)), x1:Math.max(...U.map(u => u.x1)), y1:Math.max(...U.map(u => u.y1)) } : (() => { const M = marginBox(); return M ? { x0:M.x0, y0:M.y0, x1:M.x1, y1:M.y1 } : { x0:0, y0:0, x1:W(), y1:H() }; })();
+  // um bloco só alinha à margem (ou ao quadro) do slide em que está
+  const ref = U.length > 1 ? { x0:Math.min(...U.map(u => u.x0)), y0:Math.min(...U.map(u => u.y0)), x1:Math.max(...U.map(u => u.x1)), y1:Math.max(...U.map(u => u.y1)) } : areaAt((U[0].x0 + U[0].x1) / 2);
   const d = new Map();
   if (mode === 'dh' || mode === 'dv') {
     if (U.length < 3) return;
@@ -5659,7 +6004,7 @@ const pfTargets = () => { const ls = pickedLayers(); return ls.length && ls.ever
 function pathfinder(op) {
   const def = PF_OPS.find(o => o[0] === op), ls = pfTargets(); if (!def || !ls.length) return;
   if (ls.some(l => l.locked)) { lockedNote(ls); return; }
-  if (op !== 'flatten' && ls.length < 2) { toast('Selecione duas formas ou mais'); return; }
+  if (op !== 'flatten' && op !== 'union' && ls.length < 2) { toast('Selecione duas formas ou mais'); return; }
   if (op !== 'flatten' && ls.some(l => l.kind === 'line')) { toast('A linha não tem área: use Achatar, ou troque por outra forma'); return; }
   if (typeof paper === 'undefined') { toast('O Pathfinder não carregou. Recarregue a página', 4000); return; }
   const order = [...ls].sort((a, b) => S.layers.indexOf(a) - S.layers.indexOf(b)), subs = order.map(pfSubpaths);
@@ -5671,6 +6016,7 @@ function pathfinder(op) {
     try {
       const its = subs.map(s => { const c = new sc.CompoundPath({ pathData:vecD(s), insert:false }); c.closed = true; return c; });
       acc = its[0]; for (const c of its.slice(1)) acc = acc[def[3]](c, { insert:false });
+      if (its.length === 1) acc = acc.unite(new sc.Path({ insert:false }), { insert:false }); // uma forma só: junta as partes dela (letras do texto em vetor)
       d = acc.pathData;
     } catch (e) { console.warn(e); bad = true; }
     sc.project.clear();
@@ -5698,8 +6044,8 @@ function pathfinderSec() {
   const ls = pfTargets(); if (!ls.length) return null;
   const many = ls.length > 1;
   return h('section', { class:'sec' }, [h('h3', {}, ['Pathfinder', h('small', { text:many ? `${ls.length} formas` : 'uma forma' })]),
-    h('div', { class:'pfrow' }, PF_OPS.map(([op, t, key,, ic]) => h('button', { class:'btn small', title:`${t} (${key})`, disabled:op !== 'flatten' && !many || null, onclick:() => pathfinder(op), html:`${ic}<span>${t}</span>` }))),
-    h('p', { class:'hint', text:'Junta as formas em uma só, em curvas de verdade. Subtrair tira as de cima da de baixo. O resultado fica com o estilo da forma de baixo.' })]);
+    h('div', { class:'pfrow' }, PF_OPS.map(([op, t, key,, ic]) => h('button', { class:'btn small', title:`${t} (${key})`, disabled:op !== 'flatten' && op !== 'union' && !many || null, onclick:() => pathfinder(op), html:`${ic}<span>${t}</span>` }))),
+    h('p', { class:'hint', text:'Junta as formas em uma só, em curvas de verdade. Com uma forma só, Unir junta as partes dela (letras do texto em vetor). Subtrair tira as de cima da de baixo. O resultado fica com o estilo da forma de baixo.' })]);
 }
 const AL = (d, r) => `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="${d}"/>${r}</svg>`;
 const rc = (x, y, w, hh) => `<rect x="${x}" y="${y}" width="${w}" height="${hh}" rx=".7"/>`;
@@ -5719,7 +6065,9 @@ function beginScaleSel() {
   const x0 = Math.min(...its.map(o => o._bounds.x)), y0 = Math.min(...its.map(o => o._bounds.y));
   const cx = (x0 + Math.max(...its.map(o => o._bounds.x + o._bounds.w))) / 2, cy = (y0 + Math.max(...its.map(o => o._bounds.y + o._bounds.h))) / 2;
   const items = its.map(o => ({ o, s0:size0(o), ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2 })), fl = flowScale(ls);
-  return f => { for (const q of items) { scaleAny(q.o, q.s0, f); setPos(q.o, +((cx + (q.ox - cx) * f) / W()).toFixed(4), +((cy + (q.oy - cy) * f) / H()).toFixed(4)); } fl(f); needs = true; };
+  // quem respeita a margem não passa dela (o desenho encolhe, mas o tamanho gravado cresceria): a escala para no maior que ainda cabe
+  const M = marginBox(), fmax = M ? Math.min(Infinity, ...its.filter(o => !freeType(o) && !inFlow(o)).map(o => { const n = natBox(o); return Math.max(1, Math.min((M.x1 - M.x0) / Math.max(n.w, 1), (M.y1 - M.y0) / Math.max(n.h, 1))); })) : Infinity;
+  return f => { f = Math.min(f, fmax); for (const q of items) { scaleAny(q.o, q.s0, f); setPos(q.o, +((cx + (q.ox - cx) * f) / W()).toFixed(4), +((cy + (q.oy - cy) * f) / H()).toFixed(4)); } fl(f); needs = true; };
 }
 function scaleBar() {
   const rng = h('input', { type:'range', min:25, max:300, step:1, value:100, 'aria-label':'Escala da seleção' }), out = h('output', { text:'100%' });
@@ -5839,8 +6187,7 @@ function parentBox(gid) {
   const r = flowOf(gid) && flowNow(gid);
   if (r && r.box) { const b = r.box; return { x:b.x0, y:b.y0, w:b.x1 - b.x0, h:b.y1 - b.y0 }; }
   const bs = gleaves(gid).filter(o => o.visible && o._bounds && phase(o, T)).map(o => o._bounds); if (bs.length < 2) return null;
-  const x0 = Math.min(...bs.map(b => b.x)), y0 = Math.min(...bs.map(b => b.y));
-  return { x:x0, y:y0, w:Math.max(...bs.map(b => b.x + b.w)) - x0, h:Math.max(...bs.map(b => b.y + b.h)) - y0 };
+  return unionBox(bs);
 }
 // puxa a alça do frame: o lado puxado vira tamanho fixo (o oposto fica parado; Alt = o centro) e o conteúdo se alinha dentro
 // menor tamanho do frame: o do conteúdo (px do formato aberto) => { w, h }
@@ -5856,7 +6203,7 @@ function flowResize(D, ex, ey, alt) {
     if (alt) { const c = (b[k0] + b[k1]) / 2, hw = Math.max(mn / 2, Math.abs(e - c)); b[k0] = c - hw; b[k1] = c + hw; }
     else if (d > 0) b[k1] = Math.max(b[k0] + mn, e); else b[k0] = Math.min(b[k1] - mn, e);
   };
-  const M = marginBox(); // texto, logo e botão dentro do frame não passam da margem: a caixa para nela em vez de empurrar o conteúdo
+  const M = marginAt((D.B0.x0 + D.B0.x1) / 2); // texto, logo e botão dentro do frame não passam da margem: a caixa para nela em vez de empurrar o conteúdo
   const lock = M && its.some(i => i.L.type !== 'group' && !freeType(i.L));
   const cap = (k0, k1, lo, hi, mn) => { if (b[k1] > hi && D.B0[k1] <= hi + .5) b[k1] = Math.max(hi, b[k0] + mn); if (b[k0] < lo && D.B0[k0] >= lo - .5) b[k0] = Math.min(lo, b[k1] - mn); };
   if (D.hx) { pull(ex, 'x0', 'x1', D.hx, lim.w); if (lock) cap('x0', 'x1', M.x0, M.x1, lim.w); F.w = Math.round((b.x1 - b.x0) / kk); }
@@ -6001,13 +6348,18 @@ function flowGaps() {
 // espaços da coluna do quadro (nada selecionado): entre as linhas que estão na tela agora
 function frameGaps() {
   const fr = RT.frameRows; if (!fr || !fr.rows.length) return [];
-  const on = fr.rows.filter(r => r.sp.some(([a, b]) => T >= a - 1e-6 && T <= b + 1e-6)).sort((p, q) => p.Y - q.Y), out = [];
-  for (let j = 1; j < on.length; j++) {
-    const a = on[j - 1], b = on[j], s0 = a.Y + a.H, s1 = b.Y; if (s1 < s0 - 1) continue;
-    let c0 = Math.max(a.cl, b.cl) + 0, c1 = Math.min(a.cr, b.cr);
-    c0 += (a.dx + b.dx) / 2; c1 += (a.dx + b.dx) / 2;
-    if (c1 - c0 < 40) { c0 = Math.min(a.cl + a.dx, b.cl + b.dx); c1 = Math.max(a.cr + a.dx, b.cr + b.dx); }
-    out.push({ gid:null, v:true, s0, s1, c0, c1, n:Math.round(fr.gaps.get(b) ?? (S.flow.auto ? s1 - s0 : S.flow.gap ?? 24)) }); // o espaço que valeu (diminui quando não cabe)
+  // carrossel: o tempo de cada linha vem somado ao slide (frameSolve, 1e4 por slide); os espaços são entre linhas do mesmo slide
+  const off = a => Math.round(a / 1e4) * 1e4, out = [], seen = new Set();
+  for (const k of new Set(fr.rows.flatMap(r => r.sp.map(([a]) => off(a))))) {
+    const on = fr.rows.filter(r => r.sp.some(([a, b]) => off(a) === k && T + k >= a - 1e-6 && T + k <= b + 1e-6)).sort((p, q) => p.Y - q.Y);
+    for (let j = 1; j < on.length; j++) {
+      const a = on[j - 1], b = on[j], s0 = a.Y + a.H, s1 = b.Y, pk = fr.rows.indexOf(a) + ':' + fr.rows.indexOf(b);
+      if (s1 < s0 - 1 || seen.has(pk)) continue; seen.add(pk);
+      let c0 = Math.max(a.cl, b.cl) + 0, c1 = Math.min(a.cr, b.cr);
+      c0 += (a.dx + b.dx) / 2; c1 += (a.dx + b.dx) / 2;
+      if (c1 - c0 < 40) { c0 = Math.min(a.cl + a.dx, b.cl + b.dx); c1 = Math.max(a.cr + a.dx, b.cr + b.dx); }
+      out.push({ gid:null, v:true, s0, s1, c0, c1, n:Math.round(fr.gaps.get(b) ?? (S.flow.auto ? s1 - s0 : S.flow.gap ?? 24)) }); // o espaço que valeu (diminui quando não cabe)
+    }
   }
   return out;
 }
@@ -6025,8 +6377,8 @@ function frameToggle() {
   const pos = gs.filter(g => g > 0).sort((p, q) => p - q), M = marginBox() || { x0:0, y0:0, x1:W(), y1:H() };
   const top = Math.min(...rows.map(r => r.ct)), bot = Math.max(...rows.map(r => r.ct + r.H)), mid = ((top + bot) / 2 - M.y0) / (M.y1 - M.y0);
   // na horizontal: quase no centro (ou quase encostado numa margem) já conta; com 10px de tolerância um botão um pouco torto deixava tudo em "Manter" e era preciso alinhar à mão
-  const tol = (M.x1 - M.x0) * .06, near = f => rows.every(r => Math.abs(f(r)) < tol);
-  const align = near(r => (r.cl + r.cr - M.x0 - M.x1) / 2) ? 'center' : near(r => r.cl - M.x0) ? 'start' : near(r => r.cr - M.x1) ? 'end' : 'keep';
+  const tol = (M.x1 - M.x0) * .06, near = f => rows.every(r => Math.abs(f(r, areaAt((r.cl + r.cr) / 2))) < tol); // carrossel: a margem do slide da linha
+  const align = near((r, M) => (r.cl + r.cr - M.x0 - M.x1) / 2) ? 'center' : near((r, M) => r.cl - M.x0) ? 'start' : near((r, M) => r.cr - M.x1) ? 'end' : 'keep';
   S.flow = { gap:pos.length ? Math.round(pos[pos.length >> 1]) : 40, auto:false, pin:mid < .4 ? 'start' : mid > .6 ? 'end' : 'center', align };
   changed({ props:true });
   toast(`Layout do quadro: coluna com ${S.flow.gap}px entre os blocos`, 3600, UNDO_ACT);
@@ -6066,7 +6418,7 @@ function frameFlowSec() {
   return sec;
 }
 function flowGapAt(pt) {
-  const px = W() / (cv.getBoundingClientRect().width || 1), m = 6 * px;
+  const px = FW() / (cv.getBoundingClientRect().width || 1), m = 6 * px;
   return flowGaps().find(g => { const a = g.v ? pt.y : pt.x, c = g.v ? pt.x : pt.y, mid = (g.s0 + g.s1) / 2, hw = Math.max(Math.abs(g.s1 - g.s0) / 2, m);
     return a >= mid - hw && a <= mid + hw && c >= g.c0 && c <= g.c1; }) || null;
 }
@@ -6119,8 +6471,8 @@ function makeBase(k) {
     const p = snap.get(k).get(L.id), f = (L.fpos && L.fpos[k]) || {};
     L.x = +p.x.toFixed(5); L.y = +p.y.toFixed(5);
     if (Math.abs(p.k - 1) > 1e-3) scaleLayer(L, size0(L), p.k);
-    if (p.ww != null && (L.type === 'image' || L.type === 'shape')) L.size = +clamp(p.ww / W(), .03, SZ_MAX).toFixed(4);
-    if (p.hh != null && (L.type === 'image' || L.type === 'shape')) L.mh = +clamp(p.hh / W(), .03, MH_MAX).toFixed(4);
+    if (p.ww != null && (L.type === 'image' || L.type === 'shape')) L.size = +clamp(p.ww / W(), SZ_MIN, SZ_MAX).toFixed(4);
+    if (p.hh != null && (L.type === 'image' || L.type === 'shape')) L.mh = +clamp(p.hh / W(), SZ_MIN, MH_MAX).toFixed(4);
     for (const key of ['ix', 'iy', 'zoom']) if (f[key] != null) L[key] = f[key];
     if (L.fpos) { delete L.fpos[k]; if (!Object.keys(L.fpos).length) delete L.fpos; }
   }
@@ -6140,7 +6492,11 @@ function renderFormats() {
   const bf = baseFmt(), any = hasContent();
   for (const [k, f] of Object.entries(FORMATS)) box.append(h('button', { 'aria-pressed':String(S.format === k), class:any && k === bf ? 'base' : null, text:f.label, onclick:() => setFormat(k), ondblclick:() => makeBase(k),
     title:!any ? null : k === bf ? 'Formato principal: os outros se reorganizam a partir dele' : `Reorganizado a partir do ${fmtLabel(bf)}. O que você mover aqui fica só neste formato. Clique duplo: tornar principal` }));
-  $('#dur').value = S.duration;
+  $('#dur').value = S.still ? 0 : S.duration; $('#slides').value = slides();
+  // imagem estática: some tudo que é de vídeo (CSS em .app.still)
+  $('#app').classList.toggle('still', !!S.still);
+  $('#export').textContent = S.still ? 'Exportar PNG' : 'Exportar MP4';
+  $('#export').title = S.still ? 'Salvar a imagem em PNG (Ctrl+Shift+E)' : 'Exportar o vídeo (Ctrl+Shift+E)';
   const fs = $('#fps'); if (!fs.options.length) FPS_OPTS.forEach(f => fs.append(h('option', { value:f, text:f }))); fs.value = fps();
   { const m = marginSides(); $('#mOn').checked = m.on; [['mT', 'top'], ['mR', 'right'], ['mB', 'bottom'], ['mL', 'left']].forEach(([id, k]) => { $('#' + id).value = m[k]; $('#' + id).disabled = !m.on; });
     $('#mSum').textContent = m.on ? `${m.top} · ${m.right} · ${m.bottom} · ${m.left}` : 'desligada'; }
@@ -6268,7 +6624,7 @@ function layerCell(L, where) {
   const el = h('div', { class:(list ? 'layer' : 'tl-nm') + ' lcell' + (list ? (L.visible ? '' : ' off') + (L.locked ? ' locked' : '') + (L.grp ? ' ingrp' : '') : ''),
     title:list ? null : 'Clique duas vezes para renomear. Arraste para reordenar', onclick:e => clickOrRename(L, where, e) }, [
     h('span', { class:'dot', style:`background:${TYPE_COLOR[typeKey(L)]}` }),
-    h('span', { class:'lnm', title:list ? 'Clique duas vezes para renomear. Arraste para reordenar' : null }, [L.name, bg ? null : h('small', { text:`${L.start.toFixed(1)}s` })]),
+    h('span', { class:'lnm', title:list ? 'Clique duas vezes para renomear. Arraste para reordenar' : null }, [L.name, bg || S.still ? null : h('small', { text:`${L.start.toFixed(1)}s` })]),
     h('div', { class:'acts' }, [
       bg ? null : actBtn('Subir', ICONS.up, () => move(i, 1)),
       bg ? null : actBtn('Descer', ICONS.down, () => move(i, -1)),
@@ -6476,7 +6832,7 @@ function intoFrame(gid, ls) {
   try {
     const box = groupBox(gid, vis); ensureBounds(ls, true);
     const bs = ls.map(l => l._bounds).filter(Boolean); if (!box || !bs.length) return;
-    const ux = Math.min(...bs.map(b => b.x)), uy = Math.min(...bs.map(b => b.y)), uw = Math.max(...bs.map(b => b.x + b.w)) - ux, uh = Math.max(...bs.map(b => b.y + b.h)) - uy;
+    const { x:ux, y:uy, w:uw, h:uh } = unionBox(bs);
     const gap = F.auto ? 24 : F.gap ?? 24, al = (o, s, bo, bs_) => F.align === 'start' ? bo - o : F.align === 'end' ? bo + bs_ - o - s : bo + bs_ / 2 - o - s / 2;
     const v = F.dir !== 'h', dx = v ? al(ux, uw, box.x, box.w) : box.x + box.w + gap - ux, dy = v ? box.y + box.h + gap - uy : al(uy, uh, box.y, box.h);
     for (const L of ls) {
@@ -6487,6 +6843,11 @@ function intoFrame(gid, ls) {
     ls.forEach(l => { if (l._ff) l.flowFree = l._ff; else delete l.flowFree; delete l._ff; });
     RT.frameNo++;
   }
+}
+// carrossel: leva camadas do slide s0 para o s (x anda slides inteiros, também nos ajustes por formato)
+function toSlide(ls, s0, s) {
+  const d = s - s0; if (!d) return;
+  for (const l of ls) { l.x = +((+l.x || 0) + d).toFixed(5); if (l.fpos) for (const f of Object.values(l.fpos)) if (f && f.x != null) f.x = +(f.x + d).toFixed(5); }
 }
 function pasteLayers(p) {
   const src = (p && Array.isArray(p.layers) ? p.layers : []).filter(o => o && o.type && o.type !== 'bg');
@@ -6514,6 +6875,8 @@ function pasteLayers(p) {
     if (c.src) getImage(c.src);
     S.layers.push(c); out.push(c);
   }
+  // carrossel: Meus elementos entram no slide atual; colado que cairia depois do último slide (veio de um carrossel maior) também
+  if (!fr) { const s0 = Math.floor(clamp(Math.min(...out.map(l => +l.x || 0)), 0, 1e3)); if (p.here || s0 >= slides()) toSlide(out, s0, curSlide()); }
   if (fr) intoFrame(fr, out);
   RT.picks = new Set(out.map(l => l.id)); RT.selected = out[out.length - 1].id;
   if (fontsAdded) renderBrand();
@@ -6539,11 +6902,12 @@ function openMenu(ev, L) {
   const i = S.layers.indexOf(L), isBg = L.type === 'bg';
   const item = (text, fn, o = {}) => h('button', { class:o.danger ? 'danger' : null, disabled:o.off || null, onclick:() => { closeMenu(); fn(); } }, [h('span', { text }), o.kbd ? h('kbd', { text:o.kbd }) : null]);
   const m = h('div', { class:'ctx', role:'menu' }, [
-    item('Ir para este elemento', () => seekLayer(L), { off:isBg }),
-    item('Ver a entrada', () => previewIn(L), { off:isBg }),
-    item('Entrar na agulha', () => markAt('start'), { off:isBg, kbd:'I' }),
-    item('Sair na agulha', () => markAt('end'), { off:isBg, kbd:'O' }),
-    h('hr'),
+    ...(S.still ? [] : [ // imagem estática: sem tempo
+      item('Ir para este elemento', () => seekLayer(L), { off:isBg }),
+      item('Ver a entrada', () => previewIn(L), { off:isBg }),
+      item('Entrar na agulha', () => markAt('start'), { off:isBg, kbd:'I' }),
+      item('Sair na agulha', () => markAt('end'), { off:isBg, kbd:'O' }),
+      h('hr')]),
     item('Renomear', () => renameLayer(L), { off:isBg }),
     item('Copiar', () => document.execCommand('copy'), { off:isBg, kbd:'Ctrl+C' }),
     item('Duplicar', () => duplicateLayer(L), { off:isBg, kbd:'Ctrl+D' }),
@@ -6555,7 +6919,11 @@ function openMenu(ev, L) {
     item('Trazer para frente', () => move(i, 1), { off:isBg || i >= S.layers.length - 1, kbd:'Ctrl+]' }),
     item('Enviar para trás', () => move(i, -1), { off:isBg || i <= 1, kbd:'Ctrl+[' }),
     h('hr'),
-    item('Salvar este quadro (PNG)', saveFramePng),
+    item('Converter em vetor', vectorize, { off:isBg || !(L.type === 'text' || canOutline(L)), kbd:'Ctrl+Shift+O' }),
+    item('Salvar seleção (PNG)', () => saveFramePng(), { off:isBg }),
+    item('Salvar seleção (SVG)', () => exportSvg(), { off:isBg }),
+    item('Salvar quadro todo (PNG)', () => saveFramePng('frame')),
+    item('Salvar quadro todo (SVG)', () => exportSvg('frame')),
     h('hr'),
     item('Apagar', () => deleteLayer(L), { danger:true, off:isBg, kbd:'Del' }),
   ]);
@@ -6941,18 +7309,20 @@ function tlDrag(e, L, bar, mode) {
 }
 /* ------------ painéis: esconder as colunas e a barra de cima (botões no transporte, ao lado do da timeline);
    Ctrl + \ esconde tudo e deixa só o palco, como no Figma (pedido do usuário). Cada painel fica salvo no navegador; o "tudo" não. ------------ */
-const PANES = (() => { try { const o = JSON.parse(localStorage.getItem('mola-panes')); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } })(); // { left, top, right }: false = escondido
+const PANES = (() => { try { const o = JSON.parse(localStorage.getItem('mola-panes')); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } })(); // { left, top, right, bottom }: false = escondido
 let uiOff = false;
 function panesApply() {
   const app = $('#app');
-  for (const k of ['left', 'top', 'right']) { app.classList.toggle('no-' + k, PANES[k] === false); $('#p-' + k).setAttribute('aria-pressed', String(PANES[k] !== false)); }
+  for (const k of ['left', 'top', 'right', 'bottom']) { app.classList.toggle('no-' + k, PANES[k] === false); $('#p-' + k).setAttribute('aria-pressed', String(PANES[k] !== false)); }
+  $('#botBack').hidden = uiOff || PANES.bottom !== false;
   app.classList.toggle('no-ui', uiOff); $('#uiBack').hidden = !uiOff;
 }
 function paneToggle(k) { PANES[k] = PANES[k] === false; try { localStorage.setItem('mola-panes', JSON.stringify(PANES)); } catch (e) {} panesApply(); }
 function uiToggle(v = !uiOff) { uiOff = v; closeMenu(); closePicker(); panesApply(); }
 // algo precisa do painel (editar o texto pelo palco, buscar animação, renomear): ele volta
 function paneShow(k) { if (uiOff) uiToggle(false); if (PANES[k] === false) paneToggle(k); }
-['left', 'top', 'right'].forEach(k => { $('#p-' + k).onclick = () => paneToggle(k); });
+['left', 'top', 'right', 'bottom'].forEach(k => { $('#p-' + k).onclick = () => paneToggle(k); });
+$('#botBack').onclick = () => paneToggle('bottom');
 $('#pAll').onclick = () => uiToggle(true);
 $('#uiBack').onclick = () => uiToggle(false);
 panesApply();
@@ -6970,7 +7340,7 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
   // o número ao lado também é digitável; a escala da exibição (×100 em %, ×1 no resto) sai do próprio formato
   const num = v => parseFloat(String(fmt(v)).replace(',', '.'));
   let ref = max; if (!isFinite(num(ref))) ref = (min + max) / 2; if (!ref || !isFinite(num(ref))) ref = min + step;
-  const scale = 10 ** Math.round(Math.log10(Math.abs(num(ref) / ref) || 1));
+  const scale = opts.scale || 10 ** Math.round(Math.log10(Math.abs(num(ref) / ref) || 1));
   const unit = (String(fmt(ref)).match(/[^\d.,\s-]+$/) || [''])[0];
   // posição: a do formato aberto (fora do principal, o ajuste vale só nele)
   const isPos = k === 'x' || k === 'y', val = () => isPos ? posOf(L)[k] : L[k];
@@ -6986,9 +7356,9 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
     }
     for (const o of (['start', 'end'].includes(k) ? [L] : ['inSpeed', 'inInt', 'outSpeed', 'outInt', 'idleSpeed', 'idleInt', 'opacity', 'lblur', 'bblur'].includes(k) ? peersAny(L) : peersOf(L))) o[k] = v; if (opts.layout) RT.layout.clear(); if (opts.onInput) opts.onInput(); changed(); };
   inp.addEventListener('pointerdown', pushUndo);
-  inp.addEventListener('input', () => { set(parseFloat(inp.value)); out.value = fmt(val()); });
+  inp.addEventListener('input', () => { set(Math.max(parseFloat(inp.value), opts.low ?? -Infinity)); out.value = fmt(val()); });
   if (opts.after) inp.addEventListener('change', opts.after);
-  const shown = () => { const v = val() ?? max; return +(v * scale).toFixed(Math.max(0, -Math.floor(Math.log10(step * scale)) + 1)); };
+  const shown = () => { const v = val() ?? max; return +(v * scale).toFixed(opts.dec ?? Math.max(0, -Math.floor(Math.log10(step * scale)) + 1)); };
   out.addEventListener('focus', () => { out.value = String(shown()).replace('.', ','); out.select(); });
   const apply = () => {
     const raw = parseFloat(out.value.replace(',', '.').replace(/[^\d.-]/g, ''));
@@ -7012,6 +7382,17 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
   out.addEventListener('blur', () => { if (out.dataset.skip) { delete out.dataset.skip; out.value = fmt(val()); return; } apply(); });
   out.title = `Digite o valor${unit && unit !== 'pílula' ? ' em ' + unit : ''}. Setas ↑↓ ajustam, Shift vai de 10 em 10.`;
   return field(label, h('div', { class:'rng' }, [inp, out]), id);
+}
+// largura/altura guardadas em fração da largura do quadro; o painel mostra em % ou px (escolha vale para todos os campos, fora de `S`)
+let SZ_UNIT = (() => { try { return localStorage.getItem('mola-szunit') === 'px' ? 'px' : '%'; } catch (e) { return '%'; } })();
+function sizeF(L, k, label, min, max, step, opts = {}) {
+  const px = SZ_UNIT === 'px';
+  const f = px ? rangeF(L, k, label, min, max, 1 / W(), v => Math.round(v * W()) + 'px', { ...opts, scale:W(), dec:0 })
+    : rangeF(L, k, label, min, max, step, v => Math.round(v * 100) + '%', opts);
+  f.classList.add('flowgap');
+  f.append(h('button', { type:'button', class:'btn small flow-auto', 'aria-pressed':String(px), text:'px', title:px ? 'Mostrar em % da largura do quadro' : 'Mostrar em pixels do vídeo',
+    onclick:() => { SZ_UNIT = px ? '%' : 'px'; try { localStorage.setItem('mola-szunit', SZ_UNIT); } catch (e) {} renderProps(); } }));
+  return f;
 }
 // aceita "#1a2b3c", "1a2b3c", "abc", "#ABC", "#1a2b3c80", "rgb(1, 42, 28)", "rgba(1, 42, 28, .5)";
 // devolve "#rrggbb" (ou "#rrggbbaa" se vier com opacidade) ou null
@@ -7455,6 +7836,7 @@ function presetSearch(box) {
 // tecla /: abre a aba Animação e põe o cursor na lupa
 function findPreset() {
   const L = selL(); if (!L || L.type === 'bg') { toast('Selecione um elemento para buscar a animação'); return; }
+  if (S.still) { toast('Imagem estática não tem animação. Digite uma duração para voltar ao vídeo'); return; }
   if (propTab !== 'anim') { propTab = 'anim'; renderProps(); }
   paneShow('right');
   const i = $('#presetQ'); if (i) { i.focus(); i.select(); }
@@ -7568,7 +7950,8 @@ function renderProps() {
 
   const tabs = h('div', { class:'tabs', role:'tablist' }, [['anim', 'Animação'], ['style', 'Conteúdo e estilo']].map(([k, t]) =>
     h('button', { role:'tab', 'aria-selected':String(propTab === k), text:t, onclick:() => { propTab = k; renderProps(); } })));
-  head.append(tabs);
+  if (S.still) propTab = 'style'; // imagem estática: sem animação
+  else head.append(tabs);
   // como no Figma: o nome e as abas ficam sempre no topo; alinhar, tamanho da seleção e layout automático são do conteúdo e estilo
   if (propTab !== 'anim') box.append(...[alignBar(), pathfinderSec(), pickedLayers().length > 1 ? scaleBar() : null, flowSec()].filter(Boolean));
 
@@ -7630,21 +8013,25 @@ function groupAnimSecs(gid, head, box) {
       ...rhythm('out', .4, 6, () => seekOut(G))]),
   ];
 }
-// aba "Conteúdo e estilo" do grupo inteiro: opacidade, mesclagem, sombra e desfoque do conjunto (por fora da de cada item, que continua como está)
+// opacidade, mesclagem, sombra e desfoque: iguais em toda camada, no grupo e na seleção mista (um lugar só)
+const lookFields = L => [rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'), ...blendF(L), ...fxFields(L)];
+// aba "Conteúdo e estilo" do grupo inteiro: rotação, opacidade, mesclagem, sombra e desfoque do conjunto (por fora da de cada item, que continua como está)
 function groupStyleSecs(gid) {
   const G = gview(gid); G.opacity ??= 1;
   return [h('section', { class:'sec' }, [h('h3', { text:'Aparência do grupo' }),
     h('p', { class:'hint', text:'Vale para o conjunto inteiro, sem mexer nos itens. Cada item pode ter a própria sombra por dentro.' }),
-    rangeF(G, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'), ...blendF(G), ...fxFields(G)])];
+    rotF(G), ...lookFields(G)])];
 }
+// rotação em graus: a forma e o grupo inteiro (também se giram pela quina no palco)
+const rotF = L => rangeF(L, 'rot', 'Rotação', -180, 180, 1, v => Math.round(v) + '°');
 function syncPosFields(L) {
   const p = posOf(L);
   ['x', 'y'].forEach(k => { const i = document.getElementById(fid(L, k)); if (i) { i.value = p[k]; const o = i.parentElement.querySelector('.num'); if (o && document.activeElement !== o) o.value = Math.round(p[k] * 100) + '%'; } });
   const n = document.getElementById(fid(L, 'fpos')), nn = posNote(L); if (n && nn) n.replaceWith(nn);
 }
 function posFields(L) {
-  const pos = { low:POS_LO, cap:POS_HI }; // digitado pode ir além da barra (elemento fora do palco)
-  return [rangeF(L, 'x', 'Horizontal', 0, 1, .005, v => Math.round(v * 100) + '%', pos), rangeF(L, 'y', 'Vertical', 0, 1, .005, v => Math.round(v * 100) + '%', pos), posNote(L)];
+  const pos = { low:POS_LO, cap:POS_HI }, posX = { low:POS_LO, cap:posHi() }; // digitado pode ir além da barra (elemento fora do palco)
+  return [rangeF(L, 'x', 'Horizontal', 0, slides(), .005, v => Math.round(v * 100) + '%', posX), rangeF(L, 'y', 'Vertical', 0, 1, .005, v => Math.round(v * 100) + '%', pos), posNote(L)];
 }
 // fora do formato principal: de onde vem a posição e como voltar ao automático
 function posNote(L) {
@@ -7661,12 +8048,11 @@ function styleProps(L) {
   if (peersAny(L).some(o => o.type !== L.type)) {
     put(h('h3', { text:'Aparência' }),
       h('p', { class:'hint', text:`${peersAny(L).length} elementos de tipos diferentes: aqui ficam só as opções em comum. Escolha um tipo só para ver as demais.` }),
-      rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'),
-      ...blendF(L), ...fxFields(L));
+      ...lookFields(L));
     return sec;
   }
   // em todos os tipos: Posição (alignBar, no topo) → conteúdo → Aparência (opacidade, mesclagem, sombra, desfoque) → Contorno
-  const look = () => [h('h3', { text:'Aparência' }), rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'), ...blendF(L), ...fxFields(L)];
+  const look = () => [h('h3', { text:'Aparência' }), ...lookFields(L)];
   if (L.type === 'text') {
     put(h('h3', { text:'Texto' }), richF(L, 'Texto (Enter quebra a linha)'), fontF(L),
       selectF(L, 'weight', 'Peso do texto', WEIGHTS.map(([v, t]) => [v, `${t} ${v}`]), { num:true, props:true }),
@@ -7685,6 +8071,7 @@ function styleProps(L) {
       })(),
       segF(L, 'align', 'Alinhamento', [['left', 'Esq.'], ['center', 'Centro'], ['right', 'Dir.']]),
       h('div', { class:'checks' }, [checkF(L, 'upper', 'Caixa alta'), checkF(L, 'italic', 'Itálico')]),
+      h('div', { class:'row' }, [h('button', { class:'btn small', text:'Converter em vetor', title:'Texto em curvas (Ctrl+Shift+O). Vira forma Vetor: não edita mais as letras, e a animação passa a ser do bloco', onclick:() => textToVector(peersOf(L).filter(o => o.type === 'text')) })]),
       ...strokeSecs(L),
       ...look());
   } else if (L.type === 'cta') {
@@ -7705,7 +8092,7 @@ function styleProps(L) {
     put(
       h('h3', { text:L.svg ? 'SVG' : 'Logo' }),
       h('p', { class:'hint', text:L.svg ? 'Este SVG é só desta camada. Tem as mesmas animações do logo.' : 'O arquivo do logo é trocado em Marca, na coluna da esquerda.' }),
-      rangeF(L, 'size', 'Tamanho', .04, .95, .005, v => Math.round(v * 100) + '%'),
+      sizeF(L, 'size', 'Tamanho', .04, .95, .005),
       checkF(L, 'tint', L.svg ? 'Pintar o SVG de uma cor só' : 'Pintar o logo de uma cor só'),
       L.tint ? colorF(L, 'tintColor', 'Cor') : null,
       L.tint ? h('p', { class:'hint', text:'Troca todas as cores do logo por esta. Serve para logo preto, branco ou de outra marca.' }) : null,
@@ -7730,12 +8117,12 @@ function styleProps(L) {
       k === 'custom' ? textF(L, 'd', 'Caminho SVG (atributo d do <path>)', true) : null,
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Editar pontos', title:k === 'custom' ? null : 'A forma vira vetor', onclick:() => vecEdit(L) }), h('button', { class:'btn small', text:'Desenhar com a caneta', onclick:() => penToolStart() })]),
       k === 'custom' ? h('p', { class:'hint', text:'Desenhe com a caneta (P) ou cole o d de qualquer path (Figma, Illustrator, Inkscape). Clique duplo no palco edita os pontos. Ele é vetorial: escala sem perder qualidade e "Desenhar traço" percorre o contorno.' }) : null,
-      rangeF(L, 'size', k === 'line' || k === 'custom' ? 'Tamanho' : 'Largura', .03, 1.6, .005, pct, { cap:SZ_MAX }),
-      resizable(L) ? rangeF(L, 'mh', 'Altura', .03, 2.6, .005, pct, { cap:MH_MAX }) : null,
+      sizeF(L, 'size', k === 'line' || k === 'custom' ? 'Tamanho' : 'Largura', 0, 1.6, .005, { low:SZ_MIN, cap:SZ_MAX }),
+      resizable(L) ? sizeF(L, 'mh', 'Altura', 0, 2.6, .005, { low:SZ_MIN, cap:MH_MAX }) : null,
       ...(k === 'rect' ? cornersF(L, px) : []),
       k === 'polygon' || k === 'star' ? rangeF(L, 'points', 'Pontas', 3, 12, 1, v => String(Math.round(v))) : null,
       k === 'star' ? rangeF(L, 'inner', 'Profundidade', .1, .95, .01, pct) : null,
-      rangeF(L, 'rot', 'Rotação', -180, 180, 1, v => Math.round(v) + '°'),
+      rotF(L),
       k !== 'line' ? h('h3', { text:'Preenchimento' }) : null);
     if (k !== 'line') fillProps(L, sec);
     put(...strokeSecs(L),
@@ -7757,8 +8144,8 @@ function styleProps(L) {
       ...mediaFields(L),
       h('h3', { text:'Máscara' }),
       field('Forma', maskSeg, null),
-      rangeF(L, 'size', masked(L) ? 'Largura' : 'Tamanho', .03, 1.6, .005, pct, { cap:SZ_MAX }),
-      masked(L) ? rangeF(L, 'mh', 'Altura', .03, 2.6, .005, pct, { cap:MH_MAX }) : null,
+      sizeF(L, 'size', masked(L) ? 'Largura' : 'Tamanho', 0, 1.6, .005, { low:SZ_MIN, cap:SZ_MAX }),
+      masked(L) ? sizeF(L, 'mh', 'Altura', 0, 2.6, .005, { low:SZ_MIN, cap:MH_MAX }) : null,
       ...(L.mask !== 'circle' ? cornersF(L, px) : []),
       // a imagem dentro da máscara (antes uma seção à parte)
       rangeF(L, 'zoom', 'Zoom', .2, 5, .01, v => v.toFixed(2) + '×'),
@@ -7799,7 +8186,8 @@ function strokeSecs(L) {
     on && dashes ? segF(L, 'strokeDash', 'Estilo', Object.entries(STROKE_STYLES)) : null,
     on && dashes && L.strokeDash !== 'solid' ? rangeF(L, 'strokeGap', 'Espaçamento', .4, 3, .05, v => v.toFixed(2) + '×') : null,
     on && dashes && L.strokeDash !== 'dot' ? segF(L, 'strokeCap', 'Pontas', [['round', 'Redonda'], ['butt', 'Reta'], ['square', 'Quadrada']]) : null,
-    on && !line && !round && t !== 'logo' ? segF(L, 'strokeJoin', 'Cantos', [['round', 'Redondo'], ['miter', 'Vivo'], ['bevel', 'Chanfro']]) : null];
+    on && !line && !round && t !== 'logo' ? segF(L, 'strokeJoin', 'Cantos', [['round', 'Redondo'], ['miter', 'Vivo'], ['bevel', 'Chanfro']]) : null,
+    on && canOutline(L) ? h('div', { class:'row' }, [h('button', { class:'btn small', text:'Contorno em vetor', title:'O contorno vira uma forma Vetor própria (Ctrl+Shift+O), como Outline stroke no Figma', onclick:() => outlineStroke(L) })]) : null];
 }
 // cor animada: o mesmo motor do fundo, também usado nas formas
 function fillProps(L, sec) {
@@ -7948,7 +8336,39 @@ $('#fps').addEventListener('change', e => { pushUndo(); S.fps = +e.target.value;
   addEventListener('pointerdown', e => { if (!pop.hidden && !e.target.closest('.mwrap')) show(false); });
   addEventListener('keydown', e => { if (e.key === 'Escape') show(false); });
 }
-$('#dur').addEventListener('change', e => { pushUndo(); setDuration(parseFloat(e.target.value) || S.duration); e.target.value = S.duration; });
+$('#dur').addEventListener('change', e => {
+  const v = parseFloat(String(e.target.value).replace(',', '.'));
+  if (v === 0) setStill(true);
+  else if (v > 0) {
+    pushUndo();
+    if (S.still) { delete S.still; RT.layout.clear(); renderFormats(); renderAdds(); toast('Vídeo de novo: as animações voltaram'); }
+    setDuration(v); changed({ props:true, layers:true });
+  }
+  e.target.value = S.still ? 0 : S.duration;
+});
+// Duração 0 = imagem estática: tudo aparece junto e parado, sem timeline, play nem animação. Nada se perde:
+// duração, tempos e animações das camadas ficam guardados e voltam ao digitar uma duração
+function setStill(on) {
+  if (!!S.still === on) return;
+  pushUndo(); pause();
+  if (on) S.still = true; else delete S.still;
+  if (on && propTab === 'anim') propTab = 'style';
+  RT.layout.clear(); renderFormats(); renderAdds(); changed({ props:true, layers:true });
+  toast(on ? 'Imagem estática: tudo aparece junto e parado. Digite uma duração para voltar ao vídeo' : 'Vídeo de novo: as animações voltaram', 4500, UNDO_ACT);
+}
+// carrossel: mais ou menos slides. Nada se mexe (x é em larguras de slide); o que fica depois do último slide só sai de vista
+function setSlides(v) {
+  const n = clamp(Math.round(+v || 1), 1, SLIDES_MAX), was = slides();
+  if (n === was) { renderFormats(); return; }
+  pushUndo();
+  if (n > 1) S.slides = n; else delete S.slides;
+  RT.slide = Math.min(RT.slide || 0, n - 1); RT.layout.clear();
+  renderFormats(); zoomFit(); changed({ props:true });
+  const out = S.layers.filter(l => l.type !== 'bg' && !NOBOX(l) && posOf(l).x >= n);
+  if (out.length) toast(`${out.length} elemento${out.length > 1 ? 's ficaram' : ' ficou'} depois do último slide, fora de vista`, 5000, UNDO_ACT);
+  else if (was === 1) toast(`Carrossel com ${n} slides. Clique num slide para adicionar nele; cada slide sai como um arquivo`, 5000);
+}
+$('#slides').addEventListener('change', e => setSlides(e.target.value));
 /* ------------ atalhos: mover, marcar tempo, selecionar ------------ */
 // setas: move a seleção 1 px do vídeo (Shift = 10). Passos seguidos viram um só no desfazer
 let nudgeT = null;
@@ -7967,6 +8387,7 @@ function nudge(dx, dy) {
 }
 // I / O: a seleção entra / sai no quadro da agulha. Se a agulha passou do outro lado, o elemento inteiro vai para lá
 function markAt(edge) {
+  if (S.still) return; // imagem: sem tempo
   const all = pickedLayers(); if (!all.length) { toast('Selecione um elemento para marcar a entrada ou a saída'); return; }
   const ls = all.filter(l => !l.locked); if (!ls.length) { lockedNote(all); return; }
   pushUndo();
@@ -8026,6 +8447,7 @@ document.addEventListener('keydown', e => {
     else if (k === 'h' && e.shiftKey) { e.preventDefault(); toggleVisible(); }
     else if (k === 'l' && e.shiftKey) { e.preventDefault(); toggleLock(); }
     else if (k === 'e' && e.shiftKey) { e.preventDefault(); exportVideo(); }
+    else if (k === 'o' && e.shiftKey) { e.preventDefault(); vectorize(); }
     else if (e.key === '\\') { e.preventDefault(); uiToggle(); } // como no Figma: esconde ou mostra todos os painéis
     else if (e.key === ']' || e.key === '}' || e.key === '[' || e.key === '{') { e.preventDefault(); restack(selL(), (e.key === ']' || e.key === '}' ? 1 : -1) * (e.shiftKey ? 2 : 1)); }
     return;
@@ -8063,8 +8485,8 @@ const KEYS = [
   ['Tempo do elemento', [['I', 'Entra na agulha'], ['O', 'Sai na agulha'], ['Clique duplo na barra', 'Leva a agulha até ele'], ['Shift ao arrastar', 'Desliga o ímã da timeline'], ['Esc ao arrastar', 'Cancela']]],
   ['Palco', [['← ↑ → ↓', 'Move 1 px (Shift: 10 px)'], ['Arrastar no vazio', 'Seleciona por área'], ['Shift + clique', 'Soma ou tira da seleção'], ['Ctrl + clique', 'Escolhe um item dentro do grupo'], ['Clique duplo / Enter', 'Edita o texto'], ['Ctrl ao arrastar', 'Desliga as guias'], ['Alt + arrastar imagem', 'Move a imagem na máscara'], ['Roda na imagem', 'Zoom na máscara'], ['Alças (8 pontos)', 'Cantos escalam; lados mudam largura, altura ou quebra do texto'], ['Alt ao puxar a alça', 'Escala a partir do centro'], ['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco'], ['Ctrl + \\', 'Esconde ou mostra todos os painéis'], ['P', 'Caneta (modos Caneta, Curvas e Mão livre no topo do palco)'], ['Shift + P', 'Caneta à mão livre'], ['Clique duplo na forma', 'Edita os pontos (qualquer forma vira vetor)'], ['Arrastar a linha', 'Curva o trecho (na edição de pontos)'], ['Clique duplo no ponto', 'Curva / canto']]],
   ['Editar', [['Ctrl + Z', 'Desfazer'], ['Ctrl + Shift + Z', 'Refazer'], ['Ctrl + C / X / V', 'Copiar, recortar, colar (vale entre arquivos)'], ['Ctrl + D', 'Duplicar'], ['Delete', 'Apagar'], ['Ctrl + A', 'Selecionar tudo'], ['Esc', 'Tirar a seleção / sair do texto'], ['/', 'Buscar animação']]],
-  ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Alt + Shift + U S I E', 'Pathfinder: unir, subtrair, interseção, excluir (formas)'], ['Ctrl + E', 'Pathfinder: achatar as formas em um vetor'], ['Shift + A', 'Layout automático (sem nada selecionado: o quadro todo)'], ['Arrastar o espaço rosa', 'Muda o espaço do layout'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear']]],
-  ['Arquivo', [['Ctrl + S', 'Salvar agora (já salva sozinho)'], ['Ctrl + Shift + S', 'Salvar cópia'], ['Ctrl + Shift + E', 'Exportar MP4'], ['Ctrl + V', 'Colar imagem ou SVG'], ['?', 'Este painel']]],
+  ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Alt + Shift + U S I E', 'Pathfinder: unir, subtrair, interseção, excluir (formas)'], ['Ctrl + E', 'Pathfinder: achatar as formas em um vetor'], ['Ctrl + Shift + O', 'Converter em vetor: texto em curvas e contorno em forma'], ['Shift + A', 'Layout automático (sem nada selecionado: o quadro todo)'], ['Arrastar o espaço rosa', 'Muda o espaço do layout'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear']]],
+  ['Arquivo', [['Ctrl + S', 'Salvar agora (já salva sozinho)'], ['Ctrl + Shift + S', 'Salvar cópia'], ['Ctrl + Shift + E', 'Exportar (MP4, ou PNG com Duração 0)'], ['Exportar PNG / Exportar SVG (transporte)', 'Com algo selecionado salva só a seleção; sem seleção, o quadro da agulha (SVG parado, com o texto em curvas)'], ['Ctrl + V', 'Colar imagem ou SVG'], ['?', 'Este painel']]],
 ];
 function showKeys(on) {
   const box = $('#keys');
@@ -8087,7 +8509,7 @@ const ADD_KINDS = [
   { id:'sub', label:'Subtítulo', gl:'<span style="font-size:13px">Aa</span>', mk:(B, F) => mkText('sub', { name:'Subtítulo', text:'Uma frase curta de apoio', font:F[1], weight:500, size:40, opacity:.82, y:.56, in:'blurChar' }) },
   { id:'kicker', label:'Chamada', gl:'<span style="font:700 9px var(--f-mono);letter-spacing:.2em">NOVO</span>', mk:(B, F) => mkText('kicker', { name:'Chamada', text:'NOVIDADE', font:F[1], weight:700, size:34, ls:.4, color:B.colors[2], y:.3, in:'track' }) },
   { id:'big', label:'Número', gl:'<b style="font-size:17px">%</b>', mk:(B, F) => mkText('big', { name:'Número grande', text:'-30%', font:F[2], weight:800, size:240, lh:1, y:.38, in:'counter', idle:'float' }) },
-  { id:'hl', label:'Destaque', gl:'<span style="background:var(--accent);color:var(--bg);padding:1px 4px;border-radius:2px;font-size:11px;font-weight:700">ab</span>', mk:(B, F) => mkText('offer', { name:'Destaque', text:'frete grátis hoje', font:F[1], weight:700, size:56, color:B.colors[0], hl:B.colors[2], y:.6, in:'highlight' }) },
+  { id:'hl', label:'Destaque', gl:'<span style="background:var(--muted);color:var(--bg);padding:1px 4px;border-radius:2px;font-size:11px;font-weight:700">ab</span>', mk:(B, F) => mkText('offer', { name:'Destaque', text:'frete grátis hoje', font:F[1], weight:700, size:56, color:B.colors[0], hl:B.colors[2], y:.6, in:'highlight' }) },
   { id:'impact', label:'Impacto', gl:'<b style="font-size:15px;font-weight:900">AA</b>', mk:(B, F) => mkText('k1', { name:'Frase de impacto', text:'Sem pressa.', font:F[2], weight:800, size:132, upper:true, lh:1, y:.5, in:'stamp' }) },
   { id:'image', label:'Imagem', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="18" height="14" rx="2"/><path d="M1 12l5-5 4 4 3-3 6 6"/><circle cx="14" cy="5" r="1.5"/></svg>', mk:() => mkImage({ y:.42, idle:'float' }) },
   { id:'logo', label:'Logo', gl:'<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="7.5"/><path d="M5 11c2-5 6-5 8 0"/></svg>', mk:() => { const pen = RT.logo && RT.logo.pen; const alone = !S.layers.some(l => l.type !== 'bg'); return mkLogo(alone ? 'logo' : 'logoSmall', { y:alone ? .42 : .12, size:alone ? .36 : .14, in:pen ? 'handwrite' : 'spring', inDur:pen ? BP.handwrite.dur : BP.spring.dur, idle:'shine' }); } },
@@ -8103,20 +8525,27 @@ function nextStart() {
   if (!els.length) return .2;
   return Math.min(Math.max(...els.map(l => l.start)) + .6, S.duration - .5);
 }
-// altura: a padrão do tipo, descendo se já houver algo ali ao mesmo tempo
-function freeY(y, st) {
-  const busy = S.layers.filter(l => l.type !== 'bg' && l.visible && l.start <= st + .1 && (l.end ?? S.duration) > st);
+// altura: a padrão do tipo, descendo se já houver algo ali ao mesmo tempo (no carrossel, só conta quem está no mesmo slide)
+function freeY(y, st, si = 0) {
+  const busy = S.layers.filter(l => l.type !== 'bg' && l.visible && (S.still || (l.start <= st + .1 && (l.end ?? S.duration) > st)) && (slides() < 2 || slideAt(l.x * W()) === si));
   const free = v => !busy.some(l => Math.abs(l.y - v) < .07);
   for (let k = 0; k <= 8; k++) for (const v of [y + k * .05, y - k * .05]) if (v >= .08 && v <= .9 && free(v)) return v;
   return y;
+}
+// carrossel: onde entra o que for adicionado = o slide do elemento escolhido, senão o último slide clicado no palco
+function curSlide() {
+  if (slides() < 2) return 0;
+  const L = selL(); if (L && L.type !== 'bg' && !NOBOX(L)) return slideAt(posOf(L).x * W());
+  return clamp(RT.slide || 0, 0, slides() - 1);
 }
 function addLayer(L, opts = {}) {
   pushUndo();
   // frame selecionado: entra nele, no mesmo tempo que ele (solto num ponto do palco continua onde caiu)
   const fr = opts.x == null ? insertTarget() : null, win = fr && gwin(fr);
-  const st = opts.start ?? (win ? win.start : nextStart());
+  const st = opts.start ?? (win ? win.start : S.still ? 0 : nextStart()); // imagem estática: o tempo todo (continua na tela se voltar ao vídeo)
   L.start = st; L.end = win ? win.end : S.duration;
-  if (opts.x != null) { L.x = opts.x; L.y = opts.y; setPos(L, opts.x, opts.y); } else L.y = freeY(L.y, st); // solto num ponto: fica nele também fora do principal
+  if (opts.x != null) { L.x = opts.x; L.y = opts.y; setPos(L, opts.x, opts.y); }
+  else { const si = fr ? 0 : curSlide(); if (si) L.x += si; L.y = freeY(L.y, st, si); } // solto num ponto: fica nele também fora do principal
   S.layers.push(L);
   if (fr) { intoFrame(fr, [L]); toast(`Entrou em "${groupName(fr)}"`); }
   select(L.id, !!fr); propTab = 'style'; renderProps(); changed({ layers:true }); seekLayer(L); RT.userSeek = false;
@@ -8124,12 +8553,15 @@ function addLayer(L, opts = {}) {
 }
 function renderAdds() {
   const box = $('#adds'); box.innerHTML = '';
-  for (const k of ADD_KINDS) box.append(h('button', { class:'add', title:'Adicionar ' + k.label.toLowerCase(), onclick:() => {
+  for (const k of ADD_KINDS) {
+    if (S.still && (k.id === 'camera' || k.id === 'fx')) continue; // imagem estática: câmera e transição não existem
+    box.append(h('button', { class:'add', title:'Adicionar ' + k.label.toLowerCase(), onclick:() => {
     if (k.add) { k.add(); return; }
     if (k.id === 'image') { $('#imgFile').click(); return; }
     if (k.id === 'svg') { $('#svgFile').click(); return; }
     addLayer(k.mk(S.brand, S.brand.fonts));
   } }, [h('span', { class:'gl', html:k.gl }), h('span', { text:k.label })]));
+  }
   // meus elementos: salvos pelo botão direito ("Salvar em Meus elementos"), valem para qualquer arquivo
   if (!MY_ELS.length) return;
   box.append(h('div', { class:'adds-sub', text:'Meus elementos' }));
@@ -8182,7 +8614,7 @@ $('#svgFile').addEventListener('change', e => { addImageFile(e.target.files[0]);
     e.preventDefault();
     if (isAud(f)) { setMusicFile(f); return; } // música vai para a trilha
     const r = $('#cv').getBoundingClientRect(), inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-    (isVid(f) ? addVideoFile : addImageFile)(f, inside ? { x:clamp((e.clientX - r.left) / r.width), y:clamp((e.clientY - r.top) / r.height) } : null);
+    (isVid(f) ? addVideoFile : addImageFile)(f, inside ? { x:clamp((e.clientX - r.left) / r.width) * slides(), y:clamp((e.clientY - r.top) / r.height) } : null);
   });
   document.addEventListener('paste', e => {
     const tag = (e.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable || overlayOpen()) return;
@@ -8495,7 +8927,7 @@ function renderAudio() {
 function audioRow() {
   const A = S.audio, cv2 = h('canvas', { class:'tl-wave' }), lane = h('div', { class:'tl-lane' }, [cv2]);
   lane.addEventListener('pointerdown', e => { if (!e.button) tlScrub(e); });
-  const nm = h('div', { class:'tl-nm', title:`${A.name} · ${A.bpm} bpm` }, [h('span', { class:'dot', style:'background:var(--accent)' }), h('span', { text:A.name })]);
+  const nm = h('div', { class:'tl-nm', title:`${A.name} · ${A.bpm} bpm` }, [h('span', { class:'dot', style:'background:var(--muted)' }), h('span', { text:A.name })]);
   requestAnimationFrame(() => drawWave(cv2, lane));
   return h('div', { class:'tl-row tl-audio' }, [nm, lane]);
 }
@@ -8503,12 +8935,12 @@ function drawWave(c, lane) {
   const A = S.audio, r = lane.getBoundingClientRect(), dpr = devicePixelRatio || 1; if (!A || !A.peaks || !r.width) return;
   c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
   const x = c.getContext('2d'), sk = audioSkip(), len = Math.max(.1, A.dur - sk), d = S.duration;
-  x.fillStyle = 'rgba(242,182,50,.35)';
+  x.fillStyle = uiA('sel', .35);
   for (let px = 0; px < c.width; px++) {
     const ts = sk + (px / c.width * d) % len, v = A.peaks[Math.floor(ts * 10)] || 0, hh = Math.max(dpr, v * c.height * .85);
     x.fillRect(px, (c.height - hh) / 2, 1, hh);
   }
-  x.fillStyle = 'rgba(242,182,50,.95)';
+  x.fillStyle = uiA('sel', .95);
   for (const b of beatTimes()) x.fillRect(Math.round(b / d * c.width), c.height - 5 * dpr, Math.max(1, dpr), 5 * dpr);
 }
 
@@ -8601,12 +9033,12 @@ async function loadElements() { MY_ELS = (await DB.get('elements')) || []; rende
 // miniatura: cada camada no seu quadro de repouso, recortada em volta
 function elementThumb(ls) {
   try {
-    const k = 200 / W(), c = document.createElement('canvas'); c.width = 200; c.height = Math.round(H() * k);
+    const k = 200 / W(), c = document.createElement('canvas'); c.width = Math.round(200 * slides()); c.height = Math.round(H() * k);
     const x = c.getContext('2d'), R = { rs:k, export:true };
     for (const L of S.layers) if (ls.includes(L) && !NOBOX(L)) { x.setTransform(k, 0, 0, k, 0, 0); x.globalAlpha = 1; x.filter = 'none'; try { if (L.type === 'text') drawText(x, L, restTime(L), R); else drawBlock(x, L, restTime(L), R); } catch (e) {} }
     const bs = ls.map(l => l._bounds).filter(Boolean); if (!bs.length) return null;
     const p = 20, x0 = Math.max(0, Math.min(...bs.map(b => b.x)) - p) * k, y0 = Math.max(0, Math.min(...bs.map(b => b.y)) - p) * k;
-    const x1 = Math.min(W(), Math.max(...bs.map(b => b.x + b.w)) + p) * k, y1 = Math.min(H(), Math.max(...bs.map(b => b.y + b.h)) + p) * k;
+    const x1 = Math.min(FW(), Math.max(...bs.map(b => b.x + b.w)) + p) * k, y1 = Math.min(H(), Math.max(...bs.map(b => b.y + b.h)) + p) * k;
     const sw = Math.max(1, x1 - x0), sh = Math.max(1, y1 - y0), f = 56 / Math.max(sw, sh), o = document.createElement('canvas');
     o.width = Math.max(1, Math.round(sw * f)); o.height = Math.max(1, Math.round(sh * f));
     o.getContext('2d').drawImage(c, x0, y0, sw, sh, 0, 0, o.width, o.height);
@@ -8627,7 +9059,7 @@ function addElement(el) {
     const toEnd = l.end == null || (p.dur && l.end >= p.dur - .01);
     l.start = (+l.start || 0) - s0 + st; l.end = toEnd ? null : l.end - s0 + st;
   }
-  p.dur = null;
+  p.dur = null; p.here = true; // no carrossel, entra no slide atual
   pasteLayers(p);
   const L = selL(); if (L) seekLayer(L); RT.userSeek = false;
   toast(`"${el.name}" adicionado`);
