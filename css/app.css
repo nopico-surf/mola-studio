@@ -1,10 +1,10 @@
 /* Layout: editor em três colunas — biblioteca (roteiros, marca, camadas) | palco com transporte | presets e propriedades da camada */
 :root{
-  --bg:#0C0C0D; --panel:#161617; --raised:#1F1F21; --raised-2:#29292B; --line:#2A2A2C; --line-2:#3B3B3E;
-  --fg:#DDDDDD; --muted:#9C9C9C; --faint:#6F6F6F;
-  /* interface neutra; o verde (--accent) só aparece onde há seleção ou foco */
+  --bg:#010409; --panel:#0D1117; --raised:#151B23; --raised-2:#212830; --line:#262C36; --line-2:#3D444D; /* Cinzas da marca: Noite, Fundo, Cartão, Elevado, Borda */
+  --fg:#D1D7E0; --muted:#9198A1; --faint:#656C76; /* Claro, Texto apagado, Neutro */
+  /* o verde (--accent) só aparece onde há seleção ou foco */
   --accent:#6A9C79; --accent-ink:#08150C; --accent-soft:rgba(106,156,121,.14);
-  --btn:#CBCBCB; --btn-ink:#141414; /* botão principal e avisos com ação */
+  --btn:#D1D7E0; --btn-ink:#0D1117; /* botão principal e avisos com ação */
   --sel:var(--accent); --sel-ink:var(--accent-ink); --sel-rgb:106,156,121; --margin-rgb:160,140,230; --frame-rgb:122,160,230; /* seleção e guias do palco: o canvas lê estes (uiC/uiA em app.js) */
   --danger:#E5645D;
   --c-text:#6B9FE8; --c-logo:#C79B3A; --c-cta:#78A98A; --c-image:#D07AA8; --c-shape:#A68DE8; --c-bg:#8A9199; --c-group:#D07A3F;
@@ -589,6 +589,7 @@ input[type=range]{-webkit-appearance:none;appearance:none;background:transparent
 input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:var(--raised-2)}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:6px;height:6px;border:0;border-radius:50%;background:transparent;outline:3px solid var(--fg);border-image:linear-gradient(var(--muted),var(--muted)) 0 fill / 0 / 0 0 0 100vw}
 input[type=range]:disabled{opacity:.5}
+::placeholder{color:color-mix(in srgb,var(--muted) 55%,var(--faint));opacity:1}
 /* caixa de marcar: marcada = fundo do acento com o visto escuro (--accent-ink), para ler de longe; desmarcada = contorno visível */
 input[type=checkbox]{-webkit-appearance:none;appearance:none;flex:none;width:16px;height:16px;margin:0;border:1.5px solid var(--faint);border-radius:4px;background:var(--bg) center/12px no-repeat;cursor:pointer;transition:background-color .1s,border-color .1s}
 input[type=checkbox]:hover{border-color:var(--muted)}

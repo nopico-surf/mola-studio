@@ -148,15 +148,16 @@ Tamanhos de referência no vídeo (largura 1080): título 96–120, subtítulo 3
 
 ## 5. Na interface do Mola
 
-Aplicado em `css/app.css` (`:root`). A interface é **neutra** (cinza sem tom), com contraste suave, e o verde só aparece onde há seleção ou foco. As regras estão no `CLAUDE.md` (Aparência da interface).
+Aplicado em `css/app.css` (`:root`). As superfícies usam os **Cinzas** da paleta (Noite, Fundo, Cartão, Elevado, Borda), com contraste suave, e o verde só aparece onde há seleção ou foco. As regras estão no `CLAUDE.md` (Aparência da interface).
 
 | Token | Valor | Nota |
 |---|---|---|
-| `--bg` / `--panel` / `--raised` / `--raised-2` | `#0C0C0D` / `#161617` / `#1F1F21` / `#29292B` | superfícies, do mais fundo ao mais alto |
-| `--line` / `--line-2` | `#2A2A2C` / `#3B3B3E` | bordas |
-| `--fg` / `--muted` / `--faint` | `#DDDDDD` / `#9C9C9C` / `#6F6F6F` | texto (sem branco puro) |
+| `--bg` | `#010409` (Noite) | fundo do palco |
+| `--panel` / `--raised` / `--raised-2` | `#0D1117` (Fundo) / `#151B23` (Cartão) / `#212830` (Elevado) | painéis, campos, itens mais altos |
+| `--line` / `--line-2` | `#262C36` / `#3D444D` (Borda) | bordas |
+| `--fg` / `--muted` / `--faint` | `#D1D7E0` (Claro) / `#9198A1` (Texto apagado) / `#656C76` (Neutro) | texto (sem branco puro) |
 | `--accent` | `#6A9C79` | verde calmo: seleção e foco (palco, campo, chip marcado, caixa marcada) |
-| `--btn` / `--btn-ink` | `#CBCBCB` / `#141414` | botão principal e avisos com ação |
+| `--btn` / `--btn-ink` | `#D1D7E0` / `#0D1117` | botão principal e avisos com ação |
 | `--margin-rgb` / `--frame-rgb` | `160,140,230` / `122,160,230` | guias do palco: margem roxa, quadro azul |
 | `--c-*` | por tipo de camada | texto `#6B9FE8`, logo `#C79B3A`, botão `#78A98A`, imagem `#D07AA8`, forma `#A68DE8`, fundo `#8A9199`, grupo `#D07A3F` |
 | Fontes | Mona Sans (UI e títulos), JetBrains Mono | |
