@@ -968,7 +968,7 @@ function mkBg(o = {}) {
 
 /* ------------ roteiros ------------ */
 const TEMPLATES = [
-  { id:'blank', ic:'+', name:'Do zero', desc:'Só o fundo. Você adiciona texto, imagem, logo e botão', dur:8, build:()=>[mkBg({mode:'mesh', c1:'#ffffff', c2:'#6fd3a6', c3:'#e0e0e0', c4:'#b0b0b0'})] },
+  { id:'blank', ic:'+', name:'Do zero', desc:'Só o fundo. Você adiciona texto, imagem, logo e botão', dur:8, build:()=>[mkBg({mode:'mesh', c1:'#010409', c2:'#0A2E15', c3:'#B01117', c4:'#124A21', motion:1, grain:.08})] },
   { id:'marca-msg', ic:'LOGO', name:'Marca, mensagem e botão', desc:'O logo se desenha, depois entram a mensagem e o botão', dur:10, build:(B,F)=>[
     mkBg({mode:'mesh'}),
     mkLogo('logo',{y:.42,size:.36,start:.2,end:3.4,in:'draw',out:'blur',outDur:.5}),
