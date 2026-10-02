@@ -75,10 +75,10 @@
       <div class="fontrow"><label for="bf1">Texto</label><select id="bf1"></select></div>
       <div class="fontrow"><label for="bf2">Impacto</label><select id="bf2"></select></div>
       <div class="row">
-        <input type="text" id="gfont" list="gfonts" placeholder="Nome no Google Fonts">
+        <input type="text" id="gfont"         placeholder="Nome no Google Fonts" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="gfonts">
         <button class="btn small" id="gfontAdd">Adicionar</button>
       </div>
-      <datalist id="gfonts"></datalist>
+              <div class="gf-pop" id="gfonts" role="listbox" hidden></div>
       <div class="row">
         <button class="btn small" id="fontUp">Enviar arquivo de fonte</button>
         <input type="file" id="fontFile" accept=".ttf,.otf,.woff,.woff2" hidden>

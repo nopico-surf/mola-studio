@@ -8586,9 +8586,76 @@ function normalizeSvg(text) {
   if (vb.length !== 4 || !(vb[2] > 0)) svg.setAttribute('viewBox', `0 0 ${w} ${hh}`);
   return new XMLSerializer().serializeToString(svg);
 }
+/* ------------ SVG com camadas ------------
+   Figma, Illustrator, Inkscape e afins exportam cada camada/grupo como um <g>. `splitSvgLayers` acha o nível onde as camadas estão
+   (desce enquanto houver um <g> só) e devolve um SVG por camada: o mesmo arquivo, sem as outras camadas (defs, estilos e gradientes
+   ficam). Formas soltas entre grupos viram uma camada só ("Formas"). Sem pelo menos um grupo e duas camadas, vale o SVG inteiro. */
+const SVG_TAGS = /^(g|path|rect|circle|ellipse|polygon|polyline|line|text|image|use)$/i, SVG_MAXL = 40;
+const svgKids = n => [...n.children].filter(c => SVG_TAGS.test(c.localName));
+function svgHost(svg) {
+  let host = svg;
+  for (let k = svgKids(host); k.length === 1 && k[0].localName === 'g'; k = svgKids(host)) host = k[0];
+  return host;
+}
+function svgLayerName(el, i) {
+  const raw = el.getAttribute('inkscape:label') || el.getAttribute('data-name') || el.getAttribute('id') || '';
+  const nm = raw.replace(/_x([0-9a-f]{2,4})_/gi, (m, c) => String.fromCharCode(parseInt(c, 16))).replace(/_+/g, ' ').trim();
+  return nm.slice(0, 40) || `Camada ${i + 1}`;
+}
+function splitSvgLayers(text) {
+  const parse = () => new DOMParser().parseFromString(text, 'image/svg+xml').documentElement;
+  const kids = svgKids(svgHost(parse()));
+  const units = []; // { idx:[posições em kids], name }
+  kids.forEach((el, i) => {
+    const last = units[units.length - 1];
+    if (el.localName !== 'g' && last && last.loose) { last.idx.push(i); return; }
+    units.push({ idx:[i], loose:el.localName !== 'g', name:el.localName !== 'g' ? 'Formas' : svgLayerName(el, units.length) });
+  });
+  if (units.length < 2 || units.length > SVG_MAXL || !kids.some(k => k.localName === 'g')) return null;
+  return units.map(u => {
+    const svg = parse(), all = svgKids(svgHost(svg)); // o mesmo caminho: ficam só os desta camada
+    all.forEach((el, i) => { if (!u.idx.includes(i)) el.remove(); });
+    return { name:u.loose && u.idx.length === 1 ? svgLayerName(kids[u.idx[0]], u.idx[0]) : u.name, text:new XMLSerializer().serializeToString(svg) };
+  });
+}
+// cada camada do SVG vira um logo cortado no próprio tamanho, no lugar de onde estava, e todas entram agrupadas
+async function addSvgLayers(units, name, pos) {
+  const items = [];
+  for (const u of units) {
+    const svg = { kind:'svg', text:u.text, name:u.name };
+    try { const lg = await parseLogo(svg); if (lg.parts.length || lg.pen) { LGC.set(svg.text, lg); items.push({ svg, lg }); } } catch (e) { console.warn(e); }
+  }
+  if (items.length < 2) return false;
+  pushUndo();
+  const fr = pos ? null : insertTarget(), win = fr && gwin(fr), st = win ? win.start : S.still ? 0 : nextStart(), end = win ? win.end : S.duration;
+  const x0 = Math.min(...items.map(i => i.lg.bx)), x1 = Math.max(...items.map(i => i.lg.bx + i.lg.bw));
+  const y0 = Math.min(...items.map(i => i.lg.by)), y1 = Math.max(...items.map(i => i.lg.by + i.lg.bh));
+  const k = .4 / Math.max(x1 - x0, 1e-6); // o conjunto ocupa .4 da largura, como um SVG só
+  const bf = baseFmt(), si = pos || fr ? 0 : curSlide(), cx = pos ? pos.x : .5 + si, cy = pos ? pos.y : freeY(.42, st, si);
+  const step = S.still ? 0 : clamp((end - .5 - st) / items.length, 0, .12);
+  const Ls = items.map(({ svg, lg }, i) => {
+    const L = mkLogo('logoSmall', { name:svg.name, svg, size:+(lg.bw * k).toFixed(5), in:'fade', inDur:BP.fade.dur, idle:'none' });
+    L.start = +(st + i * step).toFixed(3); L.end = end;
+    const x = cx + ((lg.bx + lg.bw / 2) - (x0 + x1) / 2) * k, y = cy + ((lg.by + lg.bh / 2) - (y0 + y1) / 2) * k * FORMATS[bf].w / FORMATS[bf].h;
+    L.x = +x.toFixed(5); L.y = +y.toFixed(5); if (pos) setPos(L, L.x, L.y);
+    return L;
+  });
+  S.layers.push(...Ls);
+  if (fr) intoFrame(fr, Ls);
+  else { const gid = 'g' + Math.random().toString(36).slice(2, 7); Ls.forEach(l => { l.grp = gid; }); gmeta(gid, true).name = name || 'SVG'; }
+  RT.picks = new Set(Ls.map(l => l.id)); RT.selected = Ls[Ls.length - 1].id; propTab = 'style';
+  renderProps(); changed({ layers:true }); seekLayer(Ls[0]); RT.userSeek = false;
+  toast(`SVG separado em ${Ls.length} camadas`);
+  return true;
+}
 async function addSvgText(text, name, pos) {
   let svg, lg;
-  try { svg = { kind:'svg', text:normalizeSvg(text), name:name || 'SVG' }; lg = await parseLogo(svg); LGC.set(svg.text, lg); if (!lg.parts.length && !lg.pen) throw new Error('Não achei formas nesse SVG'); }
+  try {
+    const norm = normalizeSvg(text);
+    let units = null; try { units = splitSvgLayers(norm); } catch (e) { console.warn(e); }
+    if (units && await addSvgLayers(units, name || 'SVG', pos)) return;
+    svg = { kind:'svg', text:norm, name:name || 'SVG' }; lg = await parseLogo(svg); LGC.set(svg.text, lg); if (!lg.parts.length && !lg.pen) throw new Error('Não achei formas nesse SVG');
+  }
   catch (e) { toast(e.message || 'Não consegui ler esse SVG', 3200); return; }
   const pen = !!lg.pen;
   addLayer(mkLogo('logoSmall', { name:svg.name, svg, y:.42, size:.4, in:pen ? 'handwrite' : 'draw', inDur:pen ? BP.handwrite.dur : BP.draw.dur, idle:'none' }), pos || {});
@@ -8641,7 +8708,27 @@ const drop = $('#logoDrop');
 drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) setLogoFile(f); });
 
 // fontes
-[...new Set(GOOGLE_SUGGEST)].forEach(f => $('#gfonts').append(h('option', { value:f })));
+// lista de sugestões própria (o datalist nativo é desenhado pelo navegador e não pega o CSS)
+const GF_LIST = [...new Set(GOOGLE_SUGGEST)];
+let gfOn = -1;
+function gfClose() { $('#gfonts').hidden = true; $('#gfont').setAttribute('aria-expanded', 'false'); gfOn = -1; }
+function gfOpen() {
+  const inp = $('#gfont'), pop = $('#gfonts'), q = inp.value.trim().toLowerCase();
+  const items = GF_LIST.filter(f => !S.brand.loaded.some(l => l.family === f) && f.toLowerCase().includes(q))
+    .sort((a, b) => (b.toLowerCase().startsWith(q) - a.toLowerCase().startsWith(q))).slice(0, 60);
+  if (!items.length) { gfClose(); return; }
+  pop.replaceChildren(...items.map(f => h('button', { type:'button', role:'option', onmousedown:e => { e.preventDefault(); inp.value = f; gfClose(); addGoogle(); } }, f)));
+  const r = inp.getBoundingClientRect(), row = inp.parentElement.getBoundingClientRect(), below = innerHeight - r.bottom - 12, above = r.top - 12, up = below < 160 && above > below;
+  pop.hidden = false; gfOn = -1; inp.setAttribute('aria-expanded', 'true');
+  pop.style.left = row.left + 'px'; pop.style.width = row.width + 'px';
+  pop.style.maxHeight = Math.min(240, up ? above : below) + 'px';
+  pop.style.top = up ? '' : r.bottom + 4 + 'px'; pop.style.bottom = up ? innerHeight - r.top + 4 + 'px' : '';
+}
+function gfMove(d) {
+  const bs = [...$('#gfonts').children]; if (!bs.length) return;
+  gfOn = (gfOn + d + bs.length) % bs.length;
+  bs.forEach((b, i) => b.classList.toggle('on', i === gfOn)); bs[gfOn].scrollIntoView({ block:'nearest' });
+}
 async function addGoogle() {
   const name = $('#gfont').value.trim(); if (!name) return;
   if (S.brand.loaded.some(f => f.family.toLowerCase() === name.toLowerCase())) { toast('Essa fonte já está na lista'); return; }
@@ -8653,8 +8740,50 @@ async function addGoogle() {
   renderBrand(); renderProps(); autosave(); toast(`${name} adicionada`);
 }
 $('#gfontAdd').onclick = addGoogle;
-$('#gfont').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); setTimeout(addGoogle, 0); } });
-$('#gfont').addEventListener('input', e => { if (e.inputType === 'insertReplacementText' || (!e.inputType && GOOGLE_SUGGEST.includes(e.target.value))) setTimeout(addGoogle, 0); });
+$('#gfont').addEventListener('keydown', e => {
+  const open = !$('#gfonts').hidden;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (!open) gfOpen(); gfMove(e.key === 'ArrowDown' ? 1 : -1); }
+  else if (e.key === 'Escape' && open) { e.preventDefault(); e.stopPropagation(); gfClose(); }
+  else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (open && gfOn >= 0) $('#gfont').value = $('#gfonts').children[gfOn].textContent;
+    gfClose(); setTimeout(addGoogle, 0);
+  }
+});
+$('#gfont').addEventListener('input', gfOpen);
+$('#gfont').addEventListener('focus', gfOpen);
+$('#gfont').addEventListener('blur', gfClose);
+addEventListener('resize', gfClose);
+$('#gfonts').addEventListener('mousedown', e => e.preventDefault()); // clicar na barra de rolagem da lista não tira o foco do campo
+$('.left').addEventListener('scroll', e => { if (e.target !== $('#gfonts')) gfClose(); }, true);
+// lista própria para os selects (a nativa é desenhada pelo sistema, com destaque azul)
+let selPop = null, selOn = null;
+function selClose() { if (selPop) { selPop.remove(); selPop = null; if (selOn) selOn.setAttribute('aria-expanded', 'false'); selOn = null; } }
+function selOpen(sel) {
+  selClose(); selOn = sel; sel.setAttribute('aria-expanded', 'true');
+  const pick = o => { sel.value = o.value; selClose(); sel.dispatchEvent(new Event('input', { bubbles:true })); sel.dispatchEvent(new Event('change', { bubbles:true })); sel.focus(); };
+  const pop = h('div', { class:'gf-pop sel-pop', role:'listbox' }, [...sel.options].map(o => h('button', { type:'button', role:'option', class:o.selected ? 'sel' : '', disabled:o.disabled, onclick:() => pick(o) }, o.textContent)));
+  document.body.append(pop); selPop = pop;
+  const r = sel.getBoundingClientRect(), below = innerHeight - r.bottom - 12, above = r.top - 12, up = below < 160 && above > below;
+  pop.style.left = r.left + 'px'; pop.style.minWidth = r.width + 'px';
+  pop.style.maxHeight = Math.min(280, up ? above : below) + 'px';
+  pop.style.top = up ? '' : r.bottom + 4 + 'px'; pop.style.bottom = up ? innerHeight - r.top + 4 + 'px' : '';
+  pop.querySelector('.sel')?.scrollIntoView({ block:'nearest' });
+}
+document.addEventListener('mousedown', e => {
+  const sel = e.target.closest?.('select');
+  if (sel && !sel.disabled && !sel.multiple) { e.preventDefault(); sel.focus(); sel === selOn ? selClose() : selOpen(sel); return; }
+  if (selPop && !selPop.contains(e.target)) selClose();
+}, true);
+document.addEventListener('keydown', e => {
+  const sel = e.target.closest?.('select');
+  if (selPop && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); selClose(); return; }
+  if (sel && !sel.multiple && (e.key === 'Enter' || e.key === ' ') && !selPop) { e.preventDefault(); selOpen(sel); return; }
+  if (selPop && ['ArrowDown', 'ArrowUp', 'Tab'].includes(e.key)) selClose();
+}, true);
+addEventListener('resize', selClose);
+addEventListener('wheel', e => { if (selPop && !selPop.contains(e.target)) selClose(); }, { passive:true, capture:true });
+document.addEventListener('scroll', e => { if (selPop && !selPop.contains(e.target)) selClose(); }, true);
 $('#fontUp').onclick = () => $('#fontFile').click();
 $('#fontFile').addEventListener('change', async e => {
   const f = e.target.files[0]; if (!f) return;
