@@ -2917,7 +2917,7 @@ function paintFill(ctx, L, t, w, hh) {
   }
   if (L.grain > 0) {
     const n = noiseTile(), f = Math.floor(t * fps());
-    ctx.globalAlpha = L.grain; ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha *= L.grain; ctx.globalCompositeOperation = 'overlay'; // soma ao alfa herdado (opacidade, animação), senão o granulado ignora
     const pat = ctx.createPattern(n, 'repeat');
     const ox = Math.floor(rand(f, 1) * 220), oy = Math.floor(rand(f, 2) * 220);
     ctx.translate(-ox, -oy); ctx.fillStyle = pat; ctx.fillRect(0, 0, w + 220, hh + 220);
