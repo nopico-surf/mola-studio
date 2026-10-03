@@ -431,6 +431,7 @@ details.adv > div{display:flex;flex-direction:column;gap:10px;margin-top:10px}
 .lgroup small{color:var(--faint);font-weight:500;text-transform:none;letter-spacing:0}
 .lgroup .tl-chev{height:20px;line-height:20px;margin:0 -4px 0 -2px}
 .layer.ingrp{margin-left:10px;border-left:2px solid var(--line-2);border-radius:0 6px 6px 0}
+.lgroup.nested{border-left:2px solid var(--line-2);border-radius:0 6px 6px 0}
 
 /* ===== Densidade e proporções no padrão do Figma (painéis 11px, controles de 28px, seções de 16px) ===== */
 :root{--f-ui:"Mona Sans","Inter",ui-sans-serif,system-ui,sans-serif;--r:5px;--ctl:28px;--pad:16px}

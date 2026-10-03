@@ -371,14 +371,29 @@ function adaptLayout() {
     if (L.type === 'bg' || NOBOX(L)) continue;
     const r = restBoxIn(L, bf); if (!r) continue;
     const up = freeType(L) && r.t <= 1, dn = freeType(L) && r.b >= Hb - 1; // só imagem e forma sangram
-    all.push({ L, ...r, s0:slideAt(r.l + 1), s1:slideAt(r.r - 1), edge:up && dn ? 'cover' : up ? 'top' : dn ? 'bottom' : null,
+    all.push({ L, ...r, hs:holdSpan(L), s0:slideAt(r.l + 1), s1:slideAt(r.r - 1), edge:up && dn ? 'cover' : up ? 'top' : dn ? 'bottom' : null,
       stretch:!L.rot && ((L.type === 'image' && L.mask === 'rect') || (L.type === 'shape' && L.kind === 'rect')) });
+  }
+  // grupo (sem layout automático) = uma composição só: entra nas contas como um bloco rígido e os itens andam e escalam juntos.
+  // Sem isso um SVG importado (disco, anéis, cada letra = uma forma) se desmontava: cada forma era tratada como foto,
+  // encolhia e se apoiava na margem sozinha. Grupo com foto ou com algo que sangra pela borda segue item por item.
+  const units = new Map();
+  for (const i of all) {
+    const gid = i.L.grp && !inFlow(i.L) ? gtop(i.L.grp) : null; if (!gid) continue;
+    if (!units.has(gid)) units.set(gid, []); units.get(gid).push(i);
+  }
+  for (const [gid, ms] of units) {
+    if (ms.length < 2 || ms.some(i => i.edge || i.L.type === 'image' || i.s0 !== ms[0].s0 || i.s1 !== ms[0].s1)) { units.delete(gid); continue; }
+    const t = Math.min(...ms.map(i => i.t)), b = Math.max(...ms.map(i => i.b)), l = Math.min(...ms.map(i => i.l)), r = Math.max(...ms.map(i => i.r));
+    const U = { L:{ id:'g:' + gid, type:'group', visible:ms.some(i => i.L.visible), start:Math.min(...ms.map(i => i.L.start || 0)), end:Math.max(...ms.map(i => i.L.end ?? S.duration)) }, ms, t, b, l, r, cx:(l + r) / 2, cy:(t + b) / 2, hh:b - t, fk:1,
+      hs:[Math.min(...ms.map(i => i.hs[0])), Math.max(...ms.map(i => i.hs[1]))], s0:ms[0].s0, s1:ms[0].s1, edge:null, stretch:false };
+    for (const i of ms) all.splice(all.indexOf(i), 1);
+    all.push(U); units.set(gid, U);
   }
   // cada camada se organiza só com quem aparece na tela junto com ela: cenas diferentes na mesma altura não se empurram
   // nem se espremem (a foto da cena 1 não comprime os textos da cena 2). Quem tem o mesmo conjunto faz a conta uma vez só
   // no carrossel, slides diferentes também não aparecem juntos (cada slide se organiza sozinho)
-  const span = holdSpan;
-  const meets = (p, q) => { const [a0, a1] = span(p.L), [b0, b1] = span(q.L); return Math.min(a1, b1) - Math.max(a0, b0) > .01 && p.s0 <= q.s1 && q.s0 <= p.s1; };
+  const meets = (p, q) => { const [a0, a1] = p.hs, [b0, b1] = q.hs; return Math.min(a1, b1) - Math.max(a0, b0) > .01 && p.s0 <= q.s1 && q.s0 <= p.s1; };
   const groups = new Map();
   for (const i of all) {
     const set = all.filter(j => j === i || meets(i, j)), key = set.map(j => j.L.id).join(',');
@@ -390,8 +405,12 @@ function adaptLayout() {
   // com entradas e saídas diferentes eles podem ter caído em contas diferentes e se desencontrar ("Como funciona?" + título)
   const solid = all.filter(i => !i.edge && i.L.type !== 'image' && i.L.type !== 'shape' && out.has(i.L.id));
   const par = new Map(solid.map(i => [i, i])), root = i => { while (par.get(i) !== i) i = par.get(i); return i; };
+  // peças lado a lado na mesma altura (símbolo + nome do logo) são uma composição só mesmo que as animações tenham tempos
+  // diferentes (o "na tela" delas não se cruza): sem isso cada uma caía numa conta e saía numa altura
+  const life = i => [i.L.start || 0, i.L.end ?? S.duration];
+  const beside = (a, b) => { const [a0, a1] = life(a), [b0, b1] = life(b); return Math.min(a1, b1) - Math.max(a0, b0) > .01 && Math.max(a.t, b.t) < Math.min(a.b, b.b) && (a.r <= b.l + 2 || b.r <= a.l + 2) && a.s0 <= b.s1 && b.s0 <= a.s1; };
   for (const a of solid) for (const b of solid) {
-    if (a === b || !meets(a, b) || Math.max(a.t, b.t) - Math.min(a.b, b.b) >= GAP_TAU * .75) continue;
+    if (a === b || Math.max(a.t, b.t) - Math.min(a.b, b.b) >= GAP_TAU * .75 || !(meets(a, b) || beside(a, b))) continue;
     const ra = root(a), rb = root(b); if (ra !== rb) par.set(ra, rb);
   }
   const blocks = new Map();
@@ -400,6 +419,12 @@ function adaptLayout() {
     if (bl.length < 2) continue;
     const rep = bl.reduce((p, q) => (q.b - q.t > p.b - p.t ? q : p)), pr = out.get(rep.L.id); // o maior manda
     for (const i of bl) if (i !== rep) { const p = out.get(i.L.id); p.y = (pr.y * Ht + (i.cy - rep.cy) * pr.k) / Ht; }
+  }
+  // o grupo volta para os itens: mesmo deslocamento e a mesma escala em torno do centro do conjunto
+  for (const U of units.values()) {
+    const p = out.get(U.L.id); out.delete(U.L.id); if (!p) continue;
+    const gx = p.x * W(), gy = p.y * Ht;
+    for (const i of U.ms) out.set(i.L.id, { x:(gx + (i.cx - U.cx) * p.k) / W(), y:(gy + (i.cy - U.cy) * p.k) / Ht, k:p.k, hh:null, ww:null });
   }
   return out;
 
@@ -1078,6 +1103,22 @@ async function loadGoogleFont(family) {
   await Promise.all([300,400,500,600,700,800,900].flatMap(w => [document.fonts.load(`${w} 40px "${family}"`), document.fonts.load(`italic ${w} 40px "${family}"`)]).map(p => p.catch(() => {})));
   RT.fontsOk.add(family); RT.fontsBad.delete(family); RT.layout.clear(); needs = true;
   return true;
+}
+// maior peso que a fonte realmente tem (document.fonts lê as @font-face mesmo de folha de outra origem); 0 = não deu para saber
+function fontMaxWeight(family) {
+  let mx = 0;
+  try {
+    document.fonts.forEach(ff => {
+      if (ff.family.replace(/["']/g, '') !== family) return;
+      const m = String(ff.weight).match(/\d+/g); if (m) mx = Math.max(mx, ...m.map(Number));
+    });
+  } catch (e) { /* sem document.fonts */ }
+  return mx;
+}
+// só os pesos que a fonte tem (se não deu para saber, todos)
+function weightsOf(family) {
+  const mx = fontMaxWeight(family);
+  return mx ? WEIGHTS.filter(([v]) => v <= mx) : WEIGHTS;
 }
 async function loadFileFont(f) {
   try {
@@ -1961,7 +2002,14 @@ function gpseudo(gid) {
   const g = gmeta(gid) || {}, inK = (g.in || 'cut') !== 'cut', outK = (g.out || 'cut') !== 'cut';
   return { ...g, start:w.start, end:w.end, in:inK ? g.in : 'cut', out:outK ? g.out : 'cut', idle:g.idle || 'none', inDur:inK ? g.inDur ?? .8 : 0, outDur:outK ? g.outDur ?? .5 : 0 };
 }
-function groupNum(gid) { const ids = []; S.layers.forEach(l => { if (l.grp && !ids.includes(l.grp)) ids.push(l.grp); }); return ids.indexOf(gid) + 1; }
+// frames de fora para dentro até gid (o último é o próprio gid)
+function gchain(gid) { const c = []; for (let g = gid, n = 0; g && n < 20; g = gpar(g), n++) c.unshift(g); return c; }
+// numeração: primeiro os frames que têm camada direta (a ordem de sempre), depois os que só têm frames dentro
+function groupNum(gid) {
+  const ids = []; S.layers.forEach(l => { if (l.grp && !ids.includes(l.grp)) ids.push(l.grp); });
+  S.layers.forEach(l => { if (l.grp) gchain(l.grp).forEach(g => { if (!ids.includes(g)) ids.push(g); }); });
+  return ids.indexOf(gid) + 1;
+}
 const groupName = gid => (gmeta(gid) || {}).name || `Grupo ${groupNum(gid)}`;
 
 /* ============================================================
@@ -3804,6 +3852,13 @@ function updStageHint() {
     else if (!els.length) { msg = 'Arquivo vazio. Arraste uma imagem para cá ou'; act = ['Adicionar título', () => addLayer(ADD_KINDS[0].mk(S.brand, S.brand.fonts))]; }
     else if (L && L.type !== 'bg' && !L.visible) { msg = `Camada oculta: ${L.name}`; act = ['Mostrar', () => { pushUndo(); L.visible = true; changed({ layers:true }); }]; }
     else if (L && L.type !== 'bg' && !phase(L, T)) { msg = T < L.start ? `${L.name} ainda não apareceu neste momento (entra em ${fmtSec(L.start)})` : `${L.name} já saiu neste momento (sai em ${fmtSec(L.end ?? S.duration)})`; act = ['Ver no palco', () => seekLayer(L)]; }
+    // fora do principal, quem tem posição presa só neste formato não acompanha o principal: o botão solta todos de uma vez
+    // (pedido do usuário: o "Voltar ao automático" do painel só aparecia com um elemento solto escolhido)
+    else if (fmtOwn() && els.some(ownPos)) {
+      const n = els.filter(ownPos).length;
+      msg = `${n} elemento${n > 1 ? 's' : ''} com posição presa só no ${fmtLabel(S.format)}`;
+      act = ['Voltar ao automático', () => resetPos(S.layers)];
+    }
   }
   const key = msg ? (L && L.id) + msg + (tools ? tools.map(t => t[0] + t[1]).join() : '') : '';
   if (el._k === key) return; el._k = key;
@@ -3853,6 +3908,8 @@ function restTime(L) {
   return r;
 }
 function seekLayer(L) { pause(); T = clamp(restTime(L), 0, S.duration); needs = true; }
+// vários elementos de uma vez (SVG em camadas, texto em curvas): a agulha vai para onde o último já assentou, senão os que entram depois ficam no meio da entrada, translúcidos
+function seekLayers(Ls) { pause(); T = clamp(Math.max(...Ls.map(restTime)), 0, S.duration); needs = true; }
 function seekOut(L) { pause(); const ph = phase(L, L.start) || { outD:0 }, end = L.end ?? S.duration; T = clamp(end - ph.outD * .5, 0, S.duration); needs = true; }
 // mexer em velocidade/intensidade não leva a agulha para outro lugar se ela já está dentro da camada (restTime muda com a velocidade e a linha pulava)
 function seekKeep(L, out) { const end = L.end ?? S.duration; if (T >= L.start && T <= end) { needs = true; return; } out ? seekOut(L) : seekLayer(L); }
@@ -4351,21 +4408,24 @@ const endDrag = () => {
   if (RT.drag.flowL) { const D = RT.drag, p = placeRaw(D.L); if (Math.abs(p.x - D.x0) + Math.abs(p.y - D.y0) > 1e-6) flowCommit(D.flow, D.fz); } // item da fila solto: entra no lugar dele
   else if (RT.drag.flowB) { const D = RT.drag, p = placeRaw(D.L); if (Math.abs(p.x - D.x0) + Math.abs(p.y - D.y0) > 1e-6) frameCommit(D); } // bloco da coluna do quadro solto
   RT.drag = null; RT.guide = null;
-  if (tap) select(tap.id);
+  if (tap && !(tap.grp && wholeGroup())) select(tap.id); // frame de dentro já escolhido inteiro: o toque não volta para o frame de fora (senão o clique duplo nunca desce além do 2º nível)
   changed({ props:!mv });
 };
 // clique duplo: dentro de um grupo escolhe só o item; num texto ou botão, vai direto editar o texto
 // clique duplo num grupo escolhido: entra um nível (frame de dentro); no último, escolhe o item
 function drillSelect(L) {
-  const w = wholeGroup(), chain = []; for (let g = L.grp, n = 0; g && n < 20; g = gpar(g), n++) chain.unshift(g);
-  const next = w ? chain[chain.indexOf(w) + 1] : null;
+  const chain = []; for (let g = L.grp, n = 0; g && n < 20; g = gpar(g), n++) chain.unshift(g);
+  const pk = pickedLayers(); // nível atual = frame de fora cujas folhas são exatamente a seleção (vale também com 1 folha só)
+  const w = chain.find(g => { const lv = gleaves(g); return lv.length === pk.length && lv.every(m => isPicked(m.id) || pk.includes(m)); });
+  const next = w ? chain[chain.indexOf(w) + 1] : chain[0];
   if (!next) { select(L.id, true); return; }
   RT.picks = new Set(gleaves(next).map(l => l.id)); RT.selected = L.id; renderLayers(); renderProps(); needs = true;
 }
 cv.addEventListener('dblclick', ev => {
   if (RT.pen || RT.vec) return; // caneta e edição de pontos tratam o clique sozinhas
   const L = hitTest(stagePt(ev)); if (!L) return;
-  if (L.grp && pickedLayers().length > 1) { drillSelect(L); return; }
+  const pk0 = pickedLayers();
+  if (L.grp && !(pk0.length === 1 && pk0[0] === L) && (pk0.length > 1 || gpar(L.grp) || wholeGroup())) { drillSelect(L); return; }
   editText(L);
 });
 cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', endDrag);
@@ -4934,10 +4994,14 @@ function pushUndo() {
     const snap = JSON.stringify(S);
     if (redoStack.length && snap !== redoBase) redoStack.length = 0; // ação nova: o refazer perde o sentido
     // controles chamam pushUndo ao focar/clicar sem mudar nada: não vira passo
-    if (undoStack[undoStack.length - 1] !== snap) { undoStack.push(snap); if (undoStack.length > 60) undoStack.shift(); }
+    if (undoStack[undoStack.length - 1] !== snap) { undoStack.push(snap); histT.set(snap, T); if (undoStack.length > 60) undoStack.shift(); }
+    if (histT.size > 160) { const keep = new Set([...undoStack, ...redoStack]); for (const k of histT.keys()) if (!keep.has(k)) histT.delete(k); }
   } catch (e) {}
   syncHist();
 }
+// onde estava a agulha em cada passo: ações levam a agulha para outro ponto (seekLayer) e desfazer deixava as camadas restauradas no meio da entrada
+const histT = new Map();
+function histSeek(s) { const t = histT.get(s); if (t != null) { pause(); T = clamp(t, 0, S.duration); needs = true; } }
 function applyState(s) {
   const prevLogo = JSON.stringify(S.brand.logo), prevFit = S.format + '|' + slides();
   S = JSON.parse(s); RT.layout.clear();
@@ -4952,11 +5016,11 @@ function undo() {
   const cur = JSON.stringify(S);
   let s; while ((s = undoStack.pop()) === cur) {} // pula passos idênticos ao estado atual
   if (!s) { syncHist(); return; }
-  redoStack.push(cur); applyState(s); syncHist();
+  redoStack.push(cur); histT.set(cur, T); applyState(s); histSeek(s); syncHist();
 }
 function redo() {
   const s = redoStack.pop(); if (!s) { syncHist(); return; }
-  undoStack.push(JSON.stringify(S)); applyState(s); syncHist();
+  const cur = JSON.stringify(S); undoStack.push(cur); histT.set(cur, T); applyState(s); histSeek(s); syncHist();
 }
 const DB = {
   db:null,
@@ -5012,6 +5076,7 @@ async function openState(st, id, name) {
   if (saveT) await flushSave();
   if (!st || !st.layers || !st.brand) { toast('Arquivo de projeto inválido'); return false; }
   await internImages(st); // foto em dataURL (arquivo antigo ou .json importado) vai para fora do JSON
+  fixTornGroups(st);
   FILES.id = id; FILES.name = name; showFileName();
   DB.set('currentId', id);
   undoStack.length = 0; redoStack.length = 0; redoBase = null; syncHist();
@@ -5973,11 +6038,21 @@ function alignLayers(mode) {
 }
 function groupSel() {
   const ms = S.layers.filter(l => l.type !== 'bg' && isPicked(l.id)); if (ms.length < 2) return;
-  pushUndo(); const gid = 'g' + Math.random().toString(36).slice(2, 7);
-  ms.forEach(l => { l.grp = gid; });
-  // fica junto na pilha, na altura do que está mais à frente
-  const top = Math.max(...ms.map(l => S.layers.indexOf(l)));
-  S.layers = [...S.layers.slice(0, top + 1).filter(l => !ms.includes(l)), ...ms, ...S.layers.slice(top + 1)];
+  pushUndo();
+  // frames inteiros na seleção ficam como estão e passam a ser filhos do novo grupo
+  const whole = [...new Set(ms.filter(l => l.grp).map(l => gtop(l.grp)))].filter(t => gleaves(t).every(l => ms.includes(l)));
+  const ng = 'g' + Math.random().toString(36).slice(2, 7);
+  (S.groups ||= {})[ng] = { open:true };
+  const loose = ms.filter(l => !l.grp || !whole.includes(gtop(l.grp)));
+  // só parte de um grupo escolhida: o novo grupo nasce dentro dele, o grupo de fora continua
+  const outer = new Set(loose.map(l => l.grp || null));
+  if (!whole.length && outer.size === 1 && [...outer][0]) S.groups[ng].parent = [...outer][0];
+  whole.forEach(t => { gmeta(t, true).parent = ng; });
+  loose.forEach(l => { l.grp = ng; });
+  if (loose.length > 1 || (loose.length && whole.length)) { // fica junto na pilha, na altura do que está mais à frente
+    const top = Math.max(...loose.map(l => S.layers.indexOf(l)));
+    S.layers = [...S.layers.slice(0, top + 1).filter(l => !loose.includes(l)), ...loose, ...S.layers.slice(top + 1)];
+  }
   RT.picks = new Set(ms.map(l => l.id)); if (!RT.picks.has(RT.selected)) RT.selected = ms[ms.length - 1].id;
   changed({ layers:true, props:true }); toast(`${ms.length} elementos agrupados. Ctrl+Shift+G desfaz`);
 }
@@ -6017,34 +6092,73 @@ function pfSubpaths(L) {
   const ax = pl.x * W(), ay = pl.y * H(), f = (x, y) => { const u = (x - bx) * s, v = (y - by) * s; return [ax + u * co - v * si, ay + u * si + v * co]; };
   return vec.map(sp => ({ closed:sp.closed, pts:sp.pts.map(p => { const q = f(p.x, p.y), i = f(p.ix, p.iy), o = f(p.ox, p.oy); return { x:q[0], y:q[1], ix:i[0], iy:i[1], ox:o[0], oy:o[1] }; }) }));
 }
-const pfTargets = () => { const ls = pickedLayers(); return ls.length && ls.every(l => l.type === 'shape') ? ls : []; };
+// forma sem preenchimento (só contorno, como os anéis de um SVG): o que entra na conta é a silhueta do traço, não a linha do meio
+const pfStrokeOnly = L => !shFilled(L) && strokeSee(L) && typeof polygonClipping !== 'undefined';
+function pfStrokeSubs(L) {
+  const base = pfSubpaths(L); if (!base) return null;
+  const pl = placeOf(L), k = pl.k, w = skW(L), subs = flatSubs(base); if (!subs.length) return null;
+  const closed = subs.every(s => s.closed), pos = closed ? L.strokePos || 'center' : 'center', lw = (pos === 'center' ? w : w * 2) * k;
+  const dash = strokeDash({ ...L, strokeW:w * (pos === 'center' ? 1 : 2) }, 0, 1).map(v => v * k);
+  let res = strokeMulti(subs, { w:lw, join:L.strokeJoin || 'round', cap:strokeCap(L), dash });
+  if (pos !== 'center') {
+    const area = polygonClipping.xor(...subs.filter(s => s.closed).map(s => [s.pts]));
+    res = pos === 'inside' ? polygonClipping.intersection(res, area) : polygonClipping.difference(res, area);
+  }
+  const out = [];
+  for (const poly of res) for (const ring of poly) { const P = tidyRing(ring.slice(0, -1)); if (P.length > 2) out.push({ closed:true, pts:P.map(q => vecPt(q[0], q[1])) }); }
+  return out.length ? out : null;
+}
+// as partes de uma forma só (letra feita de duas barras que se sobrepõem, como o L) viram uma silhueta sem sobreposição. `unite` com um Path vazio
+// não junta quando as bordas coincidem (a base do L), então une par a par; furos (sentido contrário, como o miolo do O) saem só da peça que os contém
+function pfMerge(c, sc) {
+  const kids = c.children ? [...c.children] : [c]; if (kids.length < 2 || c.fillRule === 'evenodd') return c;
+  const ref = kids.reduce((m, k) => Math.abs(k.area) > Math.abs(m.area) ? k : m, kids[0]).clockwise;
+  const solids = kids.filter(k => k.clockwise === ref).map(k => new sc.Path({ pathData:k.pathData, insert:false })), holes = kids.filter(k => k.clockwise !== ref);
+  const own = solids.map(s => [s]);
+  for (const hk of holes) {
+    const pt = hk.getInteriorPoint(); let best = -1;
+    solids.forEach((s, i) => { if (s.contains(pt) && (best < 0 || Math.abs(s.area) < Math.abs(solids[best].area))) best = i; });
+    if (best >= 0) own[best].push(new sc.Path({ pathData:hk.pathData, insert:false }));
+  }
+  const parts = own.map(([s, ...hs]) => hs.reduce((a, hk) => a.subtract(hk, { insert:false }), s));
+  return parts.reduce((a, p) => a.unite(p, { insert:false }));
+}
+const pfTargets = () => pickedLayers().filter(l => l.type === 'shape'); // grupo com texto/logo/foto junto: só as formas entram na conta
 function pathfinder(op) {
   const def = PF_OPS.find(o => o[0] === op), ls = pfTargets(); if (!def || !ls.length) return;
   if (ls.some(l => l.locked)) { lockedNote(ls); return; }
   if (op !== 'flatten' && op !== 'union' && ls.length < 2) { toast('Selecione duas formas ou mais'); return; }
-  if (op !== 'flatten' && ls.some(l => l.kind === 'line')) { toast('A linha não tem área: use Achatar, ou troque por outra forma'); return; }
+  if (op !== 'flatten' && ls.some(l => l.kind === 'line' && !pfStrokeOnly(l))) { toast('A linha não tem área: use Achatar, ou troque por outra forma'); return; }
   if (typeof paper === 'undefined') { toast('O Pathfinder não carregou. Recarregue a página', 4000); return; }
-  const order = [...ls].sort((a, b) => S.layers.indexOf(a) - S.layers.indexOf(b)), subs = order.map(pfSubpaths);
+  const order = [...ls].sort((a, b) => S.layers.indexOf(a) - S.layers.indexOf(b)), subs = order.map(l => op !== 'flatten' && pfStrokeOnly(l) ? pfStrokeSubs(l) : pfSubpaths(l));
   if (subs.some(s => !s)) { toast('Um dos caminhos tem arcos (comando A) e não dá para combinar. Redesenhe com a caneta (P)', 4500); return; }
   let d, bad = false;
   if (op === 'flatten') d = vecD(subs.flat());
   else {
     const sc = paperScope(); let acc = null;
     try {
-      const its = subs.map(s => { const c = new sc.CompoundPath({ pathData:vecD(s), insert:false }); c.closed = true; return c; });
-      acc = its[0]; for (const c of its.slice(1)) acc = acc[def[3]](c, { insert:false });
-      if (its.length === 1) acc = acc.unite(new sc.Path({ insert:false }), { insert:false }); // uma forma só: junta as partes dela (letras do texto em vetor)
+      const its = subs.map((s, i) => { const c = new sc.CompoundPath({ pathData:vecD(s), insert:false }); c.closed = true; c.fillRule = order[i].fillRule === 'evenodd' ? 'evenodd' : 'nonzero'; return c; });
+      // cada forma antes sem sobreposição interna (o que `unite` com um Path vazio não garante); uma forma só: junta as partes dela (letras do texto em vetor)
+      const flat = its.map(c => pfMerge(c, sc));
+      acc = flat[0]; for (const c of flat.slice(1)) acc = acc[def[3]](c, { insert:false });
       d = acc.pathData;
     } catch (e) { console.warn(e); bad = true; }
     sc.project.clear();
   }
   const vec = !bad && d && vecParse(d);
+  if (vec) { // restos sem área da conta (um triângulo de verdade, como o miolo do A, fica)
+    const area = sp => Math.abs(sp.pts.reduce((a, p, i, P) => { const q = P[(i + 1) % P.length]; return a + p.x * q.y - q.x * p.y; }, 0) / 2);
+    const ok = vec.filter(sp => !sp.closed || sp.pts.length > 3 || (sp.pts.length === 3 && (area(sp) > 1 || sp.pts.some(p => p.ix !== p.x || p.ox !== p.x || p.iy !== p.y || p.oy !== p.y))));
+    if (ok.length) vec.splice(0, vec.length, ...ok);
+  }
   if (!vec) { toast(!bad && !d ? 'Nada sobrou dessa conta (as formas não se tocam?)' : 'Não consegui combinar essas formas', 4000); return; }
   d = vecD(vec);
   const b = customBox(d), cx = (b.x + b.w / 2) / W(), cy = (b.y + b.h / 2) / H();
-  const src = order.find(l => l.kind !== 'line') || order[0], n = JSON.parse(JSON.stringify(src));
-  for (const k of ['_bounds', 'fpos', 'fsz', 'flowFree', 'radius', 'radSep', 'rTL', 'rTR', 'rBR', 'rBL', 'points', 'inner']) delete n[k];
+  const src = order.find(l => l.kind !== 'line') || order[0], n = JSON.parse(JSON.stringify(src)), ring = op !== 'flatten' && pfStrokeOnly(src);
+  for (const k of ['_bounds', 'fpos', 'fsz', 'flowFree', 'radius', 'radSep', 'rTL', 'rTR', 'rBR', 'rBL', 'points', 'inner', 'fillRule']) delete n[k];
   Object.assign(n, { id:uid(), name:def[1], kind:'custom', d, vec, vecD:d, size:b.w / W(), mh:null, rot:0, x:cx, y:cy, fill:src.kind === 'line' ? true : src.fill });
+  if (ring) Object.assign(n, { fill:true, stroke:false, mode:'solid', c1:skC(src), c2:skC(src), c3:skC(src), c4:skC(src) }); // o contorno virou o corpo da forma: leva a cor dele
+  const tAll = Math.max(...order.map(restTime)); // a agulha para onde todas as formas de antes já assentaram: ao desfazer, nenhuma fica no meio da entrada
   pushUndo();
   const top = Math.max(...order.map(l => S.layers.indexOf(l)));
   S.layers.splice(top + 1, 0, n);
@@ -6054,7 +6168,7 @@ function pathfinder(op) {
     const k = placement().get(n.id)?.k; if (k && Math.abs(k - 1) > .001) setFmt(n, { s:1 / k });
   }
   propTab = 'style'; select(n.id, true);
-  changed({ layers:true, props:true }); seekLayer(n);
+  changed({ layers:true, props:true }); seekLayer(n); T = clamp(Math.max(T, tAll), 0, S.duration - .02);
   toast(`${def[1]}: ${ls.length > 1 ? `${ls.length} formas viraram uma` : 'a forma virou vetor'}`, 3500, UNDO_ACT);
 }
 function pathfinderSec() {
@@ -6130,17 +6244,44 @@ function keepPlace(fn) {
   const bf = baseFmt(), cur = S.format, ls = S.layers.filter(l => l.type !== 'bg'), snap = new Map();
   const each = f => { try { for (const k of Object.keys(FORMATS)) if (k !== bf) { S.format = k; RT.frameNo = (RT.frameNo || 0) + 1; f(k); } } finally { S.format = cur; RT.frameNo++; } };
   flowBake();
-  each(k => snap.set(k, new Map(ls.map(L => [L.id, posOf(L)]))));
+  each(k => snap.set(k, new Map(ls.map(L => [L.id, placeOf(L)]))));
   fn();
-  each(k => {
-    const m = snap.get(k);
-    for (const L of ls) {
-      const a = m.get(L.id); if (!a || !S.layers.includes(L)) continue;
-      const b = posOf(L);
-      if (Math.abs(a.x - b.x) * W() > .5 || Math.abs(a.y - b.y) * H() > .5) { L.fpos ||= {}; L.fpos[k] = { ...L.fpos[k], x:+a.x.toFixed(5), y:+a.y.toFixed(5) }; }
-    }
-  });
+  each(k => holdPlace(snap.get(k), k, ls));
   changed({ props:true });
+}
+// arquivo de antes do holdPlace: grupo com parte das peças fixas num formato e parte automática (logo desmontado) volta todo ao automático
+function fixTornGroups(st) {
+  if (st.grpFix) return 0; // uma vez por arquivo: depois disso, peça mexida sozinha num formato é de propósito
+  st.grpFix = 1;
+  const G = st.groups || {}, top = gid => { for (let n = 0; G[gid] && G[gid].parent && G[G[gid].parent] && n < 20; n++) gid = G[gid].parent; return gid; };
+  const flowy = gid => { for (let n = 0; gid && G[gid] && n < 20; n++, gid = G[gid].parent) if (G[gid].flow) return true; return false; };
+  const by = new Map();
+  for (const l of st.layers) if (l.grp && !flowy(l.grp)) { const g = top(l.grp); if (!by.has(g)) by.set(g, []); by.get(g).push(l); }
+  let n = 0;
+  for (const ms of by.values()) {
+    const fmts = new Set(ms.flatMap(l => Object.keys(l.fpos || {})));
+    for (const f of fmts) {
+      const own = ms.filter(l => l.fpos && l.fpos[f] && l.fpos[f].x != null);
+      if (!own.length || own.length === ms.length) continue;
+      for (const l of ms) if (l.fpos && l.fpos[f]) { const p = l.fpos[f]; delete p.x; delete p.y; delete p.s; if (!Object.keys(p).length) delete l.fpos[f]; if (!Object.keys(l.fpos).length) delete l.fpos; }
+      n++;
+    }
+  }
+  return n;
+}
+// grava em fpos[k] (formato aberto = k) a posição/escala de antes de quem andaria. Grupo (sem layout automático) é uma composição:
+// se uma peça anda, o grupo inteiro fica fixo. Peça por peça, um logo importado (várias formas) ficava meio fixo e meio automático
+// e se desmontava no próximo ajuste feito no principal.
+function holdPlace(m, k, ls) {
+  const moved = (L, a, b) => Math.abs(a.x - b.x) * W() > .5 || Math.abs(a.y - b.y) * H() > .5 || Math.abs(a.k - b.k) > 1e-3;
+  const unit = L => (L.grp && !inFlow(L) ? 'g:' + gtop(L.grp) : L.id), hit = new Set();
+  for (const L of ls) { const a = m.get(L.id); if (a && S.layers.includes(L) && moved(L, a, placeOf(L))) hit.add(unit(L)); }
+  for (const L of ls) {
+    const a = m.get(L.id); if (!a || !S.layers.includes(L) || !hit.has(unit(L))) continue;
+    const b = placeOf(L), f = (L.fpos && L.fpos[k]) || {}, auto = b.k / (f.s ?? 1);
+    const s = Math.abs(a.k - b.k) > 1e-3 && auto > 0 ? { s:+(a.k / auto).toFixed(5) } : {};
+    L.fpos ||= {}; L.fpos[k] = { ...L.fpos[k], x:+a.x.toFixed(5), y:+a.y.toFixed(5), ...s };
+  }
 }
 function setFlow(gid, F) {
   pushUndo();
@@ -6493,14 +6634,7 @@ function makeBase(k) {
     for (const key of ['ix', 'iy', 'zoom']) if (f[key] != null) L[key] = f[key];
     if (L.fpos) { delete L.fpos[k]; if (!Object.keys(L.fpos).length) delete L.fpos; }
   }
-  each(j => {
-    if (j === k) return;
-    const m = snap.get(j);
-    for (const L of ls) {
-      const a = m.get(L.id), b = posOf(L);
-      if (Math.abs(a.x - b.x) * W() > .5 || Math.abs(a.y - b.y) * H() > .5) { L.fpos ||= {}; L.fpos[j] = { ...L.fpos[j], x:+a.x.toFixed(5), y:+a.y.toFixed(5) }; }
-    }
-  });
+  each(j => { if (j !== k) holdPlace(snap.get(j), j, ls); });
   S.format = k; RT.layout.clear(); fitStage(); renderFormats(); changed({ props:true });
   toast(`${fmtLabel(k)} agora é o formato principal. Os outros ficaram como estavam; "Voltar ao automático" refaz a partir dele`, 7000, { label:'Desfazer', fn:() => undo() });
 }
@@ -6636,7 +6770,24 @@ function lockVisAct(ls) {
     actBtn((vs ? 'Ocultar' : 'Mostrar') + g, vs ? ICONS.eye : ICONS.eyeOff, () => setVisible(ls, !vs), { on:!vs }),
   ];
 }
-function layerCell(L, where) {
+/* Ordem em que a lista e a timeline mostram as camadas: [{ gid, depth }] = cabeçalho de frame, [{ L, depth }] = camada.
+   Frame dentro de frame vem logo depois do de fora, um nível mais recuado (`depth`); recolher um frame esconde tudo que está dentro dele. */
+function layerTree(layers) {
+  const out = [], seen = new Set();
+  for (const L of layers) {
+    const chain = L.grp ? gchain(L.grp) : [];
+    let shut = false;
+    for (let i = 0; i < chain.length && !shut; i++) {
+      if (!seen.has(chain[i])) { seen.add(chain[i]); out.push({ gid:chain[i], depth:i }); }
+      if ((gmeta(chain[i]) || {}).open === false) shut = true;
+    }
+    if (!shut) out.push({ L, depth:chain.length });
+  }
+  return out;
+}
+// recuo por nível: lista = margem da célula; timeline = respiro à esquerda do nome
+const cellIndent = (el, list, depth, base, step) => { if (depth > 0) el.style[list ? 'marginLeft' : 'paddingLeft'] = (base + step * depth) + 'px'; };
+function layerCell(L, where, depth = L.grp ? 1 : 0) {
   const list = where === 'list', bg = L.type === 'bg', i = S.layers.indexOf(L);
   const el = h('div', { class:(list ? 'layer' : 'tl-nm') + ' lcell' + (list ? (L.visible ? '' : ' off') + (L.locked ? ' locked' : '') + (L.grp ? ' ingrp' : '') : ''),
     title:list ? null : 'Clique duas vezes para renomear. Arraste para reordenar', onclick:e => clickOrRename(L, where, e) }, [
@@ -6653,25 +6804,33 @@ function layerCell(L, where) {
     el.onmouseenter = () => setHover(L.id); el.onmouseleave = () => setHover(null);
     el.dataset.id = L.id;
   }
+  cellIndent(el, list, L.grp ? depth : 0, list ? 0 : 16, list ? 10 : 12);
   dragReorder(el, L);
   return el;
 }
-function groupCell(gid, where) {
-  const list = where === 'list', g = gmeta(gid, true), mem = S.layers.filter(l => l.grp === gid), top = mem[mem.length - 1];
+// escolhe o frame gid inteiro (com os de dentro), não o frame de fora
+function selectGroup(gid) {
+  const lv = gleaves(gid); if (!lv.length) return;
+  RT.picks = new Set(lv.map(l => l.id)); RT.selected = lv[lv.length - 1].id; renderLayers(); renderProps(); needs = true;
+}
+function groupCell(gid, where, depth = 0) {
+  const list = where === 'list', g = gmeta(gid, true), mem = gleaves(gid);
   const flip = () => { g.open = g.open === false; renderLayers(); autosave(); };
   const chev = h('button', { class:'tl-chev', title:g.open === false ? 'Mostrar os itens do grupo' : 'Recolher o grupo', 'aria-label':'Recolher ou expandir o grupo', 'aria-expanded':String(g.open !== false), text:'▾',
     onpointerdown:e => { e.stopPropagation(); if (e.button) return; e.preventDefault(); flip(); },
     onclick:e => { e.stopPropagation(); if (e.detail === 0) flip(); } });
   chev.style.transform = g.open === false ? 'rotate(-90deg)' : '';
   const el = h('div', { class:(list ? 'lgroup' : 'tl-nm') + ' lcell', title:'Clique para selecionar o grupo. Clique duas vezes para renomear. Ctrl + clique num item escolhe só ele', onclick:e => {
-    if (e.detail > 1) { const n = prompt('Nome do grupo', groupName(gid)); if (n && n.trim()) { pushUndo(); g.name = n.trim(); changed({ layers:true, props:true }); } return; }
-    select(top.id);
+    if (e.detail > 1) { renameGroupInline(gid, e.currentTarget.querySelector('.lnm')); return; }
+    selectGroup(gid);
   } }, [chev, h('span', { class:'lnm', text:groupName(gid) }), h('small', { class:'tl-n', text:String(mem.length) }),
-    h('div', { class:'acts' }, [...lockVisAct(mem), actBtn('Desagrupar', '<span class="x">×</span>', () => { select(top.id); ungroupSel(); })])]);
+    h('div', { class:'acts' }, [...lockVisAct(mem), actBtn('Desagrupar', '<span class="x">×</span>', () => { selectGroup(gid); ungroupSel(); })])]);
   if (list) {
     el.setAttribute('role', 'button'); el.tabIndex = 0; el.setAttribute('aria-selected', String(mem.every(m => isPicked(m.id))));
-    el.onkeydown = e => { if (e.key === 'Enter') select(top.id); };
+    el.onkeydown = e => { if (e.key === 'Enter') selectGroup(gid); };
   }
+  if (depth > 0) el.classList.add('nested');
+  cellIndent(el, list, depth, list ? 0 : 6, list ? 10 : 12);
   groupDrop(el, gid);
   el.draggable = true;
   el.addEventListener('dragstart', e => { dragGroupId = gid; dragLayerId = mem[0].id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', gid); setTimeout(() => el.classList.add('dragging')); });
@@ -6680,12 +6839,7 @@ function groupCell(gid, where) {
 }
 function renderLayers() {
   const box = $('#layers'); box.innerHTML = '';
-  const seen = new Set();
-  for (const L of [...S.layers].reverse()) {
-    if (L.grp && !seen.has(L.grp)) { seen.add(L.grp); box.append(groupCell(L.grp, 'list')); }
-    if (L.grp && gmeta(L.grp).open === false) continue;
-    box.append(layerCell(L, 'list'));
-  }
+  for (const n of layerTree([...S.layers].reverse())) box.append(n.gid ? groupCell(n.gid, 'list', n.depth) : layerCell(n.L, 'list', n.depth));
   renderMarks();
 }
 // renomear no lugar: clique duplo no nome (lista e timeline) ou "Renomear" no menu
@@ -6699,6 +6853,21 @@ function renameInline(L, span) {
     if (done) return; done = true;
     const v = inp.value.trim();
     if (ok && v && v !== old) { pushUndo(); L.name = v; changed({ layers:true, props:true }); } else changed({ layers:true });
+  };
+  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') end(true); if (e.key === 'Escape') end(false); });
+  inp.addEventListener('blur', () => end(true));
+  ['click', 'dblclick', 'pointerdown'].forEach(n => inp.addEventListener(n, e => e.stopPropagation()));
+}
+function renameGroupInline(gid, span) {
+  if (!span || span.querySelector('input')) return;
+  const old = groupName(gid), inp = h('input', { type:'text', value:old, class:'nm-edit', 'aria-label':'Nome do grupo' });
+  const box = span.closest('[draggable]'); if (box) box.draggable = false;
+  span.textContent = ''; span.append(inp); inp.focus(); inp.select();
+  let done = false;
+  const end = ok => {
+    if (done) return; done = true;
+    const v = inp.value.trim();
+    if (ok && v && v !== old) { pushUndo(); gmeta(gid, true).name = v; changed({ layers:true, props:true }); } else changed({ layers:true });
   };
   inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') end(true); if (e.key === 'Escape') end(false); });
   inp.addEventListener('blur', () => end(true));
@@ -6747,22 +6916,23 @@ function dragReorder(el, L) {
 function applyDrop(one, T, above, gid) {
   // arrastar uma camada da seleção leva todas juntas (mantendo a ordem entre elas)
   const dg = dragGroupId; dragGroupId = null;
-  const mvs = dg ? S.layers.filter(l => l.grp === dg) : isPicked(one.id) ? pickedLayers() : [one];
+  const mvs = dg ? gleaves(dg) : isPicked(one.id) ? pickedLayers() : [one];
   if (!mvs.includes(one)) mvs.push(one);
   const set = new Set(mvs);
   if (T && set.has(T)) return;
-  const members = gid ? S.layers.filter(l => l.grp === gid) : [];
+  const members = gid ? gleaves(gid) : [];
   if (gid && members.every(m => set.has(m))) return;
-  const g0 = mvs[0].grp, whole = !!g0 && mvs.every(m => m.grp === g0) && S.layers.filter(l => l.grp === g0).every(m => set.has(m));
+  // frame arrastado pelo cabeçalho (com os de dentro) é sempre "inteiro": a estrutura dele não muda, só o lugar na pilha
+  const g0 = dg || mvs[0].grp, whole = !!dg || (!!g0 && mvs.every(m => m.grp === g0) && S.layers.filter(l => l.grp === g0).every(m => set.has(m)));
   const block = S.layers.filter(l => set.has(l));
   pushUndo();
   S.layers = S.layers.filter(l => !set.has(l));
-  // "acima" na tela = índice maior
-  const topOf = id => Math.max(...S.layers.map((l, i) => l.grp === id ? i : -1)) + 1;
+  // "acima" na tela = índice maior (frame = ele e os de dentro)
+  const topOf = id => Math.max(...S.layers.map((l, i) => l.grp && ginside(l.grp, id) ? i : -1)) + 1;
   let j, ng;
-  if (gid) { j = topOf(gid); ng = above ? undefined : gid; }
+  if (gid) { j = topOf(gid); ng = above ? gpar(gid) || undefined : gid; }
   else { j = S.layers.indexOf(T) + (above ? 1 : 0); ng = T.grp; }
-  if (whole && ng && ng !== g0) { j = topOf(ng); ng = undefined; }  // grupo inteiro não entra em outro grupo
+  if (whole && ng && ng !== g0) { j = topOf(gtop(ng)); ng = undefined; }  // grupo inteiro não entra em outro grupo
   j = Math.max(1, j);
   S.layers.splice(j, 0, ...block);
   if (!whole) block.forEach(l => { if (ng) l.grp = ng; else delete l.grp; });
@@ -6978,7 +7148,7 @@ function refreshBars() {
   const tl = $('#tl'); if (!tl || tl.hidden) return;
   for (const row of tl.querySelectorAll('.tl-row')) {
     const bar = row.querySelector('.tl-bar'); if (!bar || bar.classList.contains('drag')) continue;
-    if (row.dataset.gid) { if (S.layers.some(l => l.grp === row.dataset.gid)) placeBar(bar, gpseudo(row.dataset.gid)); }
+    if (row.dataset.gid) { if (gleaves(row.dataset.gid).length) placeBar(bar, gpseudo(row.dataset.gid)); }
     else { const L = S.layers.find(l => l.id === row.dataset.id); if (L) placeBar(bar, L); }
   }
 }
@@ -6997,9 +7167,8 @@ function renderTimeline() {
   if (S.audio) tl.append(audioRow());
   const els = S.layers.filter(L => L.type !== 'bg').reverse();
   if (!els.length) tl.append(h('div', { class:'tl-empty', text:'Nenhum elemento ainda. Use Adicionar, na coluna da esquerda.' }));
-  const doneG = new Set();
-  const groupRow = gid => {
-    const g = gmeta(gid, true), mem = S.layers.filter(l => l.grp === gid), on = mem.every(m => isPicked(m.id));
+  const groupRow = (gid, depth) => {
+    const g = gmeta(gid, true), mem = gleaves(gid), on = mem.every(m => isPicked(m.id));
     const bar = h('div', { class:'tl-bar grp', style:`--c:var(--accent)` }, [h('div', { class:'seg in' }), h('div', { class:'seg out' }), h('div', { class:'h l' }), h('div', { class:'h r' })]);
     const tip = () => { const w = gwin(gid); bar.title = `${groupName(gid)}: ${w.start.toFixed(1)}s a ${w.end.toFixed(1)}s. Arraste para os lados para mover o grupo todo, para cima ou para baixo para mudar a ordem`; };
     placeBar(bar, gpseudo(gid)); tip();
@@ -7015,16 +7184,14 @@ function renderTimeline() {
       lane.style.cursor = c; bar.style.cursor = c; bar.classList.toggle('hl', m === 'l'); bar.classList.toggle('hr', m === 'r');
     });
     lane.addEventListener('pointerleave', () => { if (!bar.classList.contains('drag')) bar.classList.remove('hl', 'hr'); });
-    const row = h('div', { class:'tl-row grp' + (on ? ' sel' : '') }, [groupCell(gid, 'tl'), lane]);
+    const row = h('div', { class:'tl-row grp' + (on ? ' sel' : '') }, [groupCell(gid, 'tl', depth), lane]);
     row.dataset.gid = gid;
     tl.append(row);
     return g;
   };
-  for (const L of els) {
-    if (L.grp) {
-      if (!doneG.has(L.grp)) { doneG.add(L.grp); groupRow(L.grp); }
-      if (gmeta(L.grp).open === false) continue;
-    }
+  for (const n of layerTree(els)) {
+    if (n.gid) { groupRow(n.gid, n.depth); continue; }
+    const L = n.L;
     const bar = h('div', { class:'tl-bar', style:`--c:${TYPE_COLOR[typeKey(L)]}`, title:`${L.name}: entra em ${L.start.toFixed(1)}s, sai em ${(L.end ?? d).toFixed(1)}s. Arraste para cima ou para baixo para mudar a ordem. Clique duplo leva a agulha até ele. I e O marcam entrada e saída na agulha` }, [
       h('div', { class:'seg in' }), h('div', { class:'seg out' }), h('em', { text:tlLabel(L) }), h('div', { class:'h l' }), h('div', { class:'h r' })]);
     placeBar(bar, L);
@@ -7045,7 +7212,7 @@ function renderTimeline() {
     });
     lane.addEventListener('pointerleave', () => { if (!bar.classList.contains('drag')) bar.classList.remove('hl', 'hr'); });
     const row = h('div', { class:'tl-row' + (L.grp ? ' ingrp' : '') + (isPicked(L.id) ? ' sel' : '') + (L.visible ? '' : ' off') + (L.locked ? ' locked' : ''), oncontextmenu:e => openMenu(e, L),
-      onmouseenter:() => setHover(L.id), onmouseleave:() => setHover(null) }, [layerCell(L, 'tl'), lane]);
+      onmouseenter:() => setHover(L.id), onmouseleave:() => setHover(null) }, [layerCell(L, 'tl', n.depth), lane]);
     row.dataset.id = L.id;
     tl.append(row);
   }
@@ -7085,10 +7252,13 @@ function tlHit(bar, cx) {
 // arrastar uma barra para cima ou para baixo muda a ordem (topo = mais à frente), como arrastar o nome.
 // Metade de cima/baixo da linha sob o ponteiro decide; item de grupo leva para dentro do grupo dele; grupo inteiro nunca entra em outro.
 function tlStack(tl, bar, moving, y0) {
-  const set = new Set(moving), g0 = moving[0].grp;
-  const whole = !!g0 && moving.every(m => m.grp === g0) && S.layers.filter(l => l.grp === g0).every(m => set.has(m));
+  const set = new Set(moving);
+  // frame inteiro que se move (ele e os de dentro): a estrutura dele não muda, só o lugar na pilha
+  const wg = (moving[0].grp && gchain(moving[0].grp).find(g => { const lv = gleaves(g); return lv.length === set.size && lv.every(l => set.has(l)); })) || null, whole = !!wg;
   const byId = id => S.layers.find(l => l.id === id), grpOf = r => r.dataset.gid || (byId(r.dataset.id) || {}).grp;
-  const own = r => r.dataset.gid ? (whole && r.dataset.gid === g0) || !S.layers.some(l => l.grp === r.dataset.gid && !set.has(l)) : set.has(byId(r.dataset.id));
+  // frame (ou grupo de cima) que a linha representa no nível do que se move: os irmãos do frame que anda, ou o de fora de todos
+  const lvl = r => { const g = grpOf(r); if (!g) return null; const c = gchain(g), p = gpar(wg), i = p ? c.indexOf(p) : -1; return c[i + 1] || null; };
+  const own = r => r.dataset.gid ? (whole && ginside(r.dataset.gid, wg)) || gleaves(r.dataset.gid).every(l => set.has(l)) : set.has(byId(r.dataset.id));
   const all = [...tl.querySelectorAll('.tl-row')], rows = all.filter(r => !own(r));
   all.forEach(r => r.classList.toggle('moving', own(r)));
   const line = h('div', { class:'tl-drop', hidden:true }, [h('span')]); tl.append(line);
@@ -7100,26 +7270,27 @@ function tlStack(tl, bar, moving, y0) {
   // nova ordem de S.layers e o grupo de quem se move
   const result = to => {
     const rest = S.layers.filter(l => !set.has(l)), block = S.layers.filter(l => set.has(l));
-    const topOf = gid => Math.max(...rest.map((l, i) => l.grp === gid ? i : -1)) + 1;
-    let j = to.ref ? rest.indexOf(to.ref) + (to.up ? 1 : 0) : to.gtop ? topOf(to.gtop) : rest.findIndex(l => l.grp === to.gbot);
+    const topOf = gid => Math.max(...rest.map((l, i) => l.grp && ginside(l.grp, gid) ? i : -1)) + 1;
+    let j = to.ref ? rest.indexOf(to.ref) + (to.up ? 1 : 0) : to.gtop ? topOf(to.gtop) : rest.findIndex(l => l.grp && ginside(l.grp, to.gbot));
     j = Math.max(1, j);
-    return { order:[...rest.slice(0, j), ...block, ...rest.slice(j)], ng:whole ? g0 : to.ng };
+    return { order:[...rest.slice(0, j), ...block, ...rest.slice(j)], ng:whole ? wg : to.ng };
   };
-  const same = r => r.order.every((l, i) => l === S.layers[i]) && moving.every(l => (l.grp || null) === (r.ng || null));
+  const same = r => r.order.every((l, i) => l === S.layers[i]) && (whole || moving.every(l => (l.grp || null) === (r.ng || null)));
   const place = () => {
     bar.style.transform = `translateY(${clamp(y - y0 + tl.scrollTop - sc0, minT, maxT)}px)`;
     to = null; line.hidden = true;
     if (!rows.length) return;
     const r = rows.find(q => y < q.getBoundingClientRect().bottom) || rows[rows.length - 1], rr = r.getBoundingClientRect(), rg = grpOf(r);
     let top = rr.top, bot = rr.bottom, up = y < (top + bot) / 2, inside = false;
-    if (whole && rg) {
-      const span = rows.filter(q => grpOf(q) === rg);
+    const rt = whole ? lvl(r) : null;
+    if (rt) {
+      const span = rows.filter(q => lvl(q) === rt);
       top = span[0].getBoundingClientRect().top; bot = span[span.length - 1].getBoundingClientRect().bottom; up = y < (top + bot) / 2;
-      to = up ? { gtop:rg } : { gbot:rg };
+      to = up ? { gtop:rt } : { gbot:rt };
     } else if (r.dataset.gid) {
-      // cabeçalho: metade de cima = acima do grupo; de baixo = no topo do grupo (recolhido: abaixo dele)
-      const open = gmeta(rg)?.open !== false;
-      to = up ? { gtop:rg } : open ? { gtop:rg, ng:rg } : { gbot:rg }; inside = !up && open;
+      // cabeçalho: metade de cima = acima do grupo; de baixo = no topo do grupo (recolhido: abaixo dele). Frame de dentro de outro continua no de fora
+      const open = gmeta(rg)?.open !== false, pr = gpar(rg) || undefined;
+      to = up ? { gtop:rg, ng:pr } : open ? { gtop:rg, ng:rg } : { gbot:rg, ng:pr }; inside = !up && open;
     } else { const T = byId(r.dataset.id); if (T.type === 'bg') up = true; to = { ref:T, up, ng:T.grp }; inside = !!T.grp; }  // o fundo fica sempre embaixo: o limite é acima dele
     const res = result(to);
     // sem mudança a linha continua à vista (limite de cima/baixo), só não grava nada
@@ -7159,7 +7330,7 @@ function tlStack(tl, bar, moving, y0) {
 function tlDragGroup(e, gid, bar, mode) {
   e.preventDefault(); e.stopPropagation();
   const g = tlGeom(); if (!g) return;
-  const mem = S.layers.filter(l => l.grp === gid);
+  const mem = gleaves(gid);
   if (!mem.every(l => isPicked(l.id))) {
     RT.selected = mem[mem.length - 1].id; RT.picks = new Set(mem.map(l => l.id)); renderLayers(); renderProps(); needs = true;
     bar = g.tl.querySelector(`.tl-row[data-gid="${gid}"] .tl-bar`) || bar;
@@ -7167,7 +7338,7 @@ function tlDragGroup(e, gid, bar, mode) {
   pushUndo(); pause();
   const d = S.duration, o = mem.map(l => ({ l, s:l.start, e:l.end })), s0 = Math.min(...o.map(x => x.s)), e0 = Math.max(...o.map(x => x.e ?? d));
   const x0 = e.clientX, y0 = e.clientY, grid = v => Math.round(v * 10) / 10, r3 = v => Math.round(v * 1000) / 1000, MIN = .3;
-  const pts = [0, d, T, ...extraSnaps()]; for (const q of S.layers) if (q.grp !== gid && q.type !== 'bg') pts.push(q.start, q.end ?? d);
+  const pts = [0, d, T, ...extraSnaps()]; for (const q of S.layers) if (!mem.includes(q) && q.type !== 'bg') pts.push(q.start, q.end ?? d);
   const tol = 7 / g.w * d;
   const near = v => { let b = null; for (const p of pts) if (Math.abs(p - v) <= tol && (b === null || Math.abs(p - v) < Math.abs(b - v))) b = p; return b; };
   const lane = bar.parentElement, tip = h('div', { class:'tl-tip' }), guide = h('div', { class:'tl-snap', hidden:true });
@@ -7320,7 +7491,7 @@ function tlDrag(e, L, bar, mode) {
   // clique duplo numa barra: a agulha vai até o elemento já na tela (no grupo, até o primeiro que entra)
   tl.addEventListener('dblclick', e => {
     const row = e.target.closest('.tl-bar') && e.target.closest('.tl-row'); if (!row) return;
-    const L = row.dataset.gid ? S.layers.filter(l => l.grp === row.dataset.gid).sort((a, c) => a.start - c.start)[0] : S.layers.find(l => l.id === row.dataset.id);
+    const L = row.dataset.gid ? gleaves(row.dataset.gid).sort((a, c) => a.start - c.start)[0] : S.layers.find(l => l.id === row.dataset.id);
     if (L) seekLayer(L);
   });
 }
@@ -7758,7 +7929,7 @@ function richF(L, label) {
     const s = getSelection(); s.removeAllRanges(); s.addRange(r);
   };
   let sel = null;
-  const wSel = h('select', { 'aria-label':'Peso do trecho selecionado' }, [h('option', { value:'', text:'Peso do trecho' }), ...WEIGHTS.map(([v, t]) => h('option', { value:v, text:`${t} ${v}` }))]);
+  const wSel = h('select', { 'aria-label':'Peso do trecho selecionado' }, [h('option', { value:'', text:'Peso do trecho' }), ...weightsOf(L.font).map(([v, t]) => h('option', { value:v, text:`${t} ${v}` }))]);
   // mostra o peso do trecho selecionado
   const sync = () => {
     const rg = getSel(); if (!rg) return; sel = rg;
@@ -8083,7 +8254,7 @@ function styleProps(L) {
   const look = () => [h('h3', { text:'Aparência' }), ...lookFields(L)];
   if (L.type === 'text') {
     put(h('h3', { text:'Texto' }), richF(L, 'Texto (Enter quebra a linha)'), fontF(L),
-      selectF(L, 'weight', 'Peso do texto', WEIGHTS.map(([v, t]) => [v, `${t} ${v}`]), { num:true, props:true }),
+      selectF(L, 'weight', 'Peso do texto', weightsOf(L.font).map(([v, t]) => [v, `${t} ${v}`]), { num:true, props:true }),
       colorF(L, 'color', 'Cor'),
       L.in === 'highlight' || L.out === 'highlight' ? colorF(L, 'hl', 'Marca-texto') : null,
       lineF(L),
@@ -8694,7 +8865,7 @@ async function addSvgLayers(units, name, pos) {
   if (fr) intoFrame(fr, Ls);
   else { const gid = 'g' + Math.random().toString(36).slice(2, 7); Ls.forEach(l => { l.grp = gid; }); gmeta(gid, true).name = name || 'SVG'; }
   RT.picks = new Set(Ls.map(l => l.id)); RT.selected = Ls[Ls.length - 1].id; propTab = 'style';
-  renderProps(); changed({ layers:true }); seekLayer(Ls[0]); RT.userSeek = false;
+  renderProps(); changed({ layers:true }); seekLayers(Ls); RT.userSeek = false;
   toast(`SVG separado em ${Ls.length} camadas`);
   return true;
 }
@@ -8702,6 +8873,7 @@ async function addSvgText(text, name, pos) {
   let svg, lg;
   try {
     const norm = normalizeSvg(text);
+    try { if (await addSvgNative(norm, name || 'SVG', pos)) return; } catch (e) { console.warn(e); } // formas e textos de verdade
     let units = null; try { units = splitSvgLayers(norm); } catch (e) { console.warn(e); }
     if (units && await addSvgLayers(units, name || 'SVG', pos)) return;
     svg = { kind:'svg', text:norm, name:name || 'SVG' }; lg = await parseLogo(svg); LGC.set(svg.text, lg); if (!lg.parts.length && !lg.pen) throw new Error('Não achei formas nesse SVG');
@@ -9071,7 +9243,7 @@ function addPrice() {
   old.start = st; old.end = S.duration; now.start = +Math.min(st + .9, S.duration - .5).toFixed(2); now.end = S.duration;
   S.layers.push(old, now); (S.groups ||= {})[gid] = { name:'Preço de/por', open:true };
   RT.picks = new Set([old.id, now.id]); RT.selected = now.id; propTab = 'style';
-  renderProps(); changed({ layers:true }); seekLayer(now); RT.userSeek = false;
+  renderProps(); changed({ layers:true }); seekLayers([old, now]); RT.userSeek = false;
 }
 ADD_KINDS.push(
   { id:'price', label:'Preço de/por', gl:'<span style="font-size:10px;font-weight:700"><s style="opacity:.6">9</s> 5</span>', add:addPrice },
@@ -9262,6 +9434,7 @@ $('#varBtn').onclick = openVars;
   if (!fresh) { S = saved; FILES.id = id; FILES.name = list.find(f => f.id === id).name; }
   else { newProject(); FILES.id = newFileId(); FILES.name = 'Sem título'; }
   const interned = !fresh && await internImages(S);
+  const torn = !fresh && fixTornGroups(S);
   DB.set('currentId', FILES.id); showFileName(); setSaveState('Salvo');
   RT.selected = S.layers.find(l => l.type === 'logo')?.id || S.layers[1]?.id || S.layers[0]?.id;
   renderAll(); updPlay(); fitStage();
@@ -9271,6 +9444,6 @@ $('#varBtn').onclick = openVars;
   S.layers.forEach(l => l.src && getImage(l.src));
   ensureFonts();
   pause(); T = heroTime(); needs = true;
-  if (fresh || interned) autosave();
+  if (fresh || interned || torn) autosave();
   setTimeout(gcMedia, 20000);
 })();

@@ -191,11 +191,24 @@ function svgiClipTrivial(el, cp, live) {
 // efeito que só o SVG original sabe desenhar: filtro, máscara, recorte de verdade (e, em grupo, mesclagem)
 function svgiComplex(el, cs, live, isG) {
   const att = a => { const v = el.getAttribute(a); return v && v !== 'none' ? v : null; };
-  if (att('filter') || (cs.filter && cs.filter !== 'none')) return true;
+  if ((att('filter') || (cs.filter && cs.filter !== 'none')) && !svgiFilterOk(el, live)) return true;
   if (att('mask') || (cs.maskImage && cs.maskImage !== 'none')) return true;
   if (isG && cs.mixBlendMode && cs.mixBlendMode !== 'normal') return true;
   const cp = att('clip-path') || (cs.clipPath && cs.clipPath !== 'none' ? cs.clipPath : null);
-  return !!cp && !svgiClipTrivial(el, cp, live);
+  return !!cp && !svgiClipTrivial(el, cp, live) && !svgiClipKids(cp, live);
+}
+// filtro só de desfoque/sombra (o que o Figma exporta): a forma entra sem ele (sombra e desfoque se refazem nas opções de Aparência)
+function svgiFilterOk(el, live) {
+  const m = String(el.getAttribute('filter') || getComputedStyle(el).filter).match(/url\(\s*["']?#([^"')]+)/), f = m && live.querySelector('#' + CSS.escape(m[1]));
+  return !!f && f.localName === 'filter' && [...f.children].every(c => /^(feFlood|feColorMatrix|feBlend|feOffset|feGaussianBlur|feComposite|feDropShadow|feMorphology)$/.test(c.localName));
+}
+// recorte de verdade feito de formas simples: devolve as formas (o conjunto é a união); null = não dá
+function svgiClipKids(cp, live) {
+  const m = String(cp).match(/url\(\s*["']?#([^"')]+)/), c = m && live.querySelector('#' + CSS.escape(m[1]));
+  if (!c || c.localName !== 'clipPath' || c.getAttribute('clipPathUnits') === 'objectBoundingBox' || c.hasAttribute('transform') || c.hasAttribute('clip-path')) return null;
+  const k = [...c.children];
+  if (!k.length || k.length > 12 || !k.every(e => SVGI_LEAF.test(e.localName) && !e.hasAttribute('transform') && !e.hasAttribute('clip-path'))) return null;
+  return k;
 }
 const svgiLabel = (el, def) => {
   const raw = el.getAttribute('inkscape:label') || el.getAttribute('data-name') || el.getAttribute('id') || '';
@@ -214,7 +227,7 @@ function svgiStrokeProps(cs, sp, sw, f) {
   }
   return p;
 }
-function svgiShapeItem(el, cs, M, op, live, label) {
+function svgiShapeItem(el, cs, M, op, live, clips, label) {
   const tn = el.localName.toLowerCase();
   if (/^(hidden|collapse)$/.test(cs.visibility)) return 'skip';
   if ([cs.getPropertyValue('marker-start'), cs.getPropertyValue('marker-mid'), cs.getPropertyValue('marker-end')].some(v => v && v !== 'none')) return null;
@@ -227,14 +240,14 @@ function svgiShapeItem(el, cs, M, op, live, label) {
   const num = a => svgiNum(el.getAttribute(a)), straight = Math.abs(M.b) + Math.abs(M.c) < 1e-5 * (Math.abs(M.a) + Math.abs(M.d));
   let nat = null, d = null, root;
   const corners = (x, y, w, hh) => { const q = [svgiPt(M, x, y), svgiPt(M, x + w, y), svgiPt(M, x, y + hh), svgiPt(M, x + w, y + hh)]; return [Math.min(...q.map(p => p[0])), Math.min(...q.map(p => p[1])), Math.max(...q.map(p => p[0])), Math.max(...q.map(p => p[1]))]; };
-  if (straight && tn === 'rect' && num('width') > 0 && num('height') > 0) {
+  if (!clips.length && straight && tn === 'rect' && num('width') > 0 && num('height') > 0) {
     const w = num('width'), hh = num('height');
     let rx = svgiNum(el.getAttribute('rx'), NaN), ry = svgiNum(el.getAttribute('ry'), NaN);
     if (Number.isNaN(rx)) rx = Number.isNaN(ry) ? 0 : ry; if (Number.isNaN(ry)) ry = rx;
     rx = Math.min(Math.max(rx, 0), w / 2); ry = Math.min(Math.max(ry, 0), hh / 2);
     const rpx = rx * Math.abs(M.a), rpy = ry * Math.abs(M.d);
     if (!rx || Math.abs(rpx - rpy) / rpx < .02) nat = { kind:'rect', box:corners(num('x'), num('y'), w, hh), r:Math.min(rpx, rpy) };
-  } else if (straight && (tn === 'circle' || tn === 'ellipse')) {
+  } else if (!clips.length && straight && (tn === 'circle' || tn === 'ellipse')) {
     const rx = tn === 'circle' ? num('r') : num('rx'), ry = tn === 'circle' ? num('r') : num('ry');
     if (rx > 0 && ry > 0) nat = { kind:'ellipse', box:corners(num('cx') - rx, num('cy') - ry, rx * 2, ry * 2), r:0 };
   }
@@ -253,14 +266,16 @@ function svgiShapeItem(el, cs, M, op, live, label) {
       box = { x:(nat.box[0] - O.x) * k, y:(nat.box[1] - O.y) * k, w:(nat.box[2] - nat.box[0]) * k, h:(nat.box[3] - nat.box[1]) * k };
       L = mkShape({ kind:nat.kind, size:box.w / W(), mh:box.h / W(), radius:+(nat.r * k).toFixed(3) });
     } else {
-      const nd = svgiNormD(d, svgiTf(M, O, k)), v0 = nd && vecParse(nd.d), dd = v0 && vecD(v0), vec = dd && vecParse(dd);
+      const nd = svgiNormD(d, svgiTf(M, O, k));
+      if (nd && clips.length) { const cd = svgiClipD(nd.d, clips, O, k, rule); if (!cd) return null; nd.d = cd; }
+      const v0 = nd && vecParse(nd.d), dd = v0 && vecD(v0), vec = dd && vecParse(dd);
       if (!vec) return null;
       const b = customBox(dd); box = { x:b.x, y:b.y, w:b.w, h:b.h };
       L = mkShape({ kind:'custom', d:dd, vec, vecD:dd, size:b.w / W(), mh:null });
     }
     Object.assign(L, { name:label, rot:0, in:'fade', inDur:BP.fade.dur, out:'cut', idle:'none', opacity:+clamp(op, 0, 1).toFixed(3), fill:true, stroke:false, motion:0 });
     if (blend) L.blend = blend;
-    if (rule) L.fillRule = rule;
+    if (rule && !clips.length) L.fillRule = rule;
     let paint = null;
     if (ctx.hasF && ctx.fp.c) { const c = svgiHex(ctx.fp.c, fo); paint = { mode:'solid', c1:c, c2:c, c3:c, c4:c }; }
     else if (ctx.hasF && ctx.fp.g) paint = svgiGradFill(ctx.fp.g, M, O, k, box, fo);
@@ -335,6 +350,26 @@ function svgiTextItem(el, cs, M, op, live, label) {
   } };
 }
 
+// forma recortada: interseção (paper.js) da forma com a união das formas do recorte, tudo já no espaço do desenho
+function svgiClipD(d, clips, O, k, rule) {
+  if (typeof paper === 'undefined') return null;
+  const sc = paperScope();
+  try {
+    let acc = new sc.CompoundPath({ pathData:d, insert:false }); acc.closed = true; acc.fillRule = rule || 'nonzero';
+    for (const c of clips) {
+      let u = null;
+      for (const e of c.ks) {
+        const dd = e.localName.toLowerCase() === 'path' ? e.getAttribute('d') : shapeToD(e), nd = dd && svgiNormD(dd, svgiTf(c.M, O, k)); if (!nd) continue;
+        const p = new sc.CompoundPath({ pathData:nd.d, insert:false }); p.closed = true; p.fillRule = (getComputedStyle(e).clipRule === 'evenodd') ? 'evenodd' : 'nonzero';
+        u = u ? u.unite(p, { insert:false }) : p;
+      }
+      if (!u) return null;
+      acc = acc.intersect(u, { insert:false });
+    }
+    const out = acc.pathData; return out || null;
+  } catch (e) { console.warn(e); return null; } finally { sc.project.clear(); }
+}
+
 /* ------------ o que não dá para representar: o mesmo SVG só com esses elementos ------------ */
 function svgiIsolate(tagged, tags) {
   const svg = new DOMParser().parseFromString(tagged, 'image/svg+xml').documentElement, want = new Set(tags.map(String)), keep = new Set();
@@ -351,8 +386,25 @@ function svgiIsolate(tagged, tags) {
 }
 
 /* ------------ SVG -> lista de camadas (cada uma com `make(O, k)`: O = centro do conjunto, k = escala para o quadro) ------------ */
+// <use> vira uma cópia de verdade do que ele aponta (transform + x/y), para entrar como forma e não como logo
+function svgiExpandUse(svg) {
+  for (let pass = 0; pass < 6; pass++) {
+    const us = [...svg.querySelectorAll('use')]; if (!us.length) return;
+    for (const u of us) {
+      const ref = (u.getAttribute('href') || u.getAttribute('xlink:href') || '').replace(/^#/, ''), t = ref && svg.querySelector('#' + CSS.escape(ref));
+      if (!t || t.contains(u) || /^(svg|symbol)$/i.test(t.localName)) { if (pass > 4 || !t || /^(svg|symbol)$/i.test(t.localName)) u.setAttribute('data-nouse', '1'); if (!(t && !t.contains(u) && !/^(svg|symbol)$/i.test(t.localName))) continue; }
+      const g = svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'g'), cl = t.cloneNode(true);
+      cl.removeAttribute('id');
+      for (const a of [...u.attributes]) if (!/^(href|xlink:href|x|y|width|height|id)$/.test(a.name) && a.name !== 'data-nouse') g.setAttribute(a.name, a.value);
+      const x = parseFloat(u.getAttribute('x')) || 0, y = parseFloat(u.getAttribute('y')) || 0;
+      if (x || y) g.setAttribute('transform', (g.getAttribute('transform') || '') + ` translate(${x} ${y})`);
+      if (u.getAttribute('id')) g.setAttribute('id', u.getAttribute('id'));
+      g.appendChild(cl); u.replaceWith(g);
+    }
+  }
+}
 async function svgImportItems(norm) {
-  const svg = sanitizeSvg(norm);
+  const svg = sanitizeSvg(norm); svgiExpandUse(svg);
   [svg, ...svg.querySelectorAll('*')].forEach((e, i) => e.setAttribute('data-mi', i));
   const tagged = new XMLSerializer().serializeToString(svg);
   const host = h('div', { style:'position:fixed;left:-99999px;top:0;width:800px;height:800px;opacity:0;pointer-events:none' }), live = document.importNode(svg, true);
@@ -367,14 +419,21 @@ async function svgImportItems(norm) {
       const last = items[items.length - 1], tag = el.getAttribute('data-mi');
       if (last && last.t === 'raw') { last.tags.push(tag); last.name = 'Formas'; } else items.push({ t:'raw', tags:[tag], name:svgiLabel(el, 'Formas') });
     };
-    const walk = (parent, op) => {
+    const clipsOf = (el, cs, clips) => {
+      const cp = el.getAttribute('clip-path') || (cs.clipPath && cs.clipPath !== 'none' ? cs.clipPath : null);
+      if (!cp || cp === 'none' || svgiClipTrivial(el, cp, live)) return clips;
+      const ks = svgiClipKids(cp, live); if (!ks) return clips;
+      const M = rootInv.multiply(el.getScreenCTM());
+      return clips.concat([{ ks, M }]);
+    };
+    const walk = (parent, op, clips) => {
       for (const el of parent.children) {
         const tn = el.localName.toLowerCase();
         if (SVGI_SKIP.test(tn)) continue;
         const cs = getComputedStyle(el);
         if (cs.display === 'none') continue;
         const o = op * svgiNum(cs.opacity, 1);
-        if (/^(g|a|svg)$/.test(tn)) { if (svgiComplex(el, cs, live, true)) raw(el); else walk(el, o); continue; }
+        if (/^(g|a|svg)$/.test(tn)) { if (svgiComplex(el, cs, live, true)) raw(el); else walk(el, o, clipsOf(el, cs, clips)); continue; }
         const isLeaf = SVGI_LEAF.test(tn), isText = tn === 'text';
         if (!isLeaf && !isText && !/^(use|image)$/.test(tn)) continue;
         if (/^(hidden|collapse)$/.test(cs.visibility)) continue;
@@ -382,14 +441,15 @@ async function svgImportItems(norm) {
         if ((isLeaf || isText) && !svgiComplex(el, cs, live, false)) {
           try {
             const M = rootInv.multiply(el.getScreenCTM());
-            r = isText ? svgiTextItem(el, cs, M, o, live, lab(el, 'Texto')) : svgiShapeItem(el, cs, M, o, live, lab(el, tn === 'path' || tn === 'line' || tn === 'polyline' || tn === 'polygon' ? 'Vetor' : tn === 'rect' ? 'Retângulo' : 'Círculo'));
+            const cl = clipsOf(el, cs, clips);
+            r = isText ? (cl.length ? null : svgiTextItem(el, cs, M, o, live, lab(el, 'Texto'))) : svgiShapeItem(el, cs, M, o, live, cl, lab(el, tn === 'path' || tn === 'line' || tn === 'polyline' || tn === 'polygon' ? 'Vetor' : tn === 'rect' ? 'Retângulo' : 'Círculo'));
           } catch (e) { console.warn(e); r = null; }
         }
         if (r === 'skip') continue;
         if (r) items.push(r); else raw(el);
       }
     };
-    walk(live, 1);
+    walk(live, 1, []);
   } finally { host.remove(); }
   const out = [];
   for (const it of items) {
@@ -444,7 +504,7 @@ async function addSvgNative(norm, name, pos) {
   if (fr) intoFrame(fr, Ls);
   else { const gid = 'g' + Math.random().toString(36).slice(2, 7); Ls.forEach(l => { l.grp = gid; }); gmeta(gid, true).name = name || 'SVG'; }
   RT.picks = new Set(Ls.map(l => l.id)); RT.selected = Ls[Ls.length - 1].id; propTab = 'style';
-  renderProps(); changed({ layers:true }); seekLayer(Ls[0]); RT.userSeek = false;
+  renderProps(); changed({ layers:true }); seekLayers(Ls); RT.userSeek = false;
   const nv = Ls.filter(l => l.type === 'shape').length, nt = Ls.filter(l => l.type === 'text').length, nl = Ls.filter(l => l.type === 'logo').length;
   toast(`SVG em ${Ls.length} camadas: ${[nv && `${nv} vetor${nv > 1 ? 'es' : ''}`, nt && `${nt} texto${nt > 1 ? 's' : ''}`, nl && `${nl} logo${nl > 1 ? 's' : ''}`].filter(Boolean).join(', ')}`, 4200);
   return true;

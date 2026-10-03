@@ -50,7 +50,18 @@ function dashSplit(sp, pat) {
   if (on && cur && cur.length > 1) out.push(cur);
   return out;
 }
+// o polygon-clipping às vezes se perde com muitos pedaços quase colados: tenta de novo com os pontos mais arredondados e, por último, um pedaço por vez
 function unionPolys(pcs) {
+  const snap = (v, q) => Math.round(v * q) / q;
+  for (const q of [0, 100, 20, 4]) {
+    const use = q ? pcs.map(p => p.map(r => r.map(c => [snap(c[0], q), snap(c[1], q)]))) : pcs;
+    try { return unionPolys0(use); } catch (e) { if (q === 4) console.warn(e); }
+  }
+  let acc = []; // um por vez, pulando quem não entra
+  for (const p of pcs) { try { acc = acc.length ? polygonClipping.union(acc, p) : [p]; } catch (e) { /* pedaço pequeno que não cabe: fica de fora */ } }
+  return acc;
+}
+function unionPolys0(pcs) {
   if (!pcs.length) return [];
   const parts = [];
   for (let i = 0; i < pcs.length; i += 300) { const c = pcs.slice(i, i + 300); parts.push(polygonClipping.union(c[0], ...c.slice(1))); }
@@ -257,8 +268,49 @@ async function faceLoad(family, weight, italic) {
   if (up) synth = !!italic && !base.italicAngle;
   const ax = base.variationAxes && base.variationAxes.wght;
   let font = base;
-  if (ax) { try { font = base.getVariation({ wght:clamp(weight, ax.min, ax.max) }); } catch (e) { font = base; } }
+  if (ax) {
+    const set = up ? { wght:clamp(weight, ax.min, ax.max) } : fitAxes(base, family, weight, italic);
+    try { font = base.getVariation(set); } catch (e) { font = base; }
+  }
   return { font, base, upm:base.unitsPerEm || 1000, synth };
+}
+// O Google Fonts serve a fonte variável com os eixos que não são o peso (tamanho óptico, largura…) fixos num valor dele, que não é o
+// padrão do arquivo (Bricolage Grotesque: arquivo em opsz 96, condensada; no canvas sai em opsz 14, larga). Para o vetor ficar igual ao que
+// o canvas desenha, procura o valor de cada eixo cujas larguras de letra (medidas no canvas) mais se aproximam das do arquivo.
+const FIT_CH = 'HOnagemWis';
+function fitAxes(base, family, weight, italic) {
+  const wax = base.variationAxes.wght, set = { wght:clamp(weight, wax.min, wax.max) };
+  const axes = Object.entries(base.variationAxes).filter(([k]) => k !== 'wght');
+  if (!axes.length) return set;
+  for (const [k, a] of axes) set[k] = a.default;
+  const cx = document.createElement('canvas').getContext('2d'), upm = base.unitsPerEm || 1000;
+  cx.font = `${italic ? 'italic ' : ''}${weight} 100px "${family}"`;
+  const ref = [...FIT_CH].map(ch => ({ id:(base.glyphForCodePoint(ch.codePointAt(0)) || {}).id, w:cx.measureText(ch).width }));
+  if (ref.some(r => !r.id || !r.w)) return set;
+  const err = s => {
+    let f; try { f = base.getVariation(s); } catch (e) { return Infinity; }
+    return ref.reduce((a, r) => { const g = f.getGlyph(r.id), d = (g.advanceWidth * 100 / upm) / r.w - 1; return a + d * d; }, 0);
+  };
+  const free = axes.filter(([, a]) => a.max > a.min), def = { ...set };
+  // valores de um eixo entre lo e hi; escala logarítmica quando o intervalo é largo (opsz 5..1200)
+  const spread = (lo, hi, n) => Array.from({ length:n }, (_, i) => lo > 0 && hi / lo > 6 ? lo * Math.pow(hi / lo, i / (n - 1)) : lo + (hi - lo) * i / (n - 1));
+  let best = err(set);
+  const tryAxis = (k, vals) => { for (const v of vals) { const e = err({ ...set, [k]:v }); if (e < best - 1e-12) { best = e; set[k] = v; } } };
+  if (free.length <= 2) { // grade conjunta (um eixo em cima do outro muda a mesma largura)
+    const [a0, a1] = free.map(([k, a]) => [k, spread(a.min, a.max, 17)]);
+    for (const v0 of a0 ? a0[1] : [0]) for (const v1 of a1 ? a1[1] : [0]) {
+      const s = { ...set }; if (a0) s[a0[0]] = v0; if (a1) s[a1[0]] = v1;
+      const e = err(s); if (e < best - 1e-12) { best = e; Object.assign(set, s); }
+    }
+  }
+  for (let pass = 0; pass < 4; pass++) {
+    for (const [k, a] of free) {
+      const w = (a.max - a.min) / Math.pow(4, pass + 1), lo = Math.max(a.min, set[k] - w), hi = Math.min(a.max, set[k] + w);
+      tryAxis(k, free.length <= 2 || pass ? spread(Math.min(lo, hi), hi, 13) : spread(a.min, a.max, 25));
+    }
+  }
+  if (best > ref.length * 4e-4) Object.assign(set, def); // não bateu (fonte do canvas não carregou?): padrão do arquivo
+  return set;
 }
 // letras -> path SVG na tela. items: [{ ch, x, y (linha de base), w, it, c }] em px do texto, T0 = { ax, ay, k } (centro na tela e escala).
 // Devolve { map: cor -> d, missing }
@@ -328,7 +380,7 @@ async function textToVector(list) {
   if (!made.length) return false;
   propTab = 'style'; select(made[0].id, true);
   if (made.length > 1) { RT.picks = new Set(made.map(n => n.id)); RT.selected = made[made.length - 1].id; }
-  changed({ layers:true, props:true }); seekLayer(made[0]);
+  changed({ layers:true, props:true }); seekLayers(made);
   toast(missing ? `Texto em curvas. ${missing} caractere${missing > 1 ? 's' : ''} sem desenho na fonte ficou${missing > 1 ? 'ram' : ''} de fora` : 'O texto virou vetor. A animação agora é do bloco, não de cada letra', 5000, UNDO_ACT);
   return true;
 }

@@ -101,6 +101,17 @@
       "port": 3008
     },
     {
+      "name": "mola-tree",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3041"
+      ],
+      "port": 3041
+    },
+    {
       "name": "mola-pen",
       "runtimeExecutable": "npx",
       "runtimeArgs": [
@@ -110,6 +121,17 @@
         "3019"
       ],
       "port": 3019
+    },
+    {
+      "name": "mola-vec",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3031"
+      ],
+      "port": 3031
     },
     {
       "name": "mola-frame",
