@@ -307,7 +307,9 @@ const DEMO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">
    Estado
    ============================================================ */
 let S;                     // projeto
-let T = 0, playing = false, needs = true;
+// needs = redesenhar o quadro; needsOv = só a camada de alças/contornos (#ov): rolar, arrastar com a mão, passar o mouse e a
+// seleção por área não mudam o quadro, então não pagam um quadro inteiro (no carrossel com zoom isso travava o palco)
+let T = 0, playing = false, needs = true, needsOv = false;
 const RT = { logo:null, images:new Map(), layout:new Map(), fontsOk:new Set(), fontsBad:new Set(), selected:null, dirtyUndo:false, exporting:false, drag:null, guide:null,
   rev:0, gRev:0, imgRev:0, gBox:new Map(), noGrp:false }; // rev: sobe a cada mudança (caixa dos grupos); gRev: sobe a cada movimento do mouse num arrasto; noGrp: ao medir posições de repouso o grupo não se anima
 const undoStack = [];
@@ -3195,15 +3197,16 @@ function drawFrame(ctx, t, rs, isExport, clip) {
   const R = { rs, export:!!isExport };
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.filter = 'none'; ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  const ox = voX(ctx.canvas), oy = voY(ctx.canvas); // recorte do palco com zoom (setView): onde o canvas começa no quadro
   if (clip) { // só estes slides (px do canvas)
-    const k = ctx.canvas.width / FW(); ctx.save(); ctx.beginPath();
-    for (const s of clip) ctx.rect(Math.round(s * W() * k), 0, Math.round(W() * k), ctx.canvas.height);
+    const k = (ctx.canvas._vo ? ctx.canvas._vo.fw : ctx.canvas.width) / FW(); ctx.save(); ctx.beginPath();
+    for (const s of clip) ctx.rect(Math.round(s * W() * k) - ox, 0, Math.round(W() * k), ctx.canvas.height);
     ctx.clip();
   }
   // RT.only (PNG da seleção): só essas camadas, sobre fundo transparente
   if (RT.only) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); }
-  ctx.setTransform(rs, 0, 0, rs, 0, 0);
+  ctx.setTransform(rs, 0, 0, rs, -ox, -oy);
   const one = (c, L) => {
     try {
       if (L.type === 'bg') drawBg(c, L, t, R);
@@ -3214,7 +3217,7 @@ function drawFrame(ctx, t, rs, isExport, clip) {
   };
   // câmera (camadas 'camera' e transições com movimento) mexe em todo o quadro; sombra e movimento da imagem são de cada camada
   const cam = camAt(t), buf = !RT.only && (cam.blur > .3 || cam.whip) ? frameBuf(ctx.canvas, 0) : null, tc = buf ? buf.getContext('2d') : ctx;
-  if (buf) { tc.setTransform(1, 0, 0, 1, 0, 0); tc.fillStyle = '#000'; tc.fillRect(0, 0, buf.width, buf.height); tc.setTransform(rs, 0, 0, rs, 0, 0); }
+  if (buf) { tc.setTransform(1, 0, 0, 1, 0, 0); tc.fillStyle = '#000'; tc.fillRect(0, 0, buf.width, buf.height); tc.setTransform(rs, 0, 0, rs, -ox, -oy); }
   const els = S.layers.filter(L => L.visible && !NOBOX(L) && (!RT.only || RT.only.has(L.id)));
   // grupo com animação própria: os itens são desenhados juntos, à parte, e o conjunto entra no lugar do primeiro item
   const gAct = new Map(), gDone = new Set();
@@ -3226,7 +3229,7 @@ function drawFrame(ctx, t, rs, isExport, clip) {
   if (buf) camComposite(ctx, buf, cam);
   // transições por cima de tudo
   if (!S.still && !RT.stillPass && !RT.only) for (const L of S.layers) if (L.visible && L.type === 'fx') drawFx(ctx, L, t, R);
-  if (clip) { ctx.restore(); ctx.setTransform(rs, 0, 0, rs, 0, 0); }
+  if (clip) { ctx.restore(); ctx.setTransform(rs, 0, 0, rs, -ox, -oy); }
 }
 
 /* ============================================================
@@ -3241,12 +3244,30 @@ const hashId = s => { let x = 7; for (const c of String(s)) x = (x * 31 + c.char
 // 0 câmera · 1 camada à parte (sombra, mesclagem) · 2 e 3 sombra longa · 4 desfoque de movimento (exportação) · 5 sombra + mesclagem · 6 transição com mesclagem · 7 grupo animado
 // pad = margem em px em volta do quadro (c._pad): o que passa da borda continua existindo e entra no desfoque e na sombra
 // (sem ela o desfoque de um elemento que sangra pela borda clareava perto da borda, como se ele acabasse ali)
-const FBUF = new Map();
+// Memória: cada tamanho de quadro (zoom, formato, miniatura) tinha as suas telas e até 40 ficavam guardadas; no carrossel com
+// zoom cada uma passa de 50 MB na placa de vídeo. Agora a tela que fica um tempo sem uso (FBUF_IDLE ms) sai quando outra é criada
+// e o total tem teto (FBUF_MAX px, sai a usada há mais tempo). Sai só do cache (sem zerar): quem está no meio do quadro com ela
+// continua desenhando, e o navegador devolve a memória quando ninguém mais a usa
+const FBUF = new Map(), FBUF_IDLE = 2000, FBUF_MAX = 9e7;
+let FBUF_PX = 0;
 const padOf = c => c._pad || 0;
-function frameBuf(ref, slot, pad = 0) {
-  const w = ref.width - 2 * padOf(ref), hh = ref.height - 2 * padOf(ref);
-  const k = `${slot}:${w}x${hh}+${pad}`; let c = FBUF.get(k);
-  if (!c) { if (FBUF.size > 40) FBUF.clear(); c = document.createElement('canvas'); c.width = w + pad * 2; c.height = hh + pad * 2; c._pad = pad; FBUF.set(k, c); }
+function fbufDrop(k, c) { FBUF.delete(k); FBUF_PX -= c.width * c.height; }
+// Recorte (palco com zoom, setView): c._vo = { x, y, fw, fh } diz onde o canvas começa no quadro inteiro (px, sem a margem _pad)
+// e o tamanho do quadro inteiro. A tela de apoio herda o recorte de quem a pede; geo = outro recorte (grupo animado)
+const voX = c => c._vo ? c._vo.x : 0, voY = c => c._vo ? c._vo.y : 0;
+function frameBuf(ref, slot, pad = 0, geo = null) {
+  const v = ref._vo, g = geo && v ? geo : null;
+  const w = g ? g.w : ref.width - 2 * padOf(ref), hh = g ? g.h : ref.height - 2 * padOf(ref);
+  const k = `${slot}:${w}x${hh}+${pad}`, now = performance.now(); let c = FBUF.get(k);
+  if (c) { FBUF.delete(k); FBUF.set(k, c); c._t = now; } // mais recente no fim do Map
+  else {
+    for (const [kk, cc] of FBUF) if (now - cc._t > FBUF_IDLE) fbufDrop(kk, cc);
+    c = document.createElement('canvas'); c.width = w + pad * 2; c.height = hh + pad * 2; c._pad = pad; c._t = now;
+    FBUF_PX += c.width * c.height;
+    for (const [kk, cc] of FBUF) { if (FBUF_PX <= FBUF_MAX) break; fbufDrop(kk, cc); }
+    FBUF.set(k, c);
+  }
+  c._vo = v ? (g ? { x:g.x, y:g.y, fw:v.fw, fh:v.fh } : v) : null;
   return c;
 }
 // margem que a sombra e o desfoque da camada precisam (px da tela, arredondada para poucas telas diferentes)
@@ -3397,7 +3418,7 @@ function drawFx(ctx, L, t, R) {
   const P = FXS[L.fx], end = L.end ?? S.duration; if (!P || !P.draw || t < L.start || t > end) return;
   // com mesclagem, a transição é desenhada inteira à parte (as faixas se sobrepõem) e só então mistura com o quadro
   const bm = blendOf(L), buf = bm ? frameBuf(ctx.canvas, 6) : null, c = buf ? buf.getContext('2d') : ctx;
-  if (buf) { c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, buf.width, buf.height); c.setTransform(R.rs, 0, 0, R.rs, 0, 0); }
+  if (buf) { c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, buf.width, buf.height); c.setTransform(R.rs, 0, 0, R.rs, -voX(buf), -voY(buf)); }
   c.save(); c.globalAlpha = L.opacity ?? 1;
   // carrossel: a transição acontece em cada slide, do mesmo jeito
   for (let s = 0; s < slides(); s++) {
@@ -3454,9 +3475,9 @@ function backBlur(tc, src, b, lb = 0) {
   // a forma da camada com o alfa reforçado: vidro com preenchimento quase transparente ainda desfoca tudo atrás
   for (let i = 0; i < 6; i++) c.drawImage(src, 0, 0);
   // um pouco maior que o quadro, para a borda da tela não escurecer o desfoque
-  const w = tc.canvas.width, hh = tc.canvas.height, k = 1 + b * 3 / Math.min(w, hh);
+  const w = tc.canvas.width, hh = tc.canvas.height, F = frameCenter(tc.canvas), k = 1 + b * 3 / Math.min(F.w, F.h);
   c.globalCompositeOperation = 'source-in'; c.filter = `blur(${b.toFixed(2)}px)`;
-  c.drawImage(tc.canvas, o - (k - 1) * w / 2, o - (k - 1) * hh / 2, w * k, hh * k);
+  c.drawImage(tc.canvas, o + F.cx * (1 - k), o + F.cy * (1 - k), w * k, hh * k);
   c.filter = 'none'; c.globalCompositeOperation = 'source-over';
   // com desfoque da camada, a borda do vidro também borra: o fundo desfocado se dissolve no quadro em vez de cortar em linha seca
   if (lb > .2 && padOf(m)) clampEdges(m);
@@ -3464,16 +3485,31 @@ function backBlur(tc, src, b, lb = 0) {
   tc.drawImage(m, -o, -o); tc.restore();
 }
 // estica a última linha/coluna do quadro pela margem da tela: o desfoque continua a camada além da borda do quadro
-// (sem isso, o que encosta ou passa da borda clareava perto dela)
+// (sem isso, o que encosta ou passa da borda clareava perto dela). Com recorte (palco com zoom), só nos lados em que o canvas
+// encosta na borda do quadro: nos outros a margem já tem o que existe de verdade ali
 function clampEdges(cv) {
-  const p = padOf(cv), fw = cv.width - 2 * p, fh = cv.height - 2 * p, x = cv.getContext('2d');
+  const p = padOf(cv), fw = cv.width - 2 * p, fh = cv.height - 2 * p, x = cv.getContext('2d'), v = cv._vo;
+  const el = !v || v.x <= 0, er = !v || v.x + fw >= v.fw, et = !v || v.y <= 0, eb = !v || v.y + fh >= v.fh;
   x.save(); x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.filter = 'none'; x.globalCompositeOperation = 'source-over'; x.imageSmoothingEnabled = false;
-  x.clearRect(0, 0, cv.width, p); x.clearRect(0, p + fh, cv.width, p); x.clearRect(0, p, p, fh); x.clearRect(p + fw, p, p, fh);
-  x.drawImage(cv, p, p, fw, 1, p, 0, fw, p); x.drawImage(cv, p, p + fh - 1, fw, 1, p, p + fh, fw, p);
-  x.drawImage(cv, p, p, 1, fh, 0, p, p, fh); x.drawImage(cv, p + fw - 1, p, 1, fh, p + fw, p, p, fh);
-  x.drawImage(cv, p, p, 1, 1, 0, 0, p, p); x.drawImage(cv, p + fw - 1, p, 1, 1, p + fw, 0, p, p);
-  x.drawImage(cv, p, p + fh - 1, 1, 1, 0, p + fh, p, p); x.drawImage(cv, p + fw - 1, p + fh - 1, 1, 1, p + fw, p + fh, p, p);
+  // primeiro os lados (só nas linhas do quadro), depois em cima e embaixo na largura toda: as quinas saem da quina do quadro
+  if (el) { x.clearRect(0, p, p, fh); x.drawImage(cv, p, p, 1, fh, 0, p, p, fh); }
+  if (er) { x.clearRect(p + fw, p, p, fh); x.drawImage(cv, p + fw - 1, p, 1, fh, p + fw, p, p, fh); }
+  if (et) { x.clearRect(0, 0, cv.width, p); x.drawImage(cv, 0, p, cv.width, 1, 0, 0, cv.width, p); }
+  if (eb) { x.clearRect(0, p + fh, cv.width, p); x.drawImage(cv, 0, p + fh - 1, cv.width, 1, 0, p + fh, cv.width, p); }
   x.restore();
+}
+// recorte de um grupo animado no palco com zoom: o recorte de quem desenha somado à caixa do conjunto em repouso (com folga
+// para o movimento dos itens), dentro do quadro. Px do quadro inteiro, sem a margem
+function groupGeo(c, B, rs) {
+  const v = c._vo, p = padOf(c), m = Math.max(48, .25 * Math.max(B.w, B.h));
+  const x0 = Math.max(0, Math.min(v.x, Math.floor((B.x - m) * rs))), y0 = Math.max(0, Math.min(v.y, Math.floor((B.y - m) * rs)));
+  const x1 = Math.min(v.fw, Math.max(v.x + c.width - 2 * p, Math.ceil((B.x + B.w + m) * rs))), y1 = Math.min(v.fh, Math.max(v.y + c.height - 2 * p, Math.ceil((B.y + B.h + m) * rs)));
+  return { x:x0, y:y0, w:Math.max(1, x1 - x0), h:Math.max(1, y1 - y0) };
+}
+// centro do quadro inteiro em px deste canvas (com a margem) e o tamanho do quadro com a margem: sem recorte, o próprio canvas
+function frameCenter(c) {
+  const p = padOf(c), v = c._vo, w = (v ? v.fw : c.width - 2 * p) + 2 * p, hh = (v ? v.fh : c.height - 2 * p) + 2 * p;
+  return { w, h:hh, cx:w / 2 - voX(c), cy:hh / 2 - voY(c) };
 }
 // devolve ao quadro a camada pronta (src, em pixels): desfoque do fundo atrás, sombra, desfoque da camada e mesclagem
 function composeOnto(tc, src, L, sh, bm, rs) {
@@ -3488,11 +3524,11 @@ function composeOnto(tc, src, L, sh, bm, rs) {
     drawShadowed(oc, src, L, sh, rs);
   }
   if (lb > .2 && padOf(out)) clampEdges(out);
-  const w = out.width, hh = out.height, k = L.type === 'bg' && lb > .2 ? 1 + lb * 3 / Math.min(w, hh) : 1; // o fundo borrado não mostra borda
+  const w = out.width, hh = out.height, F = frameCenter(out), k = L.type === 'bg' && lb > .2 ? 1 + lb * 3 / Math.min(F.w, F.h) : 1; // o fundo borrado não mostra borda
   const o = padOf(tc.canvas) - padOf(out);
   tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1;
   tc.globalCompositeOperation = bm || 'source-over'; tc.filter = lb > .2 ? `blur(${lb.toFixed(2)}px)` : 'none';
-  tc.drawImage(out, o - (k - 1) * w / 2, o - (k - 1) * hh / 2, w * k, hh * k);
+  tc.drawImage(out, o + F.cx * (1 - k), o + F.cy * (1 - k), w * k, hh * k);
   tc.restore();
 }
 // carrossel, "Manter dentro do slide" (L.slideClip, pedido do usuário): o elemento continua podendo vazar na posição, mas só aparece
@@ -3514,7 +3550,7 @@ function drawLayerFx0(tc, L, t, R, cam, depth, one) {
     // sombra, mesclagem e desfoque pedem a camada inteira pronta, à parte
     const P = fxPad(L, sh, R.rs, tc.canvas.width, tc.canvas.height), src = frameBuf(tc.canvas, 1, P), lc = src.getContext('2d');
     lc.setTransform(1, 0, 0, 1, 0, 0); lc.clearRect(0, 0, src.width, src.height);
-    lc.setTransform(R.rs, 0, 0, R.rs, P, P); applyCam(lc, cam, L, depth); one(lc, L);
+    lc.setTransform(R.rs, 0, 0, R.rs, P - voX(src), P - voY(src)); applyCam(lc, cam, L, depth); one(lc, L);
     composeOnto(tc, src, L, sh, bm, R.rs);
   } finally { if (back) Object.assign(L, back); }
 }
@@ -3554,18 +3590,22 @@ function drawGroup(tc, gid, gp, els, t, R, cam, one, G, depth = 0) {
   const gL = { shadow:gm.shadow, shColor:gm.shColor, lblur:gm.lblur, bblur:gm.bblur, type:'group', _bounds:RT.gBox.get(gid)?.b };
   // com sombra ou desfoque, o conjunto é desenhado com margem em volta do quadro (o que passa da borda entra no efeito)
   const gpad = gsh || blurOn(gm) ? fxPad(gL, gsh, R.rs, tc.canvas.width, tc.canvas.height) : 0;
-  const mem = els.filter(l => l.grp && ginside(l.grp, gid)), buf = frameBuf(tc.canvas, 7 + depth, gpad), bc = buf.getContext('2d');
+  const mem = els.filter(l => l.grp && ginside(l.grp, gid));
+  // com recorte (palco com zoom) o conjunto é desenhado no recorte somado à caixa do grupo: girar, escalar ou deslizar o conjunto
+  // traz para a vista partes dele que estão fora do recorte
+  const B0 = tc.canvas._vo ? groupBox(gid, mem) : null;
+  const buf = frameBuf(tc.canvas, 7 + depth, gpad, B0 && groupGeo(tc.canvas, B0, R.rs)), bc = buf.getContext('2d');
   bc.setTransform(1, 0, 0, 1, 0, 0); bc.globalAlpha = 1; bc.filter = 'none'; bc.globalCompositeOperation = 'source-over';
-  bc.clearRect(0, 0, buf.width, buf.height); bc.setTransform(R.rs, 0, 0, R.rs, gpad, gpad);
+  bc.clearRect(0, 0, buf.width, buf.height); bc.setTransform(R.rs, 0, 0, R.rs, gpad - voX(buf), gpad - voY(buf));
   drawItems(bc, mem, gid, G, els, t, R, cam, one, depth);
-  const B = groupBox(gid, mem); gL._bounds = B;
-  const pu = gpad / R.rs; // a margem em unidades do quadro
+  const B = B0 || groupBox(gid, mem); gL._bounds = B;
+  const pu = gpad / R.rs, bx = voX(buf) / R.rs, by = voY(buf) / R.rs; // a margem e o começo do recorte em unidades do quadro
   // pela escala (não pelo tamanho do quadro): vale também em telas que mostram só parte do quadro (miniatura do carrossel)
-  const blit = (c, x, y) => c.drawImage(buf, 0, 0, buf.width, buf.height, x - pu, y - pu, buf.width / R.rs, buf.height / R.rs);
+  const blit = (c, x, y) => c.drawImage(buf, 0, 0, buf.width, buf.height, x - pu + bx, y - pu + by, buf.width / R.rs, buf.height / R.rs);
   const out = gsh || gbm || gop < 1 || blurOn(gm) ? frameBuf(tc.canvas, 1, gpad) : null, dst = out ? out.getContext('2d') : tc;
   if (out) {
     dst.setTransform(1, 0, 0, 1, 0, 0); dst.globalAlpha = 1; dst.filter = 'none'; dst.globalCompositeOperation = 'source-over';
-    dst.clearRect(0, 0, out.width, out.height); dst.setTransform(R.rs, 0, 0, R.rs, gpad, gpad); dst.globalAlpha = gop;
+    dst.clearRect(0, 0, out.width, out.height); dst.setTransform(R.rs, 0, 0, R.rs, gpad - voX(out), gpad - voY(out)); dst.globalAlpha = gop;
   }
   const done = () => {
     tc.filter = 'none'; tc.globalAlpha = 1; tc.globalCompositeOperation = 'source-over';
@@ -3730,29 +3770,103 @@ function drawMark(ctx, L, lay, ph, t, R) {
 /* ============================================================
    Prévia
    ============================================================ */
-const cv = $('#cv'), pctx = cv.getContext('2d');
+// #cv = o quadro inteiro na tela (tamanho, cliques, posição das alças); o desenho vai para #cvr, por cima, que com zoom cobre
+// só a parte vista (setView)
+const cv = $('#cv'), cvr = $('#cvr'), pctx = cvr.getContext('2d');
 let RS = .5;
 /* Zoom do palco: RT.zoom = 1 cabe no espaço; maior rola (barras, Shift + roda, botão do meio), menor afasta e deixa mesa em volta.
    As alças e contornos ficam num canvas à parte (#ov, do tamanho da área visível), então aparecem e pegam mesmo fora do quadro. */
 const ZMIN = .25, ZMAX = 8, STAGE_PAD = 36;
-function fitStage() {
+/* lazy (zoom pela roda ou pinça): o quadro muda de tamanho na tela na hora, esticando o desenho que já existe, e só é
+   redesenhado na resolução nova quando o gesto para (FIT_LAZY ms). Antes cada passo da roda recriava o canvas e desenhava
+   o quadro inteiro, e o zoom engasgava */
+const FIT_LAZY = 140;
+function fitStage(lazy) {
   if (!S) return;
   const box = $('#stageBox'), z = RT.zoom || 1;
   const bw = Math.max(100, box.clientWidth - STAGE_PAD * 2), bh = Math.max(100, box.clientHeight - STAGE_PAD * 2);
   const k = Math.min(bw / FW(), bh / H()) * z;
   const cw = Math.max(40, Math.floor(FW() * k)), ch = Math.max(40, Math.floor(H() * k));
   cv.style.width = cw + 'px'; cv.style.height = ch + 'px';
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  RS = Math.min(1.5, (cw * dpr) / FW());
-  cv.width = Math.round(FW() * RS); cv.height = Math.round(H() * RS);
-  RT.fitK = Math.min(bw / FW(), bh / H());
-  clampPan(); updZoomUI(); needs = true;
+  RT.fitK = Math.min(bw / FW(), bh / H()); RT.fitCw = cw;
+  clearTimeout(RT.fitT); RT.fitT = null;
+  if (lazy) { RT.fitT = setTimeout(() => { RT.fitT = null; fitRes(); }, FIT_LAZY); needsOv = true; }
+  else { fitRes(); needs = true; }
+  clampPan(); updZoomUI();
+}
+// resolução do desenho para o tamanho que o quadro tem na tela (o canvas é refeito em setView, no próximo quadro)
+function fitRes() {
+  const cw = RT.fitCw || 40, dpr = Math.min(2, window.devicePixelRatio || 1);
+  RS = Math.min(1.5, (cw * dpr) / FW()); needs = true;
+}
+/* Recorte do palco (pedido do usuário: o carrossel com zoom travava). Com zoom, o quadro inteiro em alta resolução passava de
+   10 milhões de pixels e tudo era desenhado a cada quadro, mesmo fora da tela. Quando o quadro passa bem da área visível,
+   #cvr cobre só a parte vista e uma margem em volta (VIEW_M da área visível para cada lado, no mínimo VIEW_MIN px da tela):
+   arrastar com a mão ou rolar dentro da margem não redesenha nada; passou dela, o recorte anda (viewCovered no tick).
+   O desenho é o mesmo do quadro inteiro (renderFrame com c._vo, ver frameBuf). Câmera com desfoque/chicote lê o quadro longe
+   dali: nesses quadros o palco desenha o quadro inteiro (viewFull). "Borrar atrás" lê o que já está desenhado em volta e amplia
+   em volta do centro do quadro (backBlur): perto de um lado do recorte que não é borda do quadro sai errado, então a margem
+   cresce e essa faixa (V.g, viewGuard) nunca aparece */
+const VIEW_M = .3, VIEW_MIN = 200;
+let VIEW = null; // { x, y, w, h, fw, fh, g } em px do quadro inteiro na resolução RS; null = quadro inteiro
+function stageVis() {
+  const sc = $('#stageScroll'), b = sc.getBoundingClientRect(), r = cv.getBoundingClientRect();
+  if (!(r.width > 0 && r.height > 0)) return null;
+  const vw = sc.clientWidth, vh = sc.clientHeight;
+  return { r, vw, vh, x0:(b.left - r.left) / r.width, y0:(b.top - r.top) / r.height, x1:(b.left - r.left + vw) / r.width, y1:(b.top - r.top + vh) / r.height };
+}
+// a parte do quadro que aparece já está desenhada? (em frações: vale também com o quadro esticado no meio do zoom)
+function viewCovered() {
+  if (!VIEW) return true;
+  const v = stageVis(); if (!v) return true;
+  const V = VIEW, e = 1e-4, gx = V.g / V.fw, gy = V.g / V.fh;
+  return clamp(v.x0) >= V.x / V.fw + (V.x > 0 ? gx : 0) - e && clamp(v.x1) <= (V.x + V.w) / V.fw - (V.x + V.w < V.fw ? gx : 0) + e
+    && clamp(v.y0) >= V.y / V.fh + (V.y > 0 ? gy : 0) - e && clamp(v.y1) <= (V.y + V.h) / V.fh - (V.y + V.h < V.fh ? gy : 0) + e;
+}
+function viewFull() {
+  if (S.still) return false;
+  const cam = camAt(T); return cam.blur > .3 || cam.whip;
+}
+// faixa (px do canvas) perto dos lados do recorte em que "borrar atrás" sai errado: o alcance do desfoque mais a ampliação
+// em volta do centro do quadro (no pior caso, na borda do quadro)
+function viewGuard(fw, fh) {
+  let b = 0;
+  for (const L of S.layers) if (L.visible && L.type !== 'bg' && L.bblur > 0 && phase(L, T)) b = Math.max(b, L.bblur);
+  const gs = S.groups || {}; for (const g in gs) if (gs[g] && gs[g].bblur > 0) b = Math.max(b, gs[g].bblur);
+  if (!b) return 0;
+  b *= RS; const k = 1 + b * 3 / Math.min(fw, fh);
+  return Math.ceil(b * 3 + (1 - 1 / k) * Math.max(fw, fh) / 2) + 8;
+}
+function setView(full) {
+  const fw = Math.max(1, Math.round(FW() * RS)), fh = Math.max(1, Math.round(H() * RS)), v = full ? null : stageVis();
+  let V = null;
+  if (v) {
+    const q = fw / v.r.width, g = viewGuard(fw, fh); // q = px do canvas por px da tela
+    const mx = Math.max(VIEW_MIN, v.vw * VIEW_M) * q + g, my = Math.max(VIEW_MIN, v.vh * VIEW_M) * q + g;
+    const w = Math.min(fw, Math.ceil(v.vw * q + 2 * mx)), hh = Math.min(fh, Math.ceil(v.vh * q + 2 * my));
+    if (w * hh < fw * fh * .7) { // quase o quadro todo: não compensa recortar
+      const vx0 = clamp(v.x0) * fw, vx1 = clamp(v.x1) * fw, vy0 = clamp(v.y0) * fh, vy1 = clamp(v.y1) * fh, O = VIEW;
+      // o recorte de antes ainda cobre a parte vista: fica onde está (não muda a cada quadro tocando)
+      if (O && O.w === w && O.h === hh && O.fw === fw && O.fh === fh && O.g === g && viewCovered()) V = O;
+      else V = { x:clamp(Math.round((vx0 + vx1 - w) / 2), 0, fw - w), y:clamp(Math.round((vy0 + vy1 - hh) / 2), 0, fh - hh), w, h:hh, fw, fh, g };
+    }
+  }
+  VIEW = V;
+  const cw = V ? V.w : fw, ch = V ? V.h : fh;
+  if (cvr.width !== cw || cvr.height !== ch) { cvr.width = cw; cvr.height = ch; }
+  const key = V ? [V.x / fw, V.y / fh, cw / fw, ch / fh].join() : '';
+  if (cvr._st !== key) { // posição em % do quadro: no meio do zoom (quadro esticado) acompanha sozinho
+    cvr._st = key;
+    const [l, t, w, hh] = (V ? [V.x / fw, V.y / fh, cw / fw, ch / fh] : [0, 0, 1, 1]).map(n => n * 100 + '%');
+    Object.assign(cvr.style, { left:l, top:t, width:w, height:hh });
+  }
+  cvr._vo = V ? { x:V.x, y:V.y, fw, fh } : null;
 }
 /* Mão / botão do meio passam da borda (pedido do usuário: no carrossel o quadro ocupa a largura toda e só sobrava a mesa de 36 px).
    A rolagem anda primeiro; o que ela não alcança vira um deslocamento livre do quadro (RT.pan, transform no .stage-pad), como no Figma.
    Sempre sobra um pedaço do quadro à vista (PAN_KEEP px). Ajustar (zoomFit) volta ao centro */
 const PAN_KEEP = 48;
-function applyPan() { const p = RT.pan || { x:0, y:0 }; $('.stage-pad').style.transform = p.x || p.y ? `translate(${p.x}px, ${p.y}px)` : ''; needs = true; }
+function applyPan() { const p = RT.pan || { x:0, y:0 }; $('.stage-pad').style.transform = p.x || p.y ? `translate(${p.x}px, ${p.y}px)` : ''; needsOv = true; }
 function clampPan() {
   const p = RT.pan; if (!p || (!p.x && !p.y)) return;
   applyPan();
@@ -3773,17 +3887,17 @@ function shiftView(dx, dy) {
   axis(dx, 'x', 'scrollLeft'); axis(dy, 'y', 'scrollTop');
   clampPan(); applyPan();
 }
-new ResizeObserver(fitStage).observe($('#stageBox'));
+new ResizeObserver(() => fitStage(true)).observe($('#stageBox')); // janela ou painel mudando de tamanho: estica já, redesenha quando parar
 // zoom mantendo o ponto sob o cursor (ou o centro da área visível) no mesmo lugar
-function setZoom(z, cx, cy) {
+// lazy: gesto contínuo (roda, pinça), ver fitStage
+function setZoom(z, cx, cy, lazy) {
   z = clamp(z, ZMIN, ZMAX); if (Math.abs(z - 1) < .02) z = 1;
   const sc = $('#stageScroll'), r = cv.getBoundingClientRect(), b = sc.getBoundingClientRect();
   if (cx == null) { cx = b.left + sc.clientWidth / 2; cy = b.top + sc.clientHeight / 2; }
   const u = (cx - r.left) / (r.width || 1), v = (cy - r.top) / (r.height || 1);
-  RT.zoom = z; fitStage();
+  RT.zoom = z; fitStage(lazy);
   const r2 = cv.getBoundingClientRect();
   shiftView(cx - (r2.left + u * r2.width), cy - (r2.top + v * r2.height));
-  needs = true;
 }
 const zoomPct = () => Math.round((RT.fitK || 1) * (RT.zoom || 1) * 100);
 function updZoomUI() { const el = $('#zVal'); if (el) el.textContent = zoomPct() + '%'; }
@@ -3803,9 +3917,9 @@ $('#stageBox').addEventListener('wheel', ev => {
   }
   ev.preventDefault();
   const d = ev.deltaMode === 1 ? ev.deltaY * 33 : ev.deltaY;
-  setZoom((RT.zoom || 1) * Math.exp(clamp(-d * .0025, -.6, .6)), ev.clientX, ev.clientY);
+  setZoom((RT.zoom || 1) * Math.exp(clamp(-d * .0025, -.6, .6)), ev.clientX, ev.clientY, true);
 }, { passive:false });
-$('#stageScroll').addEventListener('scroll', () => { needs = true; });
+$('#stageScroll').addEventListener('scroll', () => { needsOv = true; }); // o quadro rola junto: só as alças precisam acompanhar
 // botão do meio (e a mão, com o espaço) arrasta o palco, também além da borda (shiftView)
 function panStage(ev) {
   let x0 = ev.clientX, y0 = ev.clientY;
@@ -4021,15 +4135,20 @@ function tick(now) {
     needs = true;
   }
   syncMedia(); // vídeos e trilha acompanham a agulha
-  if (needs && !RT.exporting) { measureGhosts(); renderFrame(pctx, T, RS, false); drawOverlays(); updTime(); updStageHint(); needs = false; }
+  if (!needs && needsOv && !RT.exporting && !viewCovered()) needs = true; // rolou ou arrastou para fora do recorte desenhado
+  if (needs && !RT.exporting) { setView(viewFull()); measureGhosts(); renderFrame(pctx, T, RS, false); drawOverlays(); updTime(); updStageHint(); needs = false; needsOv = false; }
+  else if (needsOv && !RT.exporting) { drawOverlays(); needsOv = false; }
   requestAnimationFrame(tick);
 }
 const fmtT = s => { s = Math.max(0, s); const m = Math.floor(s / 60), ss = Math.floor(s % 60), f = Math.floor((s % 1) * fps()); return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}<span>:${String(f).padStart(2, '0')}</span>`; };
+// roda a cada quadro desenhado: primeiro as leituras de layout (agulha), depois as escritas, e só escreve o que mudou
+// (ler a posição depois de escrever o tempo forçava o navegador a refazer o layout da página inteira em todo quadro)
 function updTime() {
-  updDur();
-  $('#tc').innerHTML = `${fmtT(T)} <span>/ ${S.duration.toFixed(1)}s</span>`;
-  $('#scrub').value = String(Math.round(T / S.duration * 1000));
   placeHead();
+  updDur();
+  const tc = `${fmtT(T)} <span>/ ${S.duration.toFixed(1)}s</span>`;
+  if (RT.tcHtml !== tc) { RT.tcHtml = tc; $('#tc').innerHTML = tc; }
+  const sv = String(Math.round(T / S.duration * 1000)), sb = $('#scrub'); if (sb.value !== sv) sb.value = sv;
 }
 const ICON_PLAY = '<svg viewBox="0 0 14 14" fill="currentColor"><path d="M3 1.5v11l9.5-5.5z"/></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 14 14" fill="currentColor"><rect x="2.5" y="1.5" width="3.2" height="11" rx=".6"/><rect x="8.3" y="1.5" width="3.2" height="11" rx=".6"/></svg>';
@@ -4628,7 +4747,7 @@ cv.addEventListener('pointermove', ev => {
     const hd = handleAt(pt), gp = !hd && flowGapAt(pt), ht = !gp && (hitTest(pt) || ghostAt(pt));
     cv.style.cursor = hd ? (hd.rot ? ROT_CUR : hd.rad ? 'default' : HCUR[hd.k]) : gp ? (gp.v ? 'row-resize' : 'col-resize') : ht ? (ev.altKey && (ht.type === 'image' || mediaFill(ht)) ? 'all-scroll' : 'move') : '';
     setHover(hd || gp ? null : ht && ht.id);
-    const gk = gp && !gp.gid ? Math.round(gp.s0) : null; if (RT.gapHot !== gk) { RT.gapHot = gk; needs = true; } // espaço do quadro só aparece com o mouse em cima
+    const gk = gp && !gp.gid ? Math.round(gp.s0) : null; if (RT.gapHot !== gk) { RT.gapHot = gk; needsOv = true; } // espaço do quadro só aparece com o mouse em cima
     return;
   }
   const D = RT.drag, L = D.L;
@@ -4722,7 +4841,7 @@ cv.addEventListener('dblclick', ev => {
   editText(L);
 });
 cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', endDrag);
-cv.addEventListener('pointerleave', () => { setHover(null); if (RT.gapHot != null) { RT.gapHot = null; needs = true; } });
+cv.addEventListener('pointerleave', () => { setHover(null); if (RT.gapHot != null) { RT.gapHot = null; needsOv = true; } });
 // área cinza em volta do palco: arrastar seleciona por área, um clique tira a seleção (fica o fundo)
 // (as alças da seleção também pegam aqui: elas passam da borda do quadro)
 const onScrollbar = e => { const sc = $('#stageScroll'); if (e.target !== sc) return false; const r = sc.getBoundingClientRect(); return e.clientX - r.left >= sc.clientWidth || e.clientY - r.top >= sc.clientHeight; };
@@ -4982,7 +5101,7 @@ function vecMarquee(e, L, M, onBody) {
   const mv = ev => {
     if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return;
     moved = true; const p = stagePt(ev);
-    RT.vmarq = { x:Math.min(p0.x, p.x), y:Math.min(p0.y, p.y), w:Math.abs(p.x - p0.x), h:Math.abs(p.y - p0.y), base }; needs = true;
+    RT.vmarq = { x:Math.min(p0.x, p.x), y:Math.min(p0.y, p.y), w:Math.abs(p.x - p0.x), h:Math.abs(p.y - p0.y), base }; needsOv = true;
   };
   const up = () => {
     removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
@@ -5207,7 +5326,7 @@ $('#stageBox').addEventListener('pointermove', e => {
   if (!(RT.pen || RT.vec) || RT.hand) return;
   if (e.buttons) return; // arrastando: o movimento tem que chegar à janela (curva da caneta, mão livre, pontos)
   e.stopPropagation();
-  if (RT.pen) { RT.pen.cur = stagePt(e); RT.pen.shift = e.shiftKey; needs = true; return; }
+  if (RT.pen) { RT.pen.cur = stagePt(e); RT.pen.shift = e.shiftKey; needsOv = true; return; }
   const L = vecL(), M = L && vecMap(L), hit = M && vecHit(L, M, stagePt(e)), c = !hit ? (M && hitTest(stagePt(e)) === L && (e.ctrlKey || e.metaKey) ? 'move' : '') : hit.kind === 'seg' ? 'copy' : 'move';
   cv.style.cursor = c; $('#stageBox').style.cursor = c;
 }, true);
@@ -5229,7 +5348,7 @@ addEventListener('keydown', e => {
   if (ok) { e.preventDefault(); e.stopPropagation(); }
 }, true);
 function selectBg() { const bg = S.layers.find(l => l.type === 'bg'); if (bg) select(bg.id); }
-function setHover(id) { id = id || null; if (RT.hover !== id) { RT.hover = id; needs = true; } }
+function setHover(id) { id = id || null; if (RT.hover !== id) { RT.hover = id; needsOv = true; } }
 // camadas na tela que encostam no retângulo (um grupo entra inteiro)
 function marqHits(r) {
   return S.layers.filter(o => { if (o.type === 'bg' || !o.visible || o.locked || !o._bounds || !phase(o, T)) return false; const b = visB(o); return b.x < r.x + r.w && b.x + b.w > r.x && b.y < r.y + r.h && b.y + b.h > r.y; });
@@ -5240,7 +5359,7 @@ function marquee(ev) {
   const mv = e => {
     if (!moved && Math.hypot(e.clientX - x0, e.clientY - y0) < 4) return;
     moved = true; const p = stagePt(e);
-    RT.marq = { x:Math.min(p0.x, p.x), y:Math.min(p0.y, p.y), w:Math.abs(p.x - p0.x), h:Math.abs(p.y - p0.y) }; needs = true;
+    RT.marq = { x:Math.min(p0.x, p.x), y:Math.min(p0.y, p.y), w:Math.abs(p.x - p0.x), h:Math.abs(p.y - p0.y) }; needsOv = true;
   };
   const up = () => {
     removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
@@ -7585,8 +7704,11 @@ function tlGeom() { const tl = $('#tl'), lane = tl.querySelector('.tl-scale'); i
 function placeHead() {
   const g = tlGeom(); if (!g) return;
   const hd = g.tl.querySelector('.tl-head'); if (!hd) return;
-  hd.style.height = '0px'; hd.style.height = g.tl.scrollHeight + 'px'; // bottom:0 só cobre a área visível; a agulha vai até o fim das camadas
-  hd.style.left = (g.x0 - g.tl.getBoundingClientRect().left + T / S.duration * g.w) + 'px';
+  const x = g.x0 - g.tl.getBoundingClientRect().left + T / S.duration * g.w, ch = g.tl.clientHeight;
+  // bottom:0 só cobre a área visível; a agulha vai até o fim das camadas. A altura só é medida de novo quando a timeline
+  // é refeita (agulha nova) ou muda de tamanho: medir zera a altura e força um layout, e isso rodava em todo quadro
+  if (hd._ch !== ch) { hd._ch = ch; hd.style.height = '0px'; hd.style.height = g.tl.scrollHeight + 'px'; }
+  if (hd._x !== x) { hd._x = x; hd.style.left = x + 'px'; }
 }
 function placeBar(bar, L) {
   const d = S.duration, end = L.end ?? d, ph = phase(L, L.start) || { inD:0, outD:0 }, span = Math.max(.001, end - L.start);
