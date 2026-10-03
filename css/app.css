@@ -733,9 +733,10 @@ button.chip-cat{gap:8px}
 .comp-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 
 /* projetos: pastas de arquivos (barra de cima + janela Arquivos) */
-.filebox .projbtn{max-width:170px;min-width:120px;flex-shrink:1;gap:5px;color:var(--muted)}
-.projbtn span{overflow:hidden;text-overflow:ellipsis}
-.projbtn .pj-ic{flex:none;color:var(--faint)}
+.filebox .projbtn{display:inline-flex;align-items:center;width:auto;max-width:170px;min-width:0;flex:0 0 auto;gap:5px;color:var(--muted)} /* do tamanho do nome; nome longo vira reticências */
+.projbtn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;line-height:16px}
+.projbtn svg{display:block;flex:none}
+.projbtn .pj-ic{flex:none;color:var(--faint);margin-top:-1px}
 .projbtn:hover .pj-ic{color:var(--muted)}
 .projbtn:hover{color:var(--fg)}
 .fbody{flex:1;min-height:0;display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px}
@@ -771,4 +772,4 @@ button.chip-cat{gap:8px}
 .ctx button .ctx-sub{display:block;color:var(--faint);font-size:10.5px;margin-top:1px}
 
 /* carrossel: renomear o slide pelo nome acima dele (clique duplo) */
-.slide-nm{position:fixed;z-index:40;width:180px;height:var(--ctl);background:var(--raised);color:var(--fg);border:1px solid var(--accent);border-radius:var(--r);font:600 11px var(--f-ui);padding:0 8px;outline:none}
+input.slide-nm{position:fixed;z-index:40;width:180px;height:var(--ctl);background:var(--raised);color:var(--fg);border:1px solid var(--accent);border-radius:var(--r);font:600 11px var(--f-ui);padding:0 8px;outline:none}

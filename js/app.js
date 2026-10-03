@@ -817,7 +817,9 @@ function frameSolve(base, Hf, M, pos, sizes, D) {
     const g = L.grp ? gtop(L.grp) : null; if (g ? (gmeta(g) || {}).free : L.flowFree) return;
     let it = flowItem(L, base ? { x:L.x, y:L.y, k:1 } : placeRaw(L), Hf); if (!it) return;
     { const s = pos.get(L.id)?.s; if (s) it = { ...it, w:it.w * s, h:it.h * s }; } // encolhido pela fila do grupo
-    if (!g && freeType(L)) { // sangra pela borda: fica de fora (cobre o quadro inteiro = fundo; só em cima ou só embaixo = faixa)
+    // sangra pela borda: fica de fora (cobre o quadro inteiro = fundo; só em cima ou só embaixo = faixa). Quem está sendo arrastado
+    // continua na coluna: senão a foto levada até a borda saía do layout no meio do arrasto e ficava lá (o usuário a marcou no layout)
+    if (!g && freeType(L) && !(moving && moving.has(L.id))) {
       const t = it.cy - it.h / 2, b = it.cy + it.h / 2, up = t <= 1, dn = b >= Hf - 1;
       if (up || dn) { if (!(up && dn)) bands.push({ up, t, b, sp:spans(L, it) }); return; }
     }
@@ -3456,7 +3458,15 @@ function composeOnto(tc, src, L, sh, bm, rs) {
   tc.drawImage(out, o - (k - 1) * w / 2, o - (k - 1) * hh / 2, w * k, hh * k);
   tc.restore();
 }
+// carrossel, "Manter dentro do slide" (L.inSlide, pedido do usuário): o elemento continua podendo vazar na posição, mas só aparece
+// dentro do slide dele (recorte no retângulo do slide, no espaço do quadro; a câmera move o recorte junto)
 function drawLayerFx(tc, L, t, R, cam, depth, one) {
+  if (!L.inSlide || slides() < 2 || L.type === 'bg') return drawLayerFx0(tc, L, t, R, cam, depth, one);
+  const si = slideOfL(L);
+  tc.save(); tc.beginPath(); tc.rect(si * W(), 0, W(), H()); tc.clip();
+  try { drawLayerFx0(tc, L, t, R, cam, depth, one); } finally { tc.restore(); }
+}
+function drawLayerFx0(tc, L, t, R, cam, depth, one) {
   const sh = L.type !== 'bg' && L.shadow && L.shadow !== 'none' ? SHADOWS[L.shadow] : null, bm = blendOf(L);
   const back = L.type === 'image' && L.move && L.move !== 'none' ? imageMotion(L, t) : null;
   try {
@@ -4524,7 +4534,8 @@ cv.addEventListener('wheel', ev => {
 }, { passive:false });
 const endDrag = () => {
   if (!RT.drag) return;
-  const mv = RT.drag.mode === 'move', tap = RT.drag.tap && RT.drag.L; // toque sem arrastar num grupo: fica só essa camada
+  const tap = RT.drag.tap && RT.drag.L; // toque sem arrastar num grupo: fica só essa camada
+  const mv = RT.drag.mode === 'move' && !RT.drag.flowL && !RT.drag.flowB; // da fila/coluna: a posição final é a da conta, o painel precisa refazer
   if (RT.drag.flowL) { const D = RT.drag, p = placeRaw(D.L); if (Math.abs(p.x - D.x0) + Math.abs(p.y - D.y0) > 1e-6) flowCommit(D.flow, D.fz); } // item da fila solto: entra no lugar dele
   else if (RT.drag.flowB) { const D = RT.drag, p = placeRaw(D.L); if (Math.abs(p.x - D.x0) + Math.abs(p.y - D.y0) > 1e-6) frameCommit(D); } // bloco da coluna do quadro solto
   RT.drag = null; RT.guide = null;
@@ -6478,6 +6489,13 @@ function alignBar() {
   const L = selL(), pos = L && !wholeGroup() ? posFields(L) : [];
   const keep = pos.length && ls.every(l => l.type === L.type) && (L.type === 'image' || L.type === 'shape')
     ? [checkF(L, 'keepIn', 'Manter dentro da margem'), h('p', { class:'hint', text:`Precisa da margem ligada. Se ${L.type === 'image' ? 'a imagem' : 'a forma'} não couber, ela encolhe.` })] : [];
+  // carrossel: recorta no slide (o elemento pode vazar na posição, mas o que passa da borda do slide some)
+  if (slides() > 1 && ls.length) {
+    const on = ls.every(l => l.inSlide), id = 'inSlide-' + ls.map(l => l.id).join('-');
+    const inp = h('input', { type:'checkbox', id, checked:on });
+    inp.addEventListener('change', () => { pushUndo(); for (const o of ls) o.inSlide = inp.checked || undefined; changed(); needs = true; });
+    keep.push(h('label', { class:'check', for:id, title:'O que passar da borda do slide fica escondido, como uma máscara no slide' }, [inp, 'Manter dentro do slide']));
+  }
   return h('section', { class:'sec' }, [
     h('h3', {}, ['Posição', h('small', { text:n > 1 ? 'alinha entre a seleção' : ls.length > 1 ? marginBox() ? 'grupo à margem' : 'grupo ao quadro' : marginBox() ? 'alinha à margem' : 'alinha ao quadro' })]),
     h('div', { class:'alrow' }, [b('l', 'Alinhar à esquerda'), b('ch', 'Centralizar na horizontal'), b('r', 'Alinhar à direita'), h('i'),
