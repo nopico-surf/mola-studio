@@ -430,7 +430,13 @@ function adaptLayout() {
 
   function solve(its, want) {
   // faixa útil do principal: cresce para caber o que estava fora dela (ex.: logo na faixa da interface, num 9:16)
-  const cb = contentBand(bf), ct = contentBand(S.format), body = its.filter(i => !i.edge);
+  // a margem só segura quem a respeita: se o elemento de cima (ou de baixo) é imagem/forma sem "Manter dentro da margem",
+  // a faixa útil daquele lado é a borda do quadro, não a margem (senão a foto era empurrada para dentro dela ao trocar de formato)
+  const body = its.filter(i => !i.edge), seen = body.some(i => i.L.visible) ? body.filter(i => i.L.visible) : body;
+  const isFree = i => i.ms ? i.ms.every(m => freeType(m.L)) : freeType(i.L);
+  const topI = seen.reduce((p, q) => (!p || q.t < p.t ? q : p), null), botI = seen.reduce((p, q) => (!p || q.b > p.b ? q : p), null);
+  const edges = (fmt, hf) => { const c = contentBand(fmt); return { y0:topI && isFree(topI) ? 0 : c.y0, y1:botI && isFree(botI) ? hf : c.y1 }; };
+  const cb = edges(bf, Hb), ct = edges(S.format, Ht);
   const A = Math.min(cb.y0, ...body.map(i => i.t)), B = Math.max(cb.y1, ...body.map(i => i.b));
   const M0 = marginBox() || { x0:0, x1:W() }, Mw = M0.x1 - M0.x0; // na horizontal é igual em todos os formatos (e slides)
   const len = s => s.b - s.a, wt = g => g * g * g / (g * g + GAP_TAU * GAP_TAU), least = g => Math.min(g, 12 + g * .25);
@@ -993,7 +999,7 @@ function mkBg(o = {}) {
 
 /* ------------ roteiros ------------ */
 const TEMPLATES = [
-  { id:'blank', ic:'+', name:'Do zero', desc:'Só o fundo. Você adiciona texto, imagem, logo e botão', dur:8, build:()=>[mkBg({mode:'mesh', c1:'#010409', c2:'#0A2E15', c3:'#B01117', c4:'#124A21', motion:1, grain:.08})] },
+  { id:'blank', ic:'+', name:'Do zero', desc:'Só o fundo. Você adiciona texto, imagem, logo e botão', dur:8, build:(B,F)=>[mkBg({mode:'mesh', motion:1, grain:.08})] },
   { id:'marca-msg', ic:'LOGO', name:'Marca, mensagem e botão', desc:'O logo se desenha, depois entram a mensagem e o botão', dur:10, build:(B,F)=>[
     mkBg({mode:'mesh'}),
     mkLogo('logo',{y:.42,size:.36,start:.2,end:3.4,in:'draw',out:'blur',outDur:.5}),
@@ -3907,9 +3913,17 @@ function restTime(L) {
   if (L.__g) { const mem = gleaves(L.__g).filter(l => l.visible); if (mem.length) r = clamp(Math.max(r, ...mem.map(restTime)), L.start, S.duration - .02); }
   return r;
 }
-function seekLayer(L) { pause(); T = clamp(restTime(L), 0, S.duration); needs = true; }
+// item de grupo/frame: a agulha vai para onde o grupo inteiro já assentou (se o item ainda estiver parado ali), senão os vizinhos que entram depois
+// ficam no meio da entrada, translúcidos (inserir uma forma no frame, por exemplo, levava a agulha para o começo do frame)
+function settleT(L) {
+  const r = restTime(L); if (!L.grp) return r;
+  const ph = phase(L, L.start) || { outD:0 }, hi = (L.end ?? S.duration) - ph.outD - .02;
+  const all = Math.max(r, ...gleaves(gtop(L.grp)).filter(l => l.visible && l.start <= hi).map(restTime));
+  return all <= hi ? all : r;
+}
+function seekLayer(L) { pause(); T = clamp(settleT(L), 0, S.duration); needs = true; }
 // vários elementos de uma vez (SVG em camadas, texto em curvas): a agulha vai para onde o último já assentou, senão os que entram depois ficam no meio da entrada, translúcidos
-function seekLayers(Ls) { pause(); T = clamp(Math.max(...Ls.map(restTime)), 0, S.duration); needs = true; }
+function seekLayers(Ls) { pause(); T = clamp(Math.max(...Ls.map(settleT)), 0, S.duration); needs = true; }
 function seekOut(L) { pause(); const ph = phase(L, L.start) || { outD:0 }, end = L.end ?? S.duration; T = clamp(end - ph.outD * .5, 0, S.duration); needs = true; }
 // mexer em velocidade/intensidade não leva a agulha para outro lugar se ela já está dentro da camada (restTime muda com a velocidade e a linha pulava)
 function seekKeep(L, out) { const end = L.end ?? S.duration; if (T >= L.start && T <= end) { needs = true; return; } out ? seekOut(L) : seekLayer(L); }
@@ -4294,7 +4308,12 @@ function cvDown(ev) {
   const gp = flowGapAt(pt); if (gp) { startGapDrag(ev, pt, gp); return; } // espaço do layout automático
   const L = hitTest(pt) || ghostAt(pt); // sem nada na tela ali, a seleção que está fora da tela também pega
   if (!L) { marquee(ev); return; } // no vazio: arrastar seleciona por área; só um clique solta a seleção (com Shift, não)
-  if (ev.shiftKey) { toggleSel(L); return; }
+  if (ev.shiftKey) { // segundo clique do clique duplo com Shift: o item já foi somado no primeiro, não tira de volta
+    const now = performance.now(), again = RT.shiftTap && RT.shiftTap.id === L.id && now - RT.shiftTap.t < 500;
+    RT.shiftTap = again ? null : { id:L.id, t:now };
+    if (!again) toggleSel(L);
+    return;
+  }
   // grupo/frame: o primeiro clique pega o grupo inteiro, o clique duplo entra no item; vizinho de um item já escolhido sozinho pega só ele (arrastar troca de lugar na fila)
   const sel = pickedLayers(), deep = !!L.grp && !(isPicked(L.id) && sel.length > 1) && sel.length === 1 && sel[0].grp === L.grp;
   const only = ev.ctrlKey || ev.metaKey || deep, grp = isPicked(L.id) && sel.length > 1 && !only;
@@ -4424,6 +4443,7 @@ function drillSelect(L) {
 cv.addEventListener('dblclick', ev => {
   if (RT.pen || RT.vec) return; // caneta e edição de pontos tratam o clique sozinhas
   const L = hitTest(stagePt(ev)); if (!L) return;
+  if (ev.shiftKey || ev.ctrlKey || ev.metaKey) return; // Shift/Ctrl + clique duplo só soma o item, não sobe para o grupo
   const pk0 = pickedLayers();
   if (L.grp && !(pk0.length === 1 && pk0[0] === L) && (pk0.length > 1 || gpar(L.grp) || wholeGroup())) { drillSelect(L); return; }
   editText(L);
@@ -5942,8 +5962,10 @@ const ICONS = {
 // Grupo: as camadas com o mesmo `grp` se selecionam juntas. Ctrl + clique (`only`) escolhe uma só de dentro do grupo.
 const groupOf = L => L && L.grp ? gleaves(gtop(L.grp)) : [L];
 // id do grupo quando a seleção é o grupo inteiro (e só ele); um item escolhido sozinho (timeline, Ctrl + clique) não conta
+const itemSel = () => !!RT.itemPicks && RT.itemPicks === RT.picks; // itens escolhidos um a um: não valem como o grupo, mesmo que sejam todos
 function wholeGroup() {
   const L = selL(); if (!L || !L.grp) return null;
+  if (itemSel()) return null; // itens escolhidos um a um (mesmo que sejam todos do grupo): continuam itens, não viram o grupo
   const pk = pickedLayers(), chain = []; for (let g = L.grp, n = 0; g && n < 20; g = gpar(g), n++) chain.unshift(g);
   for (const g of chain) { const lv = gleaves(g); if (lv.length >= 2 && lv.every(m => isPicked(m.id)) && pk.every(p => lv.includes(p))) return g; } // do frame de fora para o de dentro
   return null;
@@ -5957,6 +5979,7 @@ function gview(gid) {
 function select(id, only) {
   RT.selected = id; const L = S.layers.find(l => l.id === id);
   RT.picks = new Set(!only && L && L.grp ? groupOf(L).map(l => l.id) : [id]);
+  RT.itemPicks = only && L && L.grp ? RT.picks : null;
   renderLayers(); renderProps(); needs = true;
 }
 function selL() { return S.layers.find(l => l.id === RT.selected); }
@@ -5979,6 +6002,7 @@ function toggleSel(L) {
   const cur = RT.picks && RT.picks.size ? new Set([...RT.picks].filter(id => S.layers.some(l => l.id === id))) : new Set();
   cur.add(RT.selected);
   const mem = groupOf(L).map(l => l.id);
+  const itemWise = !!L.grp && (mem.some(id => cur.has(id)) && !mem.every(id => cur.has(id)) || (RT.itemPicks && RT.itemPicks === RT.picks)); // item a item dentro do grupo: não vira o grupo ao completar
   // parte do grupo já escolhida (item de dentro): Shift soma ou tira só o item clicado, não o grupo inteiro
   if (L.grp && mem.some(id => cur.has(id)) && !mem.every(id => cur.has(id))) {
     if (cur.has(L.id) && cur.size > 1) { cur.delete(L.id); if (RT.selected === L.id) RT.selected = [...cur].pop(); }
@@ -5986,7 +6010,8 @@ function toggleSel(L) {
   } else if (cur.has(L.id) && cur.size > mem.length) { mem.forEach(id => cur.delete(id)); if (!cur.has(RT.selected)) RT.selected = [...cur].pop(); }
   else { mem.forEach(id => cur.add(id)); RT.selected = L.id; }
   const bg = S.layers.find(l => l.type === 'bg'); if (bg && cur.size > 1) cur.delete(bg.id);
-  RT.picks = cur; renderLayers(); renderProps(); needs = true;
+  RT.picks = cur; RT.itemPicks = itemWise ? cur : null;
+  renderLayers(); renderProps(); needs = true;
 }
 
 /* ------------ alinhar e agrupar ------------ */
@@ -6000,10 +6025,12 @@ function ensureBounds(ls, quiet) {
   try { for (const L of miss) renderFrame(cx, restTime(L), 8 / W(), false); } finally { RT.noGrp = was; }
   if (!quiet) needs = true;
 }
-// um grupo conta como um bloco só
+// um grupo escolhido inteiro conta como um bloco só (o de fora mais alto que está todo na seleção);
+// itens escolhidos um a um (itemSel) ou só parte do grupo alinham cada um por si
 function selUnits(ls) {
-  const map = new Map();
-  for (const L of ls) if (L._bounds) { const k = L.grp || L.id; if (!map.has(k)) map.set(k, []); map.get(k).push(L); }
+  const map = new Map(), set = new Set(ls), item = itemSel();
+  const unitOf = L => { let k = L.id; if (!item) for (let g = L.grp, n = 0; g && n < 20; g = gpar(g), n++) if (gleaves(g).every(o => set.has(o))) k = g; return k; };
+  for (const L of ls) if (L._bounds) { const k = unitOf(L); if (!map.has(k)) map.set(k, []); map.get(k).push(L); }
   return [...map.values()].map(m => ({ m,
     x0:Math.min(...m.map(l => l._bounds.x)), y0:Math.min(...m.map(l => l._bounds.y)),
     x1:Math.max(...m.map(l => l._bounds.x + l._bounds.w)), y1:Math.max(...m.map(l => l._bounds.y + l._bounds.h)) }));
@@ -6104,8 +6131,7 @@ function pfStrokeSubs(L) {
     const area = polygonClipping.xor(...subs.filter(s => s.closed).map(s => [s.pts]));
     res = pos === 'inside' ? polygonClipping.intersection(res, area) : polygonClipping.difference(res, area);
   }
-  const out = [];
-  for (const poly of res) for (const ring of poly) { const P = tidyRing(ring.slice(0, -1)); if (P.length > 2) out.push({ closed:true, pts:P.map(q => vecPt(q[0], q[1])) }); }
+  const out = ringsToVec(res, (x, y) => [x, y], lw);
   return out.length ? out : null;
 }
 // as partes de uma forma só (letra feita de duas barras que se sobrepõem, como o L) viram uma silhueta sem sobreposição. `unite` com um Path vazio
@@ -6765,9 +6791,10 @@ function actBtn(title, icon, fn, o = {}) {
 // bloquear e ocultar de um conjunto (uma camada ou os itens de um grupo)
 function lockVisAct(ls) {
   const lk = ls.every(l => l.locked), vs = ls.every(l => l.visible), one = ls.length === 1, g = one ? '' : ' o grupo';
+  const fix = b => (b.classList.add('fix'), b);   // cadeado e olho têm lugar fixo: não andam ao passar o mouse
   return [
-    actBtn((lk ? 'Desbloquear' : 'Bloquear') + g, lk ? ICONS.lock : ICONS.unlock, () => setLock(ls, !lk), { on:lk, pressed:lk }),
-    actBtn((vs ? 'Ocultar' : 'Mostrar') + g, vs ? ICONS.eye : ICONS.eyeOff, () => setVisible(ls, !vs), { on:!vs }),
+    fix(actBtn((lk ? 'Desbloquear' : 'Bloquear') + g, lk ? ICONS.lock : ICONS.unlock, () => setLock(ls, !lk), { on:lk, pressed:lk })),
+    fix(actBtn((vs ? 'Ocultar' : 'Mostrar') + g, vs ? ICONS.eye : ICONS.eyeOff, () => setVisible(ls, !vs), { on:!vs })),
   ];
 }
 /* Ordem em que a lista e a timeline mostram as camadas: [{ gid, depth }] = cabeçalho de frame, [{ L, depth }] = camada.
@@ -6826,7 +6853,7 @@ function groupCell(gid, where, depth = 0) {
   } }, [chev, h('span', { class:'lnm', text:groupName(gid) }), h('small', { class:'tl-n', text:String(mem.length) }),
     h('div', { class:'acts' }, [...lockVisAct(mem), actBtn('Desagrupar', '<span class="x">×</span>', () => { selectGroup(gid); ungroupSel(); })])]);
   if (list) {
-    el.setAttribute('role', 'button'); el.tabIndex = 0; el.setAttribute('aria-selected', String(mem.every(m => isPicked(m.id))));
+    el.setAttribute('role', 'button'); el.tabIndex = 0; el.setAttribute('aria-selected', String(!itemSel() && mem.every(m => isPicked(m.id))));
     el.onkeydown = e => { if (e.key === 'Enter') selectGroup(gid); };
   }
   if (depth > 0) el.classList.add('nested');
@@ -7168,7 +7195,7 @@ function renderTimeline() {
   const els = S.layers.filter(L => L.type !== 'bg').reverse();
   if (!els.length) tl.append(h('div', { class:'tl-empty', text:'Nenhum elemento ainda. Use Adicionar, na coluna da esquerda.' }));
   const groupRow = (gid, depth) => {
-    const g = gmeta(gid, true), mem = gleaves(gid), on = mem.every(m => isPicked(m.id));
+    const g = gmeta(gid, true), mem = gleaves(gid), on = !itemSel() && mem.every(m => isPicked(m.id));
     const bar = h('div', { class:'tl-bar grp', style:`--c:var(--accent)` }, [h('div', { class:'seg in' }), h('div', { class:'seg out' }), h('div', { class:'h l' }), h('div', { class:'h r' })]);
     const tip = () => { const w = gwin(gid); bar.title = `${groupName(gid)}: ${w.start.toFixed(1)}s a ${w.end.toFixed(1)}s. Arraste para os lados para mover o grupo todo, para cima ou para baixo para mudar a ordem`; };
     placeBar(bar, gpseudo(gid)); tip();

@@ -127,6 +127,9 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .lcell:not(:hover):not(:focus-within) .acts:not(:has(.on)){display:none}
 .lcell:hover .acts .icon-btn,.lcell:focus-within .acts .icon-btn{display:grid}
 .acts .icon-btn.on{color:var(--accent)}
+/* cadeado e olho ocupam sempre o mesmo lugar (só somem, não saem do lugar) */
+.acts:has(.on) .icon-btn.fix:not(.on){display:grid;visibility:hidden}
+.lcell:hover .acts .icon-btn.fix,.lcell:focus-within .acts .icon-btn.fix{visibility:visible}
 .icon-btn{border:0;background:transparent;color:var(--muted);width:24px;height:24px;border-radius:5px;display:grid;place-items:center}
 .icon-btn:hover{color:var(--fg);background:var(--line)}
 .icon-btn svg{width:14px;height:14px}

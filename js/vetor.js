@@ -11,6 +11,16 @@
 /* ------------ contorno: curvas -> linhas -> traço com espessura ------------ */
 const VEC_EPS = 1e-4;
 const dedupPts = P => { const o = []; for (const q of P) { const l = o[o.length - 1]; if (!l || Math.hypot(q[0] - l[0], q[1] - l[1]) > VEC_EPS) o.push(q); } return o; };
+// quantos pedaços para a linha não se afastar da curva mais que FLAT_TOL nem virar mais que ~6° por pedaço (o ajuste de curvas no fim
+// precisa da curva bem amostrada para achar os cantos de verdade)
+const FLAT_TOL = .02;
+function bezSteps(a, b) {
+  const L = Math.max(Math.hypot(a.x - 2 * a.ox + b.ix, a.y - 2 * a.oy + b.iy), Math.hypot(a.ox - 2 * b.ix + b.x, a.oy - 2 * b.iy + b.y));
+  const legs = [[a.ox - a.x, a.oy - a.y], [b.ix - a.ox, b.iy - a.oy], [b.x - b.ix, b.y - b.iy]].filter(v => Math.hypot(v[0], v[1]) > 1e-6);
+  let turn = 0;
+  for (let i = 1; i < legs.length; i++) { const u = legs[i - 1], v = legs[i]; turn += Math.abs(Math.atan2(u[0] * v[1] - u[1] * v[0], u[0] * v[0] + u[1] * v[1])); }
+  return clamp(Math.max(Math.ceil(Math.sqrt(.75 * L / FLAT_TOL)), Math.ceil(turn / .1)), 2, 400);
+}
 // caminhos com curvas (vec) -> polilinhas [{ pts:[[x, y]...], closed }]
 function flatSubs(vec) {
   const out = [];
@@ -20,8 +30,7 @@ function flatSubs(vec) {
     for (let j = 0; j < m; j++) {
       const a = P[j], b = P[(j + 1) % n];
       if (hasH(a, 'o') || hasH(b, 'i')) {
-        const cl = Math.hypot(a.ox - a.x, a.oy - a.y) + Math.hypot(b.ix - a.ox, b.iy - a.oy) + Math.hypot(b.x - b.ix, b.y - b.iy);
-        const N = clamp(Math.ceil(Math.sqrt(cl) * 1.2), 3, 90);
+        const N = bezSteps(a, b);
         for (let i = 1; i < N; i++) { const q = bezAt(a, b, i / N); pts.push([q.x, q.y]); }
       }
       pts.push([b.x, b.y]);
@@ -68,42 +77,62 @@ function unionPolys0(pcs) {
   return parts.length > 1 ? polygonClipping.union(...parts) : parts[0];
 }
 // o traço de largura o.w sobre as polilinhas, como o canvas desenha (cantos round | miter | bevel, pontas round | butt | square, tracejado).
-// Cada trecho, canto e ponta é um polígono; a união deles é a silhueta do traço (MultiPolygon do polygon-clipping)
+// Como o Skia/Figma: cada caminho vira um anel só (lado esquerdo pra frente, ponta, lado direito pra trás, ponta); no lado de dentro de uma
+// curva o anel passa pelo ponto do meio e se cruza, e a união (polygon-clipping, que conta as voltas: dentro = volta diferente de 0) desfaz os
+// cruzamentos. Antes era um polígono por trecho e por canto: centenas de bordas quase coincidentes, e a união deixava lascas e buracos
 function strokeMulti(subs, o) {
   const h = o.w / 2, pcs = [], r3 = v => Math.round(v * 1000) / 1000;
-  const da = clamp(2 * Math.acos(clamp(1 - .08 / Math.max(h, .2), -1, 1)), .1, .5);
-  const arc = (c, a0, d) => { const n = Math.max(1, Math.ceil(Math.abs(d) / da)), r = []; for (let i = 0; i <= n; i++) { const a = a0 + d * i / n; r.push([c[0] + Math.cos(a) * h, c[1] + Math.sin(a) * h]); } return r; };
-  const add = poly => pcs.push([poly.map(q => [r3(q[0]), r3(q[1])])]);
+  const da = clamp(2 * Math.acos(clamp(1 - FLAT_TOL / Math.max(h, .05), -1, 1)), .02, .1);
+  const off = (v, d, s) => [v[0] - s * d[1] * h, v[1] + s * d[0] * h]; // s = 1: lado esquerdo (normal [-dy, dx]); -1: direito
+  const arcIn = (c, a0, dl, out) => { const n = Math.ceil(Math.abs(dl) / da); for (let i = 1; i < n; i++) { const a = a0 + dl * i / n; out.push([c[0] + Math.cos(a) * h, c[1] + Math.sin(a) * h]); } };
+  const ang = p => Math.atan2(p[1], p[0]);
+  // canto do lado s em v (chegada d0, saída d1): o lado de fora ganha o canto (redondo, vivo ou chanfrado); o de dentro passa pelo meio
+  // (l0/l1 = tamanho dos trechos: se os dois lados de dentro se cruzam antes da metade de cada um, fica só o cruzamento, sem voltas a desfazer)
+  const join = (v, d0, d1, s, out, wedge, l0, l1) => {
+    const o0 = off(v, d0, s), o1 = off(v, d1, s), cr = d0[0] * d1[1] - d0[1] * d1[0], dt = d0[0] * d1[0] + d0[1] * d1[1];
+    if (Math.abs(cr) < 1e-9 && dt > 0) { out.push(o0); return; }
+    const outer = Math.abs(cr) < 1e-9 || cr * s < 0;
+    if (!outer) {
+      if (wedge) return;
+      const t = h * Math.abs(cr) / (1 + dt); // do ponto deslocado até o cruzamento = h·tan(virada/2)
+      if (dt > 0 && l0 && t <= l0 / 2 && t <= l1 / 2) out.push([(o0[0] + o1[0]) / 2 + ((o0[0] + o1[0]) / 2 - v[0]) * (1 - dt) / (1 + dt), (o0[1] + o1[1]) / 2 + ((o0[1] + o1[1]) / 2 - v[1]) * (1 - dt) / (1 + dt)]);
+      else out.push(o0, v, o1);
+      return;
+    }
+    out.push(o0);
+    if (o.join === 'round') {
+      let dl = Math.abs(cr) < 1e-9 ? -s * Math.PI : ang([o1[0] - v[0], o1[1] - v[1]]) - ang([o0[0] - v[0], o0[1] - v[1]]); // volta em cima de si: meio círculo pela frente
+      while (dl > Math.PI) dl -= TAU; while (dl < -Math.PI) dl += TAU;
+      arcIn(v, ang([o0[0] - v[0], o0[1] - v[1]]), dl, out);
+    } else if (o.join === 'miter' && dt > -.99 && 1 / Math.sqrt((1 + dt) / 2) <= 10) out.push([(o0[0] + o1[0]) / 2 + ((o0[0] + o1[0]) / 2 - v[0]) * (1 - dt) / (1 + dt), (o0[1] + o1[1]) / 2 + ((o0[1] + o1[1]) / 2 - v[1]) * (1 - dt) / (1 + dt)]);
+    out.push(o1);
+  };
+  const dirs = P => { const D = []; for (let i = 0; i < P.length - 1; i++) { const dx = P[i + 1][0] - P[i][0], dy = P[i + 1][1] - P[i][1], l = Math.hypot(dx, dy); D.push([dx / l, dy / l]); } return D; };
+  const side = (P, D, s) => {
+    const m = D.length, out = [off(P[0], D[0], s)], len = j => Math.hypot(P[j + 1][0] - P[j][0], P[j + 1][1] - P[j][1]);
+    for (let j = 1; j < m; j++) join(P[j], D[j - 1], D[j], s, out, false, len(j - 1), len(j));
+    out.push(off(P[m], D[m - 1], s)); return out;
+  };
+  // ponta em p, saindo na direção d, do lado esquerdo para o direito
+  const cap = (p, d, cp, out) => {
+    if (cp === 'square') out.push([p[0] - d[1] * h + d[0] * h, p[1] + d[0] * h + d[1] * h], [p[0] + d[1] * h + d[0] * h, p[1] - d[0] * h + d[1] * h]);
+    else if (cp === 'round') arcIn(p, ang([-d[1], d[0]]), -Math.PI, out);
+  };
+  const add = ring => { if (ring.length > 2) pcs.push([ring.map(q => [r3(q[0]), r3(q[1])])]); };
+  const ring = (P, cp) => {
+    const D = dirs(P), m = D.length, L = side(P, D, 1), R = side(P, D, -1).reverse();
+    cap(P[m], D[m - 1], cp, L); L.push(...R); cap(P[0], [-D[0][0], -D[0][1]], cp, L);
+    add(L);
+  };
   const line = (P, closed) => {
-    const n = P.length, m = closed ? n : n - 1, D = [];
-    for (let i = 0; i < m; i++) {
-      const a = P[i], b = P[(i + 1) % n], dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy), d = [dx / l, dy / l], nx = -d[1] * h, ny = d[0] * h;
-      D.push(d);
-      add([[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]]);
-    }
-    const joinAt = j => { // chegada = D[j-1], saída = D[j]; o canto de fora é o que se preenche
-      const d0 = D[(j - 1 + m) % m], d1 = D[j % m], v = P[j], cr = d0[0] * d1[1] - d0[1] * d1[0], dt = d0[0] * d1[0] + d0[1] * d1[1];
-      if (Math.abs(cr) < 1e-9 && dt > 0) return;
-      const sg = cr > 0 ? -1 : 1, n0 = [-d0[1] * sg, d0[0] * sg], n1 = [-d1[1] * sg, d1[0] * sg];
-      const o0 = [v[0] + n0[0] * h, v[1] + n0[1] * h], o1 = [v[0] + n1[0] * h, v[1] + n1[1] * h];
-      if (o.join === 'round') {
-        const a0 = Math.atan2(n0[1], n0[0]); let dl = Math.atan2(n1[1], n1[0]) - a0;
-        while (dl > Math.PI) dl -= TAU; while (dl < -Math.PI) dl += TAU;
-        if (Math.abs(cr) < 1e-9) dl = -Math.PI; // volta em cima de si mesmo: meio círculo por onde ia
-        add([v, ...arc(v, a0, dl)]);
-      } else if (o.join === 'miter' && dt > -.99 && 1 / Math.sqrt((1 + dt) / 2) <= 10) {
-        add([v, o0, [v[0] + (n0[0] + n1[0]) * h / (1 + dt), v[1] + (n0[1] + n1[1]) * h / (1 + dt)], o1]);
-      } else add([v, o0, o1]);
-    };
-    if (closed) for (let j = 0; j < n; j++) joinAt(j); else for (let j = 1; j < n - 1; j++) joinAt(j);
-    if (!closed && o.cap !== 'butt') {
-      const cap = (p, d) => {
-        const nl = [-d[1], d[0]];
-        if (o.cap === 'square') add([[p[0] + nl[0] * h, p[1] + nl[1] * h], [p[0] + (nl[0] + d[0]) * h, p[1] + (nl[1] + d[1]) * h], [p[0] + (d[0] - nl[0]) * h, p[1] + (d[1] - nl[1]) * h], [p[0] - nl[0] * h, p[1] - nl[1] * h]]);
-        else add([p, ...arc(p, Math.atan2(nl[1], nl[0]), -Math.PI)]);
-      };
-      cap(P[0], [-D[0][0], -D[0][1]]); cap(P[n - 1], D[m - 1]);
-    }
+    if (!closed) { ring(P, o.cap); return; }
+    // fechado: abre no ponto que menos vira (pontas retas que se encontram) e o canto que falta nesse ponto vira uma cunha à parte
+    const n = P.length, D = dirs([...P, P[0]]);
+    let k = 0, best = Infinity;
+    for (let j = 0; j < n; j++) { const d0 = D[(j - 1 + n) % n], d1 = D[j], t = Math.abs(Math.atan2(d0[0] * d1[1] - d0[1] * d1[0], d0[0] * d1[0] + d0[1] * d1[1])); if (t < best - 1e-9) { best = t; k = j; } }
+    const Q = [...P.slice(k), ...P.slice(0, k), P[k]];
+    ring(Q, 'butt');
+    for (const s of [1, -1]) { const w = []; join(P[k], D[(k - 1 + n) % n], D[k], s, w, true); if (w.length > 1) add([P[k], ...w]); }
   };
   for (const sp of subs) {
     const parts = o.dash && o.dash.length ? dashSplit(sp, o.dash) : null;
@@ -112,18 +141,149 @@ function strokeMulti(subs, o) {
   }
   return unionPolys(pcs);
 }
-// tira pontos que estão no meio de uma reta
-function tidyRing(P) {
-  let out = P;
-  for (let pass = 0; pass < 2; pass++) {
-    const n = out.length, keep = out.filter((q, i) => {
-      const a = out[(i - 1 + n) % n], b = out[(i + 1) % n], dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy);
-      return l < 1e-9 || Math.abs((q[0] - a[0]) * dy - (q[1] - a[1]) * dx) / l > .004;
-    });
-    if (keep.length < 3 || keep.length === n) break;
+/* ------------ polígono -> curvas, como o "Outline stroke" do Figma: poucos pontos, curva lisa onde a borda é lisa, canto onde é canto ------------ */
+const ringArea = P => P.reduce((a, p, i) => { const q = P[(i + 1) % P.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0) / 2;
+// tira pontos repetidos e pontas de largura zero (o caminho vai e volta pela mesma linha)
+function despike(P) {
+  let out = []; // pontos a menos de 0,02 px um do outro: sobra de arredondamento (a direção do pedacinho entre eles é ruído)
+  for (const q of P) { const l = out[out.length - 1]; if (!l || Math.hypot(q[0] - l[0], q[1] - l[1]) > .02) out.push(q); }
+  while (out.length > 1 && Math.hypot(out[0][0] - out[out.length - 1][0], out[0][1] - out[out.length - 1][1]) <= .02) out.pop();
+  for (let pass = 0, hit = true; hit && pass < 20 && out.length > 3; pass++) {
+    hit = false; const n = out.length, keep = [];
+    for (let i = 0; i < n; i++) {
+      const a = out[(i - 1 + n) % n], q = out[i], b = out[(i + 1) % n], ux = q[0] - a[0], uy = q[1] - a[1], vx = b[0] - q[0], vy = b[1] - q[1];
+      const lu = Math.hypot(ux, uy), lv = Math.hypot(vx, vy);
+      if (lu < VEC_EPS || (lv > VEC_EPS && (ux * vx + uy * vy) / (lu * lv) < -.985 && Math.abs(ux * vy - uy * vx) / Math.max(lu, lv) < .05)) { hit = true; continue; }
+      keep.push(q);
+    }
     out = keep;
   }
   return out;
+}
+const v2n = (x, y) => { const l = Math.hypot(x, y) || 1; return [x / l, y / l]; };
+const bez3 = (c, t) => { const u = 1 - t; return [u * u * u * c[0][0] + 3 * u * u * t * c[1][0] + 3 * u * t * t * c[2][0] + t * t * t * c[3][0], u * u * u * c[0][1] + 3 * u * u * t * c[1][1] + 3 * u * t * t * c[2][1] + t * t * t * c[3][1]]; };
+// uma cúbica por pts[first..last] (mínimos quadrados de Schneider, Graphics Gems; o mesmo do paper.js), ou null se não fica a menos de
+// tol (tol2 = ao quadrado) de todos os pontos. t1 = direção saindo de first, t2 = chegando em last (apontando para trás)
+function fit1(pts, first, last, t1, t2, tol2) {
+  const p0 = pts[first], p3 = pts[last], ch = Math.hypot(p3[0] - p0[0], p3[1] - p0[1]);
+  if (last - first === 1 && ch > 1e-9) { // dois pontos: reta só se as direções das pontas seguem a corda; senão é um pedaço da curva
+    const cx = (p3[0] - p0[0]) / ch, cy = (p3[1] - p0[1]) / ch, d = ch / 3;
+    if (t1[0] * cx + t1[1] * cy > .9998 && -(t2[0] * cx + t2[1] * cy) > .9998) return [p0, p0, p3, p3];
+    return [p0, [p0[0] + t1[0] * d, p0[1] + t1[1] * d], [p3[0] + t2[0] * d, p3[1] + t2[1] * d], p3];
+  }
+  // uma curva não vira mais que ~95° (como os arcos do Figma: um círculo = 4 curvas); com mais, cabia na tolerância neste tamanho mas
+  // ficava ovalada ao aumentar a forma depois
+  if (last - first > 1 && -(t1[0] * t2[0] + t1[1] * t2[1]) < -.09) return null;
+  let straight = ch > 1e-9;
+  for (let i = first + 1; i < last && straight; i++) straight = Math.pow((pts[i][0] - p0[0]) * (p3[1] - p0[1]) - (pts[i][1] - p0[1]) * (p3[0] - p0[0]), 2) / (ch * ch) <= tol2;
+  if (straight || last - first === 1) return [p0, p0, p3, p3]; // reta: sem alças
+  let u = [0];
+  for (let i = first + 1; i <= last; i++) u.push(u[u.length - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const tot = u[u.length - 1] || 1; u = u.map(v => v / tot);
+  const gen = () => {
+    const C = [[0, 0], [0, 0]], X = [0, 0];
+    for (let i = 0; i <= last - first; i++) {
+      const t = u[i], s = 1 - t, b0 = s * s * s, b1 = 3 * t * s * s, b2 = 3 * t * t * s, b3 = t * t * t, a1 = [t1[0] * b1, t1[1] * b1], a2 = [t2[0] * b2, t2[1] * b2];
+      const q = pts[first + i], tx = q[0] - p0[0] * (b0 + b1) - p3[0] * (b2 + b3), ty = q[1] - p0[1] * (b0 + b1) - p3[1] * (b2 + b3);
+      C[0][0] += a1[0] * a1[0] + a1[1] * a1[1]; C[0][1] += a1[0] * a2[0] + a1[1] * a2[1]; C[1][1] += a2[0] * a2[0] + a2[1] * a2[1];
+      X[0] += a1[0] * tx + a1[1] * ty; X[1] += a2[0] * tx + a2[1] * ty;
+    }
+    C[1][0] = C[0][1];
+    const det = C[0][0] * C[1][1] - C[1][0] * C[0][1];
+    let al1, al2;
+    if (Math.abs(det) > 1e-12) { al1 = (X[0] * C[1][1] - X[1] * C[0][1]) / det; al2 = (C[0][0] * X[1] - C[1][0] * X[0]) / det; }
+    else { const c0 = C[0][0] + C[0][1], c1 = C[1][0] + C[1][1]; al1 = al2 = Math.abs(c0) > 1e-12 ? X[0] / c0 : Math.abs(c1) > 1e-12 ? X[1] / c1 : 0; }
+    const eps = 1e-12 * ch, lx = p3[0] - p0[0], ly = p3[1] - p0[1];
+    if (al1 < eps || al2 < eps || (t1[0] * al1 - t2[0] * al2) * lx + (t1[1] * al1 - t2[1] * al2) * ly > ch * ch) al1 = al2 = ch / 3;
+    return [p0, [p0[0] + t1[0] * al1, p0[1] + t1[1] * al1], [p3[0] + t2[0] * al2, p3[1] + t2[1] * al2], p3];
+  };
+  let prevErr = Infinity;
+  for (let it = 0; it <= 12; it++) {
+    const c = gen(); let err = 0;
+    for (let i = first + 1; i < last; i++) { const p = bez3(c, u[i - first]), d = (p[0] - pts[i][0]) ** 2 + (p[1] - pts[i][1]) ** 2; if (d > err) err = d; }
+    if (err <= tol2) return c;
+    if (err > 100 * tol2 || (err >= prevErr * .995 && it > 2)) break; // longe demais ou parou de melhorar
+    prevErr = err;
+    // Newton-Raphson: aproxima o parâmetro de cada ponto do ponto mais perto na curva
+    const d1 = [0, 1, 2].map(k => [3 * (c[k + 1][0] - c[k][0]), 3 * (c[k + 1][1] - c[k][1])]), d2 = [0, 1].map(k => [2 * (d1[k + 1][0] - d1[k][0]), 2 * (d1[k + 1][1] - d1[k][1])]);
+    let ok = true;
+    for (let i = 1; i < u.length - 1; i++) {
+      const t = u[i], s = 1 - t, p = bez3(c, t), q = pts[first + i];
+      const v1 = [s * s * d1[0][0] + 2 * s * t * d1[1][0] + t * t * d1[2][0], s * s * d1[0][1] + 2 * s * t * d1[1][1] + t * t * d1[2][1]];
+      const v2 = [s * d2[0][0] + t * d2[1][0], s * d2[0][1] + t * d2[1][1]], dx = p[0] - q[0], dy = p[1] - q[1];
+      const den = v1[0] * v1[0] + v1[1] * v1[1] + dx * v2[0] + dy * v2[1];
+      if (Math.abs(den) > 1e-12) u[i] = clamp(t - (dx * v1[0] + dy * v1[1]) / den, 0, 1);
+      if (u[i] <= u[i - 1]) ok = false;
+    }
+    if (!ok) break;
+  }
+  return null;
+}
+// trecho liso pts[0..m] -> cúbicas em out: do começo, o maior pedaço que cabe numa curva (busca binária), e segue dali. Dividir no ponto de
+// maior erro (o Schneider clássico) partia um semicírculo em 5; assim sai com o mínimo de pontos. t1/t2 como em fit1
+function fitRun(pts, t1, t2, tol2, out) {
+  const m = pts.length - 1, tan = i => v2n(pts[i + 1][0] - pts[i - 1][0], pts[i + 1][1] - pts[i - 1][1]);
+  let s = 0, ts = t1;
+  while (s < m) {
+    const c = fit1(pts, s, m, ts, t2, tol2);
+    if (c) { out.push(c); return; }
+    let lo = s + 1, hi = m, best = null; // lo sempre cabe (dois pontos), hi não
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1, tm = tan(mid), cm = fit1(pts, s, mid, ts, [-tm[0], -tm[1]], tol2); if (cm) { lo = mid; best = cm; } else hi = mid; }
+    const tl = tan(lo);
+    out.push(best || fit1(pts, s, lo, ts, [-tl[0], -tl[1]], Infinity)); ts = tl; s = lo;
+  }
+}
+// direção da curva saindo de A (B e C = os pontos seguintes): derivada da parábola que passa pelos três. Só o primeiro pedaço (A -> B) erra
+// meio passo da tangente de verdade, e o ajuste acabava dividindo um arco simples em vários pedaços
+function endTan(A, B, C) {
+  const t1 = Math.hypot(B[0] - A[0], B[1] - A[1]), ch = v2n(B[0] - A[0], B[1] - A[1]);
+  if (!C) return ch;
+  const t2 = t1 + Math.hypot(C[0] - B[0], C[1] - B[1]); if (t2 - t1 < 1e-9) return ch;
+  const a = t2 / (t1 * (t2 - t1)), b = t1 / (t2 * (t2 - t1)), d = v2n((B[0] - A[0]) * a - (C[0] - A[0]) * b, (B[1] - A[1]) * a - (C[1] - A[1]) * b);
+  return d[0] * ch[0] + d[1] * ch[1] > .94 ? d : ch; // mais de ~20° da corda: ruído, fica a corda
+}
+// anel fechado (polígono denso) -> pontos do vetor; tol em px
+function fitRing(P, tol) {
+  const n = P.length; if (n < 3) return null;
+  const dir = i => { const a = P[i], b = P[(i + 1) % n]; return Math.atan2(b[1] - a[1], b[0] - a[0]); };
+  const T = P.map((_, i) => { const d = dir(i) - dir((i - 1 + n) % n); return Math.abs(Math.atan2(Math.sin(d), Math.cos(d))); });
+  // canto: virada de mais de ~14° (curva e arco saem amostrados a no máximo ~6° por pedaço, `bezSteps`/`da`), ou bem maior que a dos vizinhos
+  const cs = [];
+  T.forEach((t, i) => { if (t > .25 || (t > .12 && t > 3 * Math.max(T[(i - 1 + n) % n], T[(i + 1) % n]))) cs.push(i); });
+  const out = [], tol2 = tol * tol;
+  if (!cs.length) {
+    const pts = [...P, P[0]], t = v2n(P[1][0] - P[n - 1][0], P[1][1] - P[n - 1][1]);
+    fitRun(pts, t, [-t[0], -t[1]], tol2, out);
+  } else {
+    for (let k = 0; k < cs.length; k++) {
+      const a = cs[k], b = cs[(k + 1) % cs.length], pts = [];
+      for (let i = a; ; i = (i + 1) % n) { pts.push(P[i]); if (i === b && pts.length > 1) break; }
+      const m = pts.length - 1;
+      fitRun(pts, endTan(pts[0], pts[1], m > 1 && pts[2]), endTan(pts[m], pts[m - 1], m > 1 && pts[m - 2]), tol2, out);
+    }
+  }
+  const V = [];
+  for (const c of out) {
+    if (!V.length) V.push(vecPt(c[0][0], c[0][1]));
+    const l = V[V.length - 1]; l.ox = c[1][0]; l.oy = c[1][1];
+    V.push({ x:c[3][0], y:c[3][1], ix:c[2][0], iy:c[2][1], ox:c[3][0], oy:c[3][1] });
+  }
+  const f = V[0], z = V.pop(); f.ix = z.ix; f.iy = z.iy; // o último é o primeiro de novo
+  return V.length > 1 ? V : null;
+}
+// resultado do polygon-clipping (MultiPolygon) -> subcaminhos do vetor em curvas. f = ponto do cálculo -> tela; w = espessura do traço na tela
+// (lasca: anel com área de nada ou mais fino que um vigésimo do traço, sobra da união dos pedaços)
+function ringsToVec(res, f, w) {
+  const subs = [], tol = clamp(w / 80, .05, .12);
+  for (const poly of res) for (const ring of poly) {
+    const P = despike(ring.slice(0, -1).map(q => f(q[0], q[1])));
+    if (P.length < 3) continue;
+    const A = Math.abs(ringArea(P)), per = P.reduce((a, p, i) => { const q = P[(i + 1) % P.length]; return a + Math.hypot(q[0] - p[0], q[1] - p[1]); }, 0);
+    if (A < .01 || 2 * A / per < w * .05) continue;
+    const pts = fitRing(P, tol) || P.map(q => vecPt(q[0], q[1]));
+    subs.push({ closed:true, pts });
+  }
+  return subs;
 }
 // pontos da forma no espaço dela (centro em 0, sem escala nem giro); null se o caminho tem arcos
 function localVec(L, G) {
@@ -182,11 +342,7 @@ function outlineStroke(L) {
       res = pos === 'inside' ? polygonClipping.intersection(res, area) : polygonClipping.difference(res, area);
     }
   } catch (e) { console.warn(e); toast('Não consegui calcular o contorno desse elemento', 4000); return false; }
-  const rings = [];
-  for (const poly of res) for (const ring of poly) {
-    const P = tidyRing(ring.slice(0, -1).map(q => f(q[0], q[1])));
-    if (P.length > 2) rings.push({ closed:true, pts:P.map(q => vecPt(q[0], q[1])) });
-  }
+  const rings = ringsToVec(res, f, lw * k);
   if (!rings.length) { toast('O contorno ficou vazio'); return false; }
   const it = vecLayerFrom(L, rings, { name:`${L.name} (contorno)`, ...solidOver(skC(L)) });
   if (!it) { toast('Não consegui criar o vetor'); return false; }
