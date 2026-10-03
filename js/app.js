@@ -2792,8 +2792,52 @@ function adjImg(L, img) {
   }
   if (e.cv.width !== w || e.cv.height !== hh) { e.cv.width = w; e.cv.height = hh; }
   const c = e.cv.getContext('2d'); c.clearRect(0, 0, w, hh); c.drawImage(A.cv, 0, 0);
-  e.cv.naturalWidth = iw; e.cv.naturalHeight = ih; e.key = key; // quem desenha usa as medidas da foto original
+  e.cv.naturalWidth = iw; e.cv.naturalHeight = ih; e.key = key; e.cv._ver = key; // quem desenha usa as medidas da foto original; _ver: as cópias (imgFor) são refeitas
   return e.cv;
+}
+/* ------------ foto pronta para desenhar (pedido do usuário: depois de virar uma foto o editor inteiro ficava ruim, mesmo desvirando,
+   e a cópia colada em outro arquivo também; a mesma foto importada de novo ficava leve) ------------
+   A foto era desenhada direto do arquivo original com escala negativa (o espelho). No Chrome com placa de vídeo, desenhar a foto
+   grande espelhada tira ela do cache já reduzido e ela volta a ser decodificada inteira a cada quadro; a cópia colada usa a mesma
+   foto carregada, por isso levava o problema junto. Agora o espelho é uma cópia já virada (feita uma vez) e no palco a foto grande é
+   desenhada de uma cópia reduzida pela metade quantas vezes couber sem ficar menor do que aparece na tela (zoom do palco, escala da
+   animação). Na exportação a foto sai do tamanho original (só o espelho vira cópia). Até IMG_KEEP cópias por foto e IMG_MAX px no
+   total (sai a usada há mais tempo). Vídeo continua com o espelho no desenho (cada quadro é novo). */
+const IMGC = new WeakMap(), IMG_KEEP = 6, IMG_MAX = 8e7;
+let IMG_PX = 0;
+const IMG_ALL = new Set(); // { img, k, c } de todas as fotos, para o teto de memória
+function imgFor(ctx, img, dw, dh, fx, fy, exact) {
+  if (!img || img.tagName === 'VIDEO') return null;
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height; if (!iw || !ih) return null;
+  let lv = 0;
+  if (!exact && iw * ih > 1.5e6) {
+    const M = ctx.getTransform(), sc = Math.max(Math.hypot(M.a, M.b), Math.hypot(M.c, M.d));
+    const need = Math.max(Math.abs(dw) * sc / iw, Math.abs(dh) * sc / ih);
+    lv = need > 0 ? clamp(Math.floor(-Math.log2(need)), 0, 8) : 0;
+    while (lv > 0 && Math.max(iw, ih) >> lv < 64) lv--;
+  }
+  if (!lv && !fx && !fy) return null; // a própria foto
+  const ver = img._ver || img.src || '';
+  let e = IMGC.get(img);
+  if (!e || e.ver !== ver) { if (e) for (const q of e.m.values()) { IMG_PX -= q.c.width * q.c.height; IMG_ALL.delete(q); } e = { ver, m:new Map() }; IMGC.set(img, e); }
+  const k = `${lv}|${fx ? 1 : 0}|${fy ? 1 : 0}`, now = performance.now();
+  let q = e.m.get(k);
+  if (!q) {
+    const w = Math.max(1, Math.round(iw / 2 ** lv)), hh = Math.max(1, Math.round(ih / 2 ** lv)), c = document.createElement('canvas');
+    c.width = w; c.height = hh;
+    const x = c.getContext('2d'); x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
+    x.setTransform(fx ? -1 : 1, 0, 0, fy ? -1 : 1, fx ? w : 0, fy ? hh : 0); x.drawImage(img, 0, 0, w, hh);
+    q = { img, k, c, t:now }; e.m.set(k, q); IMG_ALL.add(q); IMG_PX += w * hh;
+    // por foto: as mais antigas saem; no total: a usada há mais tempo sai (a que está sendo desenhada fica)
+    const old = [...e.m.values()].sort((a, b) => a.t - b.t);
+    while (e.m.size > IMG_KEEP) { const o = old.shift(); if (o === q) continue; e.m.delete(o.k); IMG_ALL.delete(o); IMG_PX -= o.c.width * o.c.height; }
+    if (IMG_PX > IMG_MAX) for (const o of [...IMG_ALL].sort((a, b) => a.t - b.t)) {
+      if (IMG_PX <= IMG_MAX) break; if (o === q) continue;
+      const oe = IMGC.get(o.img); if (oe) oe.m.delete(o.k); IMG_ALL.delete(o); IMG_PX -= o.c.width * o.c.height;
+    }
+  }
+  q.t = now;
+  return q.c;
 }
 // vinheta na máscara (elipse do tamanho dela, mesma curva do shader); v < 0 = clareia
 function adjVignette(ctx, v, w, hh) {
@@ -3045,8 +3089,9 @@ function drawBlockBody(ctx, L, G, info, R) {
       // virar a imagem dentro da máscara: espelha em torno do centro da própria imagem, então o deslocamento (Alt + arrastar) segue o mouse
       ctx.save();
       ctx.translate(pn.ix * G.w, pn.iy * G.h);
-      if (L.flipX || L.flipY) ctx.scale(L.flipX ? -1 : 1, L.flipY ? -1 : 1);
-      ctx.drawImage(adjImg(L, G.img), -dw / 2, -dh / 2, dw, dh);
+      const im = adjImg(L, G.img), cp = imgFor(ctx, im, dw, dh, L.flipX, L.flipY, R.export); // espelho e tamanho já prontos (imgFor)
+      if (cp) ctx.drawImage(cp, -dw / 2, -dh / 2, dw, dh);
+      else { if (L.flipX || L.flipY) ctx.scale(L.flipX ? -1 : 1, L.flipY ? -1 : 1); ctx.drawImage(im, -dw / 2, -dh / 2, dw, dh); }
       ctx.restore();
       if (L.aVig && masked(L)) adjVignette(ctx, L.aVig, G.w, G.h);
       ctx.restore();
@@ -3193,7 +3238,7 @@ function paintFill(ctx, L, t, w, hh) {
     const img = fillMedia(L);
     if (img && img.naturalWidth) {
       const r = fillRect(L, img, w, hh, t);
-      ctx.drawImage(img, r.x, r.y, r.w, r.h);
+      ctx.drawImage(imgFor(ctx, img, r.w, r.h, false, false, RT.drawExact) || img, r.x, r.y, r.w, r.h);
       if (L.darken > 0) { ctx.fillStyle = `rgba(0,0,0,${L.darken})`; ctx.fillRect(0, 0, w, hh); }
     }
   }
@@ -3211,8 +3256,12 @@ function paintFill(ctx, L, t, w, hh) {
    Quadro
    ============================================================ */
 function renderFrame(ctx, t, rs, isExport) {
+  const ex = RT.drawExact; RT.drawExact = !!isExport; // exportação: fotos no tamanho original (imgFor)
+  try { renderFrame0(ctx, t, rs, isExport); } finally { RT.drawExact = ex; }
+}
+function renderFrame0(ctx, t, rs, isExport) {
   if (S.still) t = 0;
-  RT.frameNo = (RT.frameNo || 0) + 1; // a adaptação ao formato (placement) é refeita uma vez por quadro
+  if (!RT.holdFrame) RT.frameNo = (RT.frameNo || 0) + 1; // a adaptação ao formato (placement) é refeita uma vez por quadro
   drawFrame(ctx, t, rs, isExport, null);
   // carrossel com slides-imagem: cada um é redesenhado parado por cima (t = 0, sem câmera, transição nem movimento), recortado nele.
   // As caixas (_bounds) que valem no palco são as da passada normal (quem é do slide-imagem já estava em repouso nela)
@@ -3248,7 +3297,7 @@ function drawFrame(ctx, t, rs, isExport, clip) {
   // câmera (camadas 'camera' e transições com movimento) mexe em todo o quadro; sombra e movimento da imagem são de cada camada
   const cam = camAt(t), buf = !RT.only && (cam.blur > .3 || cam.whip) ? frameBuf(ctx.canvas, 0) : null, tc = buf ? buf.getContext('2d') : ctx;
   if (buf) { tc.setTransform(1, 0, 0, 1, 0, 0); tc.fillStyle = '#000'; tc.fillRect(0, 0, buf.width, buf.height); tc.setTransform(rs, 0, 0, rs, -ox, -oy); }
-  const els = S.layers.filter(L => L.visible && !NOBOX(L) && (!RT.only || RT.only.has(L.id)));
+  const els = S.layers.filter(L => L.visible && !NOBOX(L) && (!RT.only || RT.only.has(L.id)) && (!RT.measure || RT.measure.has(L.id)));
   // grupo com animação própria: os itens são desenhados juntos, à parte, e o conjunto entra no lugar do primeiro item
   const gAct = new Map(), gDone = new Set();
   const gActive = gid => {
@@ -3258,7 +3307,7 @@ function drawFrame(ctx, t, rs, isExport, clip) {
   drawItems(tc, els, null, { act:gActive, done:gDone }, els, t, R, cam, one, 0);
   if (buf) camComposite(ctx, buf, cam);
   // transições por cima de tudo
-  if (!S.still && !RT.stillPass && !RT.only) for (const L of S.layers) if (L.visible && L.type === 'fx') drawFx(ctx, L, t, R);
+  if (!S.still && !RT.stillPass && !RT.only && !RT.measure) for (const L of S.layers) if (L.visible && L.type === 'fx') drawFx(ctx, L, t, R);
   if (clip) { ctx.restore(); ctx.setTransform(rs, 0, 0, rs, -ox, -oy); }
 }
 
@@ -3285,8 +3334,9 @@ function fbufDrop(k, c) { FBUF.delete(k); FBUF_PX -= c.width * c.height; }
 // Recorte (palco com zoom, setView): c._vo = { x, y, fw, fh } diz onde o canvas começa no quadro inteiro (px, sem a margem _pad)
 // e o tamanho do quadro inteiro. A tela de apoio herda o recorte de quem a pede; geo = outro recorte (grupo animado)
 const voX = c => c._vo ? c._vo.x : 0, voY = c => c._vo ? c._vo.y : 0;
+// geo também vale sem recorte (tela só do tamanho de uma camada, fxGeo): o _vo dela diz onde ela começa no quadro
 function frameBuf(ref, slot, pad = 0, geo = null) {
-  const v = ref._vo, g = geo && v ? geo : null;
+  const v = ref._vo, g = geo;
   const w = g ? g.w : ref.width - 2 * padOf(ref), hh = g ? g.h : ref.height - 2 * padOf(ref);
   const k = `${slot}:${w}x${hh}+${pad}`, now = performance.now(); let c = FBUF.get(k);
   if (c) { FBUF.delete(k); FBUF.set(k, c); c._t = now; } // mais recente no fim do Map
@@ -3297,9 +3347,11 @@ function frameBuf(ref, slot, pad = 0, geo = null) {
     for (const [kk, cc] of FBUF) { if (FBUF_PX <= FBUF_MAX) break; fbufDrop(kk, cc); }
     FBUF.set(k, c);
   }
-  c._vo = v ? (g ? { x:g.x, y:g.y, fw:v.fw, fh:v.fh } : v) : null;
+  c._vo = g ? { x:g.x, y:g.y, fw:v ? v.fw : ref.width - 2 * padOf(ref), fh:v ? v.fh : ref.height - 2 * padOf(ref) } : v || null;
   return c;
 }
+// onde o canto (0, 0) da tela src cai na tela dst, em px de dst (margens _pad e recortes _vo diferentes)
+const bufAt = (dst, src) => ({ x:padOf(dst) - padOf(src) + voX(src) - voX(dst), y:padOf(dst) - padOf(src) + voY(src) - voY(dst) });
 // margem que a sombra e o desfoque da camada precisam (px da tela, arredondada para poucas telas diferentes)
 function fxPad(L, sh, rs, w, hh) {
   if (L.type === 'bg') return 0; // o fundo não passa do quadro (o desfoque dele já desenha um pouco maior)
@@ -3450,8 +3502,10 @@ function drawFx(ctx, L, t, R) {
   const bm = blendOf(L), buf = bm ? frameBuf(ctx.canvas, 6) : null, c = buf ? buf.getContext('2d') : ctx;
   if (buf) { c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, buf.width, buf.height); c.setTransform(R.rs, 0, 0, R.rs, -voX(buf), -voY(buf)); }
   c.save(); c.globalAlpha = L.opacity ?? 1;
-  // carrossel: a transição acontece em cada slide, do mesmo jeito
+  // carrossel: a transição acontece em cada slide, do mesmo jeito (slide fora da tela não desenha)
+  const M = c.getTransform();
   for (let s = 0; s < slides(); s++) {
+    if (slides() > 1 && !M.b && !M.c && (M.a * (s + 1) * W() + M.e < 0 || M.a * s * W() + M.e > c.canvas.width)) continue;
     c.save(); if (slides() > 1) { c.beginPath(); c.rect(s * W(), 0, W(), H()); c.clip(); c.translate(s * W(), 0); }
     try { P.draw(c, L, (t - L.start) / Math.max(.05, end - L.start)); } catch (e) { console.error(e); }
     c.restore();
@@ -3474,8 +3528,8 @@ const shadowColor = (L, sh) => hexA(L.shColor || autoShadowHex(L, L.shadow), sh.
 // a sombra cresce com o elemento (texto pequeno, sombra curta)
 const shadowK = L => { const b = L._bounds; return b ? clamp(Math.sqrt(Math.min(b.w, b.h) / 180), .45, 1.6) : 1; };
 function drawShadowed(tc, src, L, sh, rs) {
-  const k = shadowK(L) * rs, o = padOf(tc.canvas) - padOf(src);
-  tc.save(); tc.setTransform(1, 0, 0, 1, o, o);
+  const k = shadowK(L) * rs, o = bufAt(tc.canvas, src);
+  tc.save(); tc.setTransform(1, 0, 0, 1, o.x, o.y);
   if (sh.long) {
     // silhueta tingida, empilhada na diagonal numa tela à parte e aplicada com transparência
     const tint = frameBuf(src, 2, padOf(src)), x = tint.getContext('2d'), ext = frameBuf(src, 3, padOf(src)), y = ext.getContext('2d');
@@ -3500,19 +3554,19 @@ const BLURS = {
 const blurOn = L => (L.lblur || 0) > 0 || (L.type !== 'bg' && (L.bblur || 0) > 0);
 // borra o que já está em tc (o quadro até aqui) e põe de volta só onde a camada (src) existe
 function backBlur(tc, src, b, lb = 0) {
-  const m = frameBuf(src, 'bb', padOf(src)), c = m.getContext('2d'), o = padOf(src) - padOf(tc.canvas);
+  const m = frameBuf(src, 'bb', padOf(src)), c = m.getContext('2d'), o = bufAt(m, tc.canvas);
   c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 1; c.filter = 'none'; c.globalCompositeOperation = 'source-over'; c.clearRect(0, 0, m.width, m.height);
   // a forma da camada com o alfa reforçado: vidro com preenchimento quase transparente ainda desfoca tudo atrás
   for (let i = 0; i < 6; i++) c.drawImage(src, 0, 0);
   // um pouco maior que o quadro, para a borda da tela não escurecer o desfoque
   const w = tc.canvas.width, hh = tc.canvas.height, F = frameCenter(tc.canvas), k = 1 + b * 3 / Math.min(F.w, F.h);
   c.globalCompositeOperation = 'source-in'; c.filter = `blur(${b.toFixed(2)}px)`;
-  c.drawImage(tc.canvas, o + F.cx * (1 - k), o + F.cy * (1 - k), w * k, hh * k);
+  c.drawImage(tc.canvas, o.x + F.cx * (1 - k), o.y + F.cy * (1 - k), w * k, hh * k);
   c.filter = 'none'; c.globalCompositeOperation = 'source-over';
   // com desfoque da camada, a borda do vidro também borra: o fundo desfocado se dissolve no quadro em vez de cortar em linha seca
   if (lb > .2 && padOf(m)) clampEdges(m);
   tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1; tc.filter = lb > .2 ? `blur(${lb.toFixed(2)}px)` : 'none'; tc.globalCompositeOperation = 'source-over';
-  tc.drawImage(m, -o, -o); tc.restore();
+  tc.drawImage(m, -o.x, -o.y); tc.restore();
 }
 // estica a última linha/coluna do quadro pela margem da tela: o desfoque continua a camada além da borda do quadro
 // (sem isso, o que encosta ou passa da borda clareava perto dela). Com recorte (palco com zoom), só nos lados em que o canvas
@@ -3555,17 +3609,73 @@ function composeOnto(tc, src, L, sh, bm, rs) {
   }
   if (lb > .2 && padOf(out)) clampEdges(out);
   const w = out.width, hh = out.height, F = frameCenter(out), k = L.type === 'bg' && lb > .2 ? 1 + lb * 3 / Math.min(F.w, F.h) : 1; // o fundo borrado não mostra borda
-  const o = padOf(tc.canvas) - padOf(out);
+  const o = bufAt(tc.canvas, out);
   tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1;
   tc.globalCompositeOperation = bm || 'source-over'; tc.filter = lb > .2 ? `blur(${lb.toFixed(2)}px)` : 'none';
-  tc.drawImage(out, o + F.cx * (1 - k), o + F.cy * (1 - k), w * k, hh * k);
+  tc.drawImage(out, o.x + F.cx * (1 - k), o.y + F.cy * (1 - k), w * k, hh * k);
   tc.restore();
 }
 // carrossel, "Manter dentro do slide" (L.slideClip, pedido do usuário): o elemento continua podendo vazar na posição, mas só aparece
 // dentro do slide dele (recorte no retângulo do slide, no espaço do quadro; a câmera move o recorte junto).
 // Não usar L.inSlide: é a direção do deslize de entrada ('L', 'R'…); por um tempo a caixa gravou true ali (slideClipOf lê os dois)
 const slideClipOf = L => !!L.slideClip || L.inSlide === true;
+/* ------------ fora da vista (pedido do usuário: o carrossel com zoom pesava muito) ------------
+   O palco com zoom (recorte, setView), a miniatura e as telas de grupo cobrem só parte do quadro, mas todo elemento de todos os
+   slides era desenhado a cada quadro; com sombra, desfoque ou mesclagem, cada um ainda passava por uma tela do tamanho do palco.
+   Parado na tela (fase 'hold') o elemento só desenha perto da caixa de repouso: reachOf = essa caixa (mesma conta de drawText e
+   drawBlock) com folga para o movimento contínuo, o giro, a sombra, o desfoque, o traço, a moldura e a marca à mão. Longe da tela
+   em que vai ser desenhado, não desenha (só grava _bounds, como o desenho faria). Entrando ou saindo, a animação pode levar o
+   elemento para longe: sem limite, desenha sempre. Ao medir (RT.measure) o desenho é o de sempre. */
+function restRect(L) {
+  if (L.type === 'text') {
+    const lay = layoutText(L, L.upper ? L.text.toUpperCase() : L.text), pl = placeOf(L);
+    const fit = inFlow(L) ? { ax:pl.x * W(), ay:pl.y * H(), k:1 } : fitInMargin(pl.x * W(), pl.y * H(), lay.blockW * pl.k, lay.blockH * pl.k), fk = fit.k * pl.k;
+    return { b:{ x:fit.ax - lay.blockW * fk / 2, y:fit.ay - lay.blockH * fk / 2, w:lay.blockW * fk, h:lay.blockH * fk, k:fk }, size:lay.size * fk };
+  }
+  const G = geomNow(L); if (!G) return null;
+  const pl = placeOf(L), fit = freeType(L) || inFlow(L) ? { ax:pl.x * W(), ay:pl.y * H(), k:1 } : fitInMargin(pl.x * W(), pl.y * H(), G.w * pl.k, G.h * pl.k), fk = fit.k * pl.k;
+  return { b:{ x:fit.ax - G.w * fk / 2, y:fit.ay - G.h * fk / 2, w:G.w * fk, h:G.h * fk }, size:0 };
+}
+// alcance do desenho parado: centro e raio (unidades do quadro), ou null (sem limite)
+function reachOf(L, t) {
+  if (L.type === 'bg' || NOBOX(L)) return null;
+  const ph = phase(L, t); if (!ph || ph.mode !== 'hold') return null;
+  const q = restRect(L); if (!q) return null;
+  const b = q.b, sh = L.shadow && L.shadow !== 'none' ? SHADOWS[L.shadow] : null;
+  let pad = 240 + (L.lblur || 0) * 3 + (strokeOn(L) ? skW(L) * 2 : 0) + q.size * 1.6 + (L.move && L.move !== 'none' ? Math.max(b.w, b.h) * .5 : 0);
+  if (sh) pad += sh.long ? 160 : ((sh.blur || 0) + Math.max(Math.abs(sh.x || 0), Math.abs(sh.y || 0))) * 1.6;
+  return { b, cx:b.x + b.w / 2, cy:b.y + b.h / 2, r:Math.hypot(b.w, b.h) / 2 * 1.6 + pad };
+}
+// o alcance em px da tela de tc (com a câmera da camada)
+function reachPx(tc, L, t, cam, depth) {
+  const q = reachOf(L, t); if (!q) return null;
+  tc.save(); applyCam(tc, cam, L, depth); const M = tc.getTransform(); tc.restore();
+  const x = M.a * q.cx + M.c * q.cy + M.e, y = M.b * q.cx + M.d * q.cy + M.f, r = q.r * Math.max(Math.hypot(M.a, M.b), Math.hypot(M.c, M.d));
+  return { x0:x - r, y0:y - r, x1:x + r, y1:y + r, q };
+}
+function offView(tc, L, t, cam, depth) {
+  if (RT.measure) return false;
+  const p = reachPx(tc, L, t, cam, depth); if (!p) return false;
+  const c = tc.canvas;
+  if (p.x1 >= 0 && p.y1 >= 0 && p.x0 <= c.width && p.y0 <= c.height) return false;
+  L._bounds = p.q.b; return true;
+}
+// tela da sombra/mesclagem/desfoque só do tamanho do alcance (px do quadro inteiro, o espaço de _vo), quando bem menor que a de
+// sempre; em degraus de 64 px, para mover o elemento não criar tela nova. Dentro do quadro: a margem (pad) leva o que passa da borda
+function fxGeo(tc, L, t, cam, depth) {
+  if (RT.measure) return null;
+  const p = reachPx(tc, L, t, cam, depth); if (!p) return null;
+  const c = tc.canvas, pd = padOf(c), v = c._vo, fw = v ? v.fw : c.width - 2 * pd, fh = v ? v.fh : c.height - 2 * pd;
+  const ox = voX(c) - pd, oy = voY(c) - pd, Q = 64;
+  const x0 = Math.max(0, ox, Math.floor(p.x0 + ox)), y0 = Math.max(0, oy, Math.floor(p.y0 + oy));
+  const x1 = Math.min(fw, ox + c.width, Math.ceil(p.x1 + ox)), y1 = Math.min(fh, oy + c.height, Math.ceil(p.y1 + oy));
+  if (x1 <= x0 || y1 <= y0) return null;
+  const w = Math.min(fw, Math.ceil((x1 - x0) / Q) * Q), hh = Math.min(fh, Math.ceil((y1 - y0) / Q) * Q);
+  if (w * hh > .6 * (c.width - 2 * pd) * (c.height - 2 * pd)) return null; // quase a tela toda: a de sempre
+  return { x:Math.min(x0, fw - w), y:Math.min(y0, fh - hh), w, h:hh };
+}
 function drawLayerFx(tc, L, t, R, cam, depth, one) {
+  if (L.type !== 'bg' && offView(tc, L, t, cam, depth)) return;
   if (!slideClipOf(L) || slides() < 2 || L.type === 'bg') return drawLayerFx0(tc, L, t, R, cam, depth, one);
   const si = slideOfL(L);
   tc.save(); tc.beginPath(); tc.rect(si * W(), 0, W(), H()); tc.clip();
@@ -3578,7 +3688,7 @@ function drawLayerFx0(tc, L, t, R, cam, depth, one) {
     if (!sh && !bm && !blurOn(L)) { tc.save(); applyCam(tc, cam, L, depth); one(tc, L); tc.restore(); return; }
     if (!phase(L, t)) return;
     // sombra, mesclagem e desfoque pedem a camada inteira pronta, à parte
-    const P = fxPad(L, sh, R.rs, tc.canvas.width, tc.canvas.height), src = frameBuf(tc.canvas, 1, P), lc = src.getContext('2d');
+    const P = fxPad(L, sh, R.rs, tc.canvas.width, tc.canvas.height), src = frameBuf(tc.canvas, 1, P, L.type === 'bg' ? null : fxGeo(tc, L, t, cam, depth)), lc = src.getContext('2d');
     lc.setTransform(1, 0, 0, 1, 0, 0); lc.clearRect(0, 0, src.width, src.height);
     lc.setTransform(R.rs, 0, 0, R.rs, P - voX(src), P - voY(src)); applyCam(lc, cam, L, depth); one(lc, L);
     composeOnto(tc, src, L, sh, bm, R.rs);
@@ -6572,12 +6682,21 @@ function toggleSel(L) {
 /* ------------ alinhar e agrupar ------------ */
 // recalcula a posição de repouso de cada camada (o _bounds só existe para quem está na tela no quadro atual)
 // quiet: sem pedir novo quadro (usado no meio do desenho, para a caixa dos grupos)
+// Desempenho (carrossel): antes era um quadro inteiro por camada, com todas as camadas de todos os slides (O(n²): com 10 slides,
+// alinhar ou escolher um slide travava segundos). Agora cada desenho passa só por quem precisa ser medido (RT.measure) e quem
+// assenta no mesmo instante sai do mesmo desenho; a conta do layout (placement, fila) é feita uma vez (RT.holdFrame), porque
+// não depende do tempo e o estado não muda no meio da medição
 function ensureBounds(ls, quiet) {
   const miss = ls.filter(l => l.visible);
   if (!miss.length) return;
   const cx = document.createElement('canvas').getContext('2d'); cx.canvas.width = cx.canvas.height = 8;
-  const was = RT.noGrp; RT.noGrp = true; // a posição de repouso não depende da animação do grupo
-  try { for (const L of miss) renderFrame(cx, restTime(L), 8 / W(), false); } finally { RT.noGrp = was; }
+  const byT = new Map();
+  for (const L of miss) { const t = restTime(L); if (!byT.has(t)) byT.set(t, []); byT.get(t).push(L.id); }
+  const was = RT.noGrp, wm = RT.measure, wh = RT.holdFrame, ws = RT.skipStill;
+  RT.noGrp = true; // a posição de repouso não depende da animação do grupo
+  RT.frameNo = (RT.frameNo || 0) + 1; RT.holdFrame = true; RT.skipStill = true; // slide-imagem: a 2ª passada só refaz o desenho, a caixa é a da 1ª
+  try { for (const [t, ids] of byT) { RT.measure = new Set(ids); renderFrame(cx, t, 8 / W(), false); } }
+  finally { RT.noGrp = was; RT.measure = wm; RT.holdFrame = wh; RT.skipStill = ws; }
   if (!quiet) needs = true;
 }
 // um grupo escolhido inteiro conta como um bloco só (o de fora mais alto que está todo na seleção);
@@ -7469,6 +7588,7 @@ function groupCell(gid, where, depth = 0) {
   if (list) {
     el.setAttribute('role', 'button'); el.tabIndex = 0; el.setAttribute('aria-selected', String(!itemSel() && mem.every(m => isPicked(m.id))));
     el.onkeydown = e => { if (e.key === 'Enter') selectGroup(gid); };
+    el.dataset.gid = gid;
   }
   if (depth > 0) el.classList.add('nested');
   cellIndent(el, list, depth, list ? 0 : 6, list ? 10 : 12);
@@ -7478,8 +7598,32 @@ function groupCell(gid, where, depth = 0) {
   el.addEventListener('dragend', () => { dragGroupId = null; dragLayerId = null; el.classList.remove('dragging'); document.querySelectorAll('.drop-before,.drop-after,.drop-in').forEach(n => n.classList.remove('drop-before', 'drop-after', 'drop-in')); });
   return el;
 }
+/* Desempenho (carrossel): a lista e a timeline eram refeitas inteiras a cada clique (com 10 slides, ~60 ms por seleção).
+   layersSig = tudo que as duas mostram, menos a seleção; se não mudou desde a última montagem, só acende/apaga as linhas
+   (syncSel). Renomeando (campo aberto na lista ou na timeline), refaz sempre: é a montagem nova que tira o campo */
+function layersSig() {
+  const A = S.audio, tl = $('#tl');
+  return JSON.stringify([S.layers.map(L => { const ph = phase(L, L.start);
+    return [L.id, L.name, L.type, typeKey(L), L.start, L.end, ph && ph.inD, ph && ph.outD, tlLabel(L), L.visible, !!L.locked, L.grp || 0, layerStill(L)]; }),
+    S.groups || 0, S.duration, !!S.still, slides(), S.sdur || 0, S.snames || 0, !!(tl && tl.hidden),
+    A ? JSON.stringify(A, (k, v) => (Array.isArray(v) && v.length > 64) || (typeof v === 'string' && v.length > 256) ? v.length : v) : 0]);
+}
+function syncSel() {
+  const on = gid => !itemSel() && gleaves(gid).every(m => isPicked(m.id));
+  for (const el of $('#layers').children) {
+    if (el.dataset.id) el.setAttribute('aria-selected', String(isPicked(el.dataset.id)));
+    else if (el.dataset.gid) el.setAttribute('aria-selected', String(on(el.dataset.gid)));
+  }
+  const tl = $('#tl'); if (!tl || tl.hidden) return;
+  for (const row of tl.querySelectorAll('.tl-row')) {
+    if (row.dataset.id) row.classList.toggle('sel', isPicked(row.dataset.id));
+    else if (row.dataset.gid) row.classList.toggle('sel', on(row.dataset.gid));
+  }
+}
 function renderLayers() {
-  const box = $('#layers'); box.innerHTML = '';
+  const box = $('#layers'), sig = layersSig();
+  if (sig === RT.layersSig && box.childElementCount && !document.querySelector('#layers .nm-edit, #tl .nm-edit')) { syncSel(); return; }
+  RT.layersSig = sig; box.innerHTML = '';
   for (const n of layerTree([...S.layers].reverse())) box.append(n.gid ? groupCell(n.gid, 'list', n.depth) : layerCell(n.L, 'list', n.depth));
   renderMarks();
 }
