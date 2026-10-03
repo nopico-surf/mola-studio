@@ -4211,7 +4211,7 @@ function drawOverlays() {
   const xf = [OS, 0, 0, OS, dpr * (r.left - o.left), dpr * (r.top - o.top)];
   ctx.save(); ctx.setTransform(...xf);
   ctx.beginPath(); ctx.rect(0, 0, FW(), H()); ctx.clip(); // área segura e margem ficam dentro do quadro; o resto (alças, contornos) passa da borda
-  for (let s = 0; s < slides(); s++) {
+  if (!RT.clean) for (let s = 0; s < slides(); s++) { // palco limpo (Shift + G): sem margem, área segura, divisas e nomes dos slides
   ctx.save(); ctx.translate(s * W(), 0); // carrossel: cada slide com a sua área segura e a sua margem
   if ($('#safe').checked && S.format === '9x16') {
     const w = W(), hh = H();
@@ -4230,14 +4230,14 @@ function drawOverlays() {
   ctx.restore();
   }
   // carrossel: slide de vídeo mais curto que a timeline fica apagado depois do fim dele (o arquivo dele já terminou)
-  if (slides() > 1 && S.sdur && !S.still) for (let s = 0; s < slides(); s++) {
+  if (slides() > 1 && S.sdur && !S.still && !RT.clean) for (let s = 0; s < slides(); s++) {
     const d = slideDur(s); if (!d || T <= d + 1e-3) continue;
     ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(s * W(), 0, W(), H());
     ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.font = `600 ${Math.round(W() * .035)}px Inter, system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(`O slide ${s + 1} termina em ${fmtSec(d)}`, s * W() + W() / 2, H() / 2);
   }
   // carrossel: divisa entre os slides (o que atravessa aparece cortado aqui no post)
-  if (slides() > 1) {
+  if (slides() > 1 && !RT.clean) {
     ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = uiA('frame', .75); ctx.setLineDash([]);
     ctx.beginPath(); for (let s = 1; s < slides(); s++) { ctx.moveTo(s * W(), 0); ctx.lineTo(s * W(), H()); } ctx.stroke();
   }
@@ -4246,7 +4246,7 @@ function drawOverlays() {
     const px = 1 / OS * dpr, cur = curSlide(); ctx.save();
     ctx.font = `600 ${11 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
     // com durações diferentes (ou imagens), cada um diz o que é: "Slide 2 · imagem", "Slide 1 · 6,0s" (slideLabel)
-    for (let s = 0; s < slides(); s++) { ctx.fillStyle = s === cur ? uiC('sel') : 'rgba(255,255,255,.5)'; ctx.fillText(slideLabel(s), s * W() + 2 * px, -6 * px); }
+    if (!RT.clean) for (let s = 0; s < slides(); s++) { ctx.fillStyle = s === cur ? uiC('sel') : 'rgba(255,255,255,.5)'; ctx.fillText(slideLabel(s), s * W() + 2 * px, -6 * px); }
     // slide selecionado pelo nome: contorno da seleção em volta dele (some ao escolher um elemento)
     const sl = selL(), sp = RT.slidePick;
     if (sp != null && sp < slides() && (!sl || sl.type === 'bg')) { ctx.lineWidth = 2 * px; ctx.strokeStyle = uiC('sel'); ctx.strokeRect(sp * W(), 0, W(), H()); }
@@ -4499,7 +4499,7 @@ $('#stageBox').addEventListener('dblclick', ev => {
 function slideLabel(s) { return slideName(s) + (!S.sdur || S.still ? '' : slideStill(s) ? ' · imagem' : ` · ${fmtSec(slideDur(s))}`); }
 let slideMeasure = null;
 function slideLabelAt(ev) {
-  const r = cv.getBoundingClientRect(); if (!r.height) return -1;
+  const r = cv.getBoundingClientRect(); if (!r.height || RT.clean) return -1; // palco limpo: os nomes não aparecem
   const k = H() / r.height, p = stagePt(ev); // k = unidades do vídeo por px da tela
   if (p.y > -1 * k || p.y < -22 * k) return -1;
   const s = Math.floor(p.x / W()); if (s < 0 || s >= slides()) return -1;
@@ -8437,6 +8437,8 @@ function panesApply() {
   app.classList.toggle('no-ui', uiOff); $('#uiBack').hidden = !uiOff;
 }
 function paneToggle(k) { PANES[k] = PANES[k] === false; try { localStorage.setItem('mola-panes', JSON.stringify(PANES)); } catch (e) {} panesApply(); }
+// palco limpo (Shift + G): só o que vai para o vídeo, sem margem, divisas e nomes dos slides nem área segura. Só visual, não fica salvo
+function cleanToggle(v = !RT.clean) { RT.clean = v; needsOv = true; toast(v ? 'Palco limpo: sem margem nem divisas dos slides. Shift + G volta' : 'Margem e divisas de volta', 2200); }
 function uiToggle(v = !uiOff) { uiOff = v; closeMenu(); closePicker(); panesApply(); }
 // algo precisa do painel (editar o texto pelo palco, buscar animação, renomear): ele volta
 function paneShow(k) { if (uiOff) uiToggle(false); if (PANES[k] === false) paneToggle(k); }
@@ -9687,6 +9689,7 @@ document.addEventListener('keydown', e => {
   if (e.code === 'Comma' || e.code === 'Period') { e.preventDefault(); stepFrames((e.code === 'Comma' ? -1 : 1) * (e.shiftKey ? fps() : 1)); return; }
   if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); pause(); T = e.key === 'Home' ? 0 : lastFrame(); RT.userSeek = true; needs = true; return; }
   if (k === 'a' && e.shiftKey) { e.preventDefault(); flowToggle(); return; }
+  if (k === 'g' && e.shiftKey) { e.preventDefault(); cleanToggle(); return; }
   if (k === 'p') { e.preventDefault(); penToolStart(e.shiftKey ? 'free' : null); return; }
   if (k === 'i' || k === 'o') { e.preventDefault(); markAt(k === 'i' ? 'start' : 'end'); return; }
   if (e.key === 'Enter' && el && (e.target === document.body || e.target === cv)) { e.preventDefault(); editText(L); }
@@ -9696,7 +9699,7 @@ const KEYS = [
   ['Tocar', [['Espaço', 'Tocar e pausar'], [', .', 'Um quadro para trás / para frente'], ['Shift + , .', 'Um segundo para trás / para frente'], ['← →', 'Quadro a quadro, com nada selecionado'], ['Home End', 'Início / último quadro']]],
   ['Tempo do elemento', [['I', 'Entra na agulha'], ['O', 'Sai na agulha'], ['Clique duplo na barra', 'Leva a agulha até ele'], ['Shift ao arrastar', 'Desliga o ímã da timeline'], ['Esc ao arrastar', 'Cancela']]],
   ['Palco', [['← ↑ → ↓', 'Move 1 px (Shift: 10 px)'], ['Arrastar no vazio', 'Seleciona por área'], ['Shift + clique', 'Soma ou tira da seleção'], ['Ctrl + clique', 'Escolhe um item dentro do grupo'], ['Clique duplo / Enter', 'Edita o texto'], ['Ctrl ao arrastar', 'Desliga as guias'], ['Alt + arrastar imagem', 'Move a imagem na máscara'], ['Roda na imagem', 'Zoom na máscara'], ['Alças (8 pontos)', 'Cantos escalam; lados mudam largura, altura ou quebra do texto'], ['Alt ao puxar a alça', 'Escala a partir do centro']]],
-  ['Zoom e painéis', [['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco'], ['Ctrl + \\', 'Esconde ou mostra todos os painéis']]],
+  ['Zoom e painéis', [['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco'], ['Ctrl + \\', 'Esconde ou mostra todos os painéis'], ['Shift + G', 'Palco limpo: sem margem nem divisas e nomes dos slides']]],
   ['Caneta e pontos', [['P', 'Caneta (modos Caneta, Curvas e Mão livre no topo do palco)'], ['Shift + P', 'Caneta à mão livre'], ['Clique duplo na forma', 'Edita os pontos (qualquer forma vira vetor)'], ['Arrastar a linha', 'Curva o trecho (na edição de pontos)'], ['Clique duplo no ponto', 'Curva / canto']]],
   ['Editar', [['Ctrl + Z', 'Desfazer'], ['Ctrl + Shift + Z', 'Refazer'], ['Ctrl + C / X / V', 'Copiar, recortar, colar (vale entre arquivos)'], ['Ctrl + D', 'Duplicar'], ['Delete', 'Apagar'], ['Ctrl + A', 'Selecionar tudo'], ['Esc', 'Tirar a seleção / sair do texto'], ['/', 'Buscar animação']]],
   ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Alt + Shift + U S I E', 'Pathfinder: unir, subtrair, interseção, excluir (formas)'], ['Ctrl + E', 'Pathfinder: achatar as formas em um vetor'], ['Ctrl + Shift + O', 'Converter em vetor: texto em curvas e contorno em forma'], ['Shift + A', 'Layout automático (sem nada selecionado: o quadro todo)'], ['Arrastar o espaço rosa', 'Muda o espaço do layout'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear'], ['Shift + clique em "Slide N"', 'Escolhe tudo do slide (Shift de novo soma outros slides; o que mudar vale para todos)'], ['Ctrl + Shift + A', 'Escolhe tudo de todos os slides']]],
