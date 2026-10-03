@@ -6496,8 +6496,10 @@ function syncVideos() {
 // requestVideoFrameCallback (v.grab), porque depois da pausa o vídeo pode já mostrar o seguinte, e o desenho usa a cópia
 // (videoEl). Se pular o quadro, cai na busca exata. Mesmos pixels da busca, medido. v.mt/v.fd = último quadro visto e duração.
 const vidSeek = el => new Promise(res => { const fin = () => { clearTimeout(k); el.removeEventListener('seeked', fin); res(); }; el.addEventListener('seeked', fin); const k = setTimeout(fin, 20000); });
-// at = tempo pedido, ft = início do quadro copiado (null = não se sabe; só vale para o mesmo tempo)
-function vidGrab(v, at, ft) {
+// quadro que o vídeo mostra agora, com o carimbo de tempo dele (null sem WebCodecs): é o que se copia e o que se confere
+const vidFrame = el => { try { return window.VideoFrame ? new VideoFrame(el) : null; } catch (e) { return null; } };
+// at = tempo pedido, ft = início do quadro copiado (null = não se sabe; só vale para o mesmo tempo), src = VideoFrame ou o vídeo
+function vidGrab(v, at, ft, src) {
   const el = v.el; let c = v.grab;
   if (!c) {
     c = v.grab = document.createElement('canvas'); c._vid = true;
@@ -6505,7 +6507,7 @@ function vidGrab(v, at, ft) {
     Object.defineProperty(c, 'naturalHeight', { get:() => c.height });
   }
   if (c.width !== el.videoWidth || c.height !== el.videoHeight) { c.width = el.videoWidth; c.height = el.videoHeight; }
-  c.getContext('2d').drawImage(el, 0, 0);
+  c.getContext('2d').drawImage(src || el, 0, 0, c.width, c.height);
   c.currentTime = at; v.gAt = at; v.gT = ft; v.gOk = true;
 }
 function vidStep(v, tg) {
@@ -6524,10 +6526,15 @@ function vidStep(v, tg) {
         v.fd = v.fdN >= 2 ? v.fd0 : 0;
       }
       v.mt = m.mediaTime; v.pf = m.presentedFrames;
-      if (m.mediaTime > tg + 1e-4) end(false); // passou do quadro do alvo
+      if (m.mediaTime > tg + 1e-4) { end(false); return; } // passou do quadro do alvo
       // sem saber a duração do quadro, só aceita o que começa logo antes do alvo
-      else if (m.mediaTime + (v.fd || VID_EPS) > tg) { vidGrab(v, tg, m.mediaTime); end(true); }
-      else el.requestVideoFrameCallback(f);
+      if (m.mediaTime + (v.fd || VID_EPS) <= tg) { el.requestVideoFrameCallback(f); return; }
+      // com o thread ocupado o callback chega atrasado e o vídeo já pode mostrar o quadro seguinte: copia o VideoFrame e confere o carimbo
+      const vf = vidFrame(el), ts = vf ? vf.timestamp / 1e6 : m.mediaTime;
+      const ok = ts <= tg + 1e-4 && ts + (v.fd || VID_EPS) > tg;
+      if (ok) vidGrab(v, tg, ts, vf);
+      if (vf) vf.close();
+      end(ok);
     };
     v.step = true; el.requestVideoFrameCallback(f); vidRate(el, 1); el.play().catch(() => end(false));
   });
@@ -6547,7 +6554,7 @@ async function seekVideos(t) {
       // aba escondida não mostra quadros: só a busca funciona
       if (!same && !document.hidden && el.requestVideoFrameCallback && vt > cur && vt - cur < .6 && await vidStep(v, vt)) return;
       if (!same) { const w = vidSeek(el); el.currentTime = vt; await w; }
-      vidGrab(v, vt, null);
+      const vf = vidFrame(el); vidGrab(v, vt, vf ? vf.timestamp / 1e6 : null, vf); if (vf) vf.close();
     })());
   }
   await Promise.all(jobs);
