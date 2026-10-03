@@ -665,6 +665,9 @@ const fmtLabel = f => FORMATS[f].label;
    quando algo cresce. `flowBake` (em pushUndo e changed) grava posição e tamanho de volta: outros formatos, desligar o layout
    e desagrupar veem o mesmo que a tela. */
 const flowOf = gid => { const g = gid && S.groups && S.groups[gid]; return (g && g.flow) || null; };
+// espaço interno do frame (padding, como no Figma): F.pt / F.pr / F.pb / F.pl em px do vídeo (ausente = 0); F.padSep = cada lado separado.
+// Fica entre a borda do frame e o conteúdo: a caixa do frame (alças, tamanho fixo, bloco dentro de outro frame) inclui o padding
+const fpad = F => ({ t:+(F && F.pt) || 0, r:+(F && F.pr) || 0, b:+(F && F.pb) || 0, l:+(F && F.pl) || 0 });
 /* Frame dentro de frame: S.groups[gid].parent = o frame que contém este. A camada guarda só o grupo de baixo (L.grp); o de cima só tem
    meta (layout, nome) e enxerga as camadas pelos filhos. Dentro de um frame com layout, cada frame filho é um bloco da fila. */
 const gpar = gid => { const g = gid && S.groups && S.groups[gid]; return g && g.parent && g.parent !== gid && S.groups[g.parent] ? g.parent : null; };
@@ -678,6 +681,13 @@ const flowMember = L => !!(L && L.grp && L.visible && !L.flowFree && L.type !== 
 const inFlow = L => flowMember(L) && chainFlow(L.grp);
 // a seleção leva todos os itens da fila (então mover, alinhar ou escalar é do grupo inteiro)
 const flowWhole = (gid, ls) => gleaves(gid).every(o => !inFlow(o) || ls.includes(o));
+// carrossel: a margem que vale para uma fila = do primeiro ao último slide em que há um item (pelo centro). Uma fila em linha que
+// atravessa os slides (um item em cada) não é espremida dentro de um slide só; a coluna dentro de um slide usa a margem dele
+function marginSpan(fmt, xs) {
+  const M = marginBox(fmt); if (!M || slides() < 2 || !xs.length) return M;
+  const ss = xs.map(slideAt), a = marginBox(fmt, Math.min(...ss)), b = marginBox(fmt, Math.max(...ss));
+  return { ...a, x1:b.x1 };
+}
 // tamanho de repouso de um item (px, já com a escala do formato) e o da última conta; p = posição bruta (placeRaw)
 function flowItem(L, p, Hf) {
   let w, hh, bw, bh;
@@ -728,11 +738,13 @@ function flowSolve(F, its, M, fz, bx) {
   const sum = o.reduce((n, i) => n + i[Z], 0), kk = o.reduce((n, i) => n + i.k, 0) / o.length;
   // frame com tamanho fixo: a caixa sai do conteúdo (como estava na última conta) + a folga, pelo alinhamento; o conteúdo se alinha dentro dela
   const off = (m, free) => m === 'end' ? free : m === 'center' ? free / 2 : 0, Lm = v ? F.h : F.w, Lc = v ? F.w : F.h;
+  // padding nos dois eixos (px do formato aberto): a0/a1 = começo/fim da fila, c0/c1 = no outro eixo
+  const P = fpad(F), pa0 = (v ? P.t : P.l) * kk, pa1 = (v ? P.b : P.r) * kk, pc0 = (v ? P.l : P.t) * kk, pc1 = (v ? P.r : P.b) * kk;
   let a = a0, x = x0;
-  if (bx) { a = v ? { lo:bx.y0, hi:bx.y1 } : { lo:bx.x0, hi:bx.x1 }; x = v ? { cl:bx.x0, ch:bx.x1 } : { cl:bx.y0, ch:bx.y1 }; }
+  if (bx) { a = v ? { lo:bx.y0 + pa0, hi:bx.y1 - pa1 } : { lo:bx.x0 + pa0, hi:bx.x1 - pa1 }; x = v ? { cl:bx.x0 + pc0, ch:bx.x1 - pc1 } : { cl:bx.y0 + pc0, ch:bx.y1 - pc1 }; }
   else {
-    if (Lm) { const l = Math.max(Lm * kk, sum + (F.auto ? 0 : (F.gap ?? 24) * kk * (o.length - 1))), lo = a0.lo - off(F.auto ? 'center' : F.pin || 'start', l - (a0.hi - a0.lo)); a = { lo, hi:lo + l }; }
-    if (Lc) { const l = Math.max(Lc * kk, ...o.map(i => i[C])), cl = x0.cl - off(F.align || 'center', l - (x0.ch - x0.cl)); x = { cl, ch:cl + l }; }
+    if (Lm) { const l = Math.max(Lm * kk - pa0 - pa1, sum + (F.auto ? 0 : (F.gap ?? 24) * kk * (o.length - 1))), lo = a0.lo - off(F.auto ? 'center' : F.pin || 'start', l - (a0.hi - a0.lo)); a = { lo, hi:lo + l }; }
+    if (Lc) { const l = Math.max(Lc * kk - pc0 - pc1, ...o.map(i => i[C])), cl = x0.cl - off(F.align || 'center', l - (x0.ch - x0.cl)); x = { cl, ch:cl + l }; }
   }
   let gap = (F.gap ?? 24) * kk, pos;
   if (F.auto && o.length > 1) { gap = (a.hi - a.lo - sum) / (o.length - 1); if (gap < 0) { gap = 0; pos = (a.lo + a.hi - sum) / 2; } else pos = a.lo; }
@@ -753,10 +765,10 @@ function flowSolve(F, its, M, fz, bx) {
   }
   // a caixa do frame (px): no eixo fixo, a do frame; no que abraça, a do conteúdo
   const ext = (k, s) => [Math.min(...rects.map(r => r[k] - r[s] / 2)), Math.max(...rects.map(r => r[k] + r[s] / 2))];
-  const fixM = bx || Lm, fixC = bx || Lc, [m0, m1] = fixM ? [a.lo, a.hi] : ext(A, Z), [c0, c1] = fixC ? [x.cl, x.ch] : ext(B, C);
+  const fixM = bx || Lm, fixC = bx || Lc, [m0, m1] = (fixM ? [a.lo, a.hi] : ext(A, Z)).map((n, j) => j ? n + pa1 : n - pa0), [c0, c1] = (fixC ? [x.cl, x.ch] : ext(B, C)).map((n, j) => j ? n + pc1 : n - pc0);
   const dm = fixM ? (v ? sy : sx) : 0, dc = fixC ? (v ? sx : sy) : 0;
   const box = v ? { x0:c0 + dc, x1:c1 + dc, y0:m0 + dm, y1:m1 + dm } : { x0:m0 + dm, x1:m1 + dm, y0:c0 + dc, y1:c1 + dc };
-  return { rects, gap, kk, v, box, fz:{ ...a0, ...x0 } };
+  return { rects, gap, kk, v, box, pad:{ t:P.t * kk, r:P.r * kk, b:P.b * kk, l:P.l * kk }, fz:{ ...a0, ...x0 } };
 }
 // uma conta por quadro no formato aberto (como placement): Map id → { x, y } em frações; RT.flowRects = a fila de cada grupo
 function flowPlace() {
@@ -776,9 +788,18 @@ function flowLayout(base, D) {
   const fmt = base ? baseFmt() : S.format, Hf = FORMATS[fmt].h, M = marginBox(fmt), pos = new Map(), groups = new Map(), sizes = new Map(), memo = new Map(), fin = new Map();
   // um frame filho vira um bloco da fila do pai: caixa das folhas dele (tamanho de agora; o guardado, para a âncora, vem de fsz do grupo)
   const block = (kid, lv) => {
-    const a = [...lv.values()], x0 = Math.min(...a.map(q => q.cx - q.w / 2)), x1 = Math.max(...a.map(q => q.cx + q.w / 2)), y0 = Math.min(...a.map(q => q.cy - q.h / 2)), y1 = Math.max(...a.map(q => q.cy + q.h / 2));
+    const a = [...lv.values()], gb = groups.has(kid) && groups.get(kid).box; // frame filho com layout: a caixa dele (padding e tamanho fixo contam)
+    let x0 = Math.min(...a.map(q => q.cx - q.w / 2)), x1 = Math.max(...a.map(q => q.cx + q.w / 2)), y0 = Math.min(...a.map(q => q.cy - q.h / 2)), y1 = Math.max(...a.map(q => q.cy + q.h / 2));
+    if (gb) ({ x0, x1, y0, y1 } = gb);
     const k = a.reduce((n, q) => n + q.k, 0) / a.length, w = x1 - x0, hh = y1 - y0, gm = gmeta(kid) || {}, f = (fmt !== baseFmt() && gm.fszF && gm.fszF[fmt]) || gm.fsz;
     return { L:{ id:'g:' + kid, type:'group', kid }, k, cx:(x0 + x1) / 2, cy:(y0 + y1) / 2, w, h:hh, w0:f ? f[0] * k : w, h0:f ? f[1] * k : hh, raw:[w / k, hh / k], i:Math.min(...a.map(q => q.i)), lv };
+  };
+  // o frame de dentro anda com a fila do de fora: a caixa dele (e dos de dentro dele) vai junto, para alças e espaços ficarem no lugar
+  const shiftG = (gid, dx, dy) => {
+    if (!dx && !dy) return;
+    const r = groups.get(gid);
+    if (r) { r.rects = r.rects.map(o => ({ ...o, cx:o.cx + dx, cy:o.cy + dy })); r.box = { x0:r.box.x0 + dx, x1:r.box.x1 + dx, y0:r.box.y0 + dy, y1:r.box.y1 + dy }; if (r.lead) r.lead = { ...r.lead, cx:r.lead.cx + dx, cy:r.lead.cy + dy }; }
+    for (const k of gkids(gid)) shiftG(k, dx, dy);
   };
   // resolve um frame: devolve as folhas (id → item com cx, cy já no lugar), as dele e as dos frames de dentro
   const solve = gid => {
@@ -787,13 +808,13 @@ function flowLayout(base, D) {
     for (const kid of gkids(gid)) { const kr = solve(kid); if (kr.size) { const b = block(kid, kr); blocks.set(b.L, b); } }
     if (F && (its.length || blocks.size)) {
       const boxed = D && D.boxGid === gid, items = [...its, ...blocks.values()];
-      const Mg = M && slides() > 1 ? marginBox(fmt, slideAt(items.reduce((n, q) => n + q.cx, 0) / items.length)) : M; // carrossel: a margem do slide do grupo
+      const Mg = M && marginSpan(fmt, items.map(q => q.cx)); // carrossel: a margem dos slides em que o grupo está
       const r = flowSolve(F, items, boxed ? null : Mg, D && D.flow === gid ? D.fz : null, boxed ? D.box : null);
       r.items = items;
       for (const q of r.rects) {
         const b = blocks.get(q.L);
         fin.set(q.L.id, [q.w / (q.k || 1), q.h / (q.k || 1)]);
-        if (b) { const dx = q.cx - b.cx, dy = q.cy - b.cy; for (const [id, o] of b.lv) res.set(id, { ...o, cx:o.cx + dx, cy:o.cy + dy }); sizes.set(b.L.id, b.raw); }
+        if (b) { const dx = q.cx - b.cx, dy = q.cy - b.cy; for (const [id, o] of b.lv) res.set(id, { ...o, cx:o.cx + dx, cy:o.cy + dy }); sizes.set(b.L.id, b.raw); shiftG(b.L.kid, dx, dy); }
         else { const it = byL.get(q.L), s = q.s || 1; res.set(q.L.id, { ...it, cx:q.cx, cy:q.cy, s:q.s, w:it.w * s, h:it.h * s }); }
       }
       // fsz = o tamanho que valeu (já encolhido pela margem): a posição gravada é a do item encolhido, então a âncora precisa dele
@@ -807,7 +828,7 @@ function flowLayout(base, D) {
     memo.set(gid, res); return res;
   };
   if (S.groups) for (const gid of Object.keys(S.groups)) if (!gpar(gid)) for (const [id, q] of solve(gid)) pos.set(id, { cx:q.cx, cy:q.cy, s:q.s });
-  const raw = new Map(pos), frame = S.flow ? frameSolve(base, Hf, M, pos, sizes, D) : null;
+  const raw = new Map(pos), frame = S.flow ? frameSolve(base, Hf, M, pos, sizes, D, groups) : null;
   if (frame) for (const [gid, r] of groups) { // a caixa do grupo anda junto com a coluna (alças e espaços no lugar certo)
     const q = r.lead && pos.get(r.lead.id); if (!q) continue;
     const dx = q.cx - r.lead.cx, dy = q.cy - r.lead.cy; if (!dx && !dy) continue;
@@ -827,7 +848,7 @@ function flowFill(gid, box) {
    em cima, fica no meio ou encosta embaixo; auto = espalha de margem a margem. Foto ou forma que sangra pela borda de cima ou de baixo
    fica de fora e o que está abaixo (ou acima) dela respeita a borda. align: keep = na horizontal fica onde está; start | center | end = na margem.
    As linhas saem das posições guardadas + fsz (estáveis quando algo cresce); a altura de cada linha, do tamanho de agora. */
-function frameSolve(base, Hf, M, pos, sizes, D) {
+function frameSolve(base, Hf, M, pos, sizes, D, groups) {
   const FF = S.flow, Mb = M || { x0:0, y0:0, x1:W(), y1:Hf }, gap = FF.gap ?? 24, blocks = new Map(), bands = [], ids = new Set();
   const moving = D && D.flowB;
   // carrossel: o tempo em que aparece, separado por slide (um bloco em outro slide não "aparece junto"; quem atravessa conta nos dois)
@@ -865,6 +886,13 @@ function frameSolve(base, Hf, M, pos, sizes, D) {
     bl.ct = mn(bl.ms, m => m.cy - m.it.h / 2); bl.cb = mx(bl.ms, m => m.cy + m.it.h / 2); // agora
     bl.cl = mn(bl.ms, m => m.cx - m.it.w / 2); bl.cr = mx(bl.ms, m => m.cx + m.it.w / 2);
     bl.pic = bl.ms.some(m => m.L.type === 'image' || m.L.type === 'shape');
+    // grupo com layout: o bloco é a caixa do frame (padding e tamanho fixo ocupam lugar na coluna)
+    const gb = groups && bl.key.startsWith('g:') && groups.get(bl.key.slice(2));
+    if (gb && gb.box) {
+      const et = Math.max(0, bl.ct - gb.box.y0), eb = Math.max(0, gb.box.y1 - bl.cb);
+      bl.ct -= et; bl.rt -= et; bl.cb += eb; bl.rb += eb;
+      bl.cl = Math.min(bl.cl, gb.box.x0); bl.cr = Math.max(bl.cr, gb.box.x1);
+    }
   }
   // mesma linha só quem está lado a lado (não se cruza na horizontal) ou em cima de foto/forma (metade da altura ou mais).
   // Texto, logo e botão que só se encostam empilham: antes viravam uma linha rígida e continuavam sobrepostos, era preciso afastar à mão
@@ -2046,8 +2074,10 @@ const G_KEYS = { in:BLOCK_IN.image, out:BLOCK_OUT.image, idle:IDLE_BY.image };
 // sombra, opacidade ou mesclagem do grupo inteiro (S.groups[gid].shadow / opacity / blend): o conjunto é desenhado junto, como na animação do grupo
 // giro do grupo (S.groups[gid].rot, graus, em torno do centro da caixa do conjunto): o conjunto já desenhado gira junto, como a forma (L.rot)
 const gRad = gid => { const g = S.groups && S.groups[gid]; return g && g.rot ? g.rot * Math.PI / 180 : 0; };
-const gStyleOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.shadow && g.shadow !== 'none') || (g.opacity ?? 1) < 1 || !!g.rot || !!blendOf(g) || blurOn(g)) && gleaves(gid).length > 1; };
-const gAnimOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.in || 'cut') !== 'cut' || (g.out || 'cut') !== 'cut' || (g.idle || 'none') !== 'none') && gleaves(gid).length > 1; };
+const gStyleOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.shadow && g.shadow !== 'none') || (g.opacity ?? 1) < 1 || !!g.rot || !!blendOf(g) || blurOn(g)) && gMany(gid); };
+const gAnimOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.in || 'cut') !== 'cut' || (g.out || 'cut') !== 'cut' || (g.idle || 'none') !== 'none') && gMany(gid); };
+// grupo de verdade: dois ou mais itens, ou um frame com layout automático (pode ter um item só, como no Figma)
+function gMany(gid) { const n = gleaves(gid).length; return n > 1 || (n === 1 && !!flowOf(gid)); }
 // o grupo como uma camada de tempo (start/end do conjunto + a animação dele): serve para `phase`, `idleState`, `spdOf`, `intOf` e para a barra
 function gpseudo(gid) {
   const w = gwin(gid); if (!w) return null;
@@ -4692,7 +4722,7 @@ function cvDown(ev) {
     return;
   }
   // grupo/frame: o primeiro clique pega o grupo inteiro, o clique duplo entra no item; vizinho de um item já escolhido sozinho pega só ele (arrastar troca de lugar na fila)
-  const sel = pickedLayers(), deep = !!L.grp && !(isPicked(L.id) && sel.length > 1) && sel.length === 1 && sel[0].grp === L.grp;
+  const sel = pickedLayers(), deep = !!L.grp && !(isPicked(L.id) && sel.length > 1) && sel.length === 1 && sel[0].grp === L.grp && !wholeGroup(); // frame de um item só escolhido inteiro: o clique continua no frame
   const only = ev.ctrlKey || ev.metaKey || deep, grp = isPicked(L.id) && sel.length > 1 && !only;
   if (only) select(L.id, true);
   else if (grp) { RT.selected = L.id; renderLayers(); renderProps(); needs = true; } else select(L.id);
@@ -4837,7 +4867,7 @@ cv.addEventListener('dblclick', ev => {
   const L = hitTest(stagePt(ev)); if (!L) return;
   if (ev.shiftKey || ev.ctrlKey || ev.metaKey) return; // Shift/Ctrl + clique duplo só soma o item, não sobe para o grupo
   const pk0 = pickedLayers();
-  if (L.grp && !(pk0.length === 1 && pk0[0] === L) && (pk0.length > 1 || gpar(L.grp) || wholeGroup())) { drillSelect(L); return; }
+  if (L.grp && (wholeGroup() || (!(pk0.length === 1 && pk0[0] === L) && (pk0.length > 1 || gpar(L.grp))))) { drillSelect(L); return; } // frame de um item só escolhido inteiro: entra no item
   editText(L);
 });
 cv.addEventListener('pointerup', endDrag); cv.addEventListener('pointercancel', endDrag);
@@ -6492,7 +6522,7 @@ function wholeGroup() {
   const L = selL(); if (!L || !L.grp) return null;
   if (itemSel()) return null; // itens escolhidos um a um (mesmo que sejam todos do grupo): continuam itens, não viram o grupo
   const pk = pickedLayers(), chain = []; for (let g = L.grp, n = 0; g && n < 20; g = gpar(g), n++) chain.unshift(g);
-  for (const g of chain) { const lv = gleaves(g); if (lv.length >= 2 && lv.every(m => isPicked(m.id)) && pk.every(p => lv.includes(p))) return g; } // do frame de fora para o de dentro
+  for (const g of chain) { const lv = gleaves(g); if ((lv.length >= 2 || (lv.length && flowOf(g))) && lv.every(m => isPicked(m.id)) && pk.every(p => lv.includes(p))) return g; } // do frame de fora para o de dentro
   return null;
 }
 // o grupo com cara de camada para os controles do painel (id próprio, tempo do conjunto); o que se escreve vai para S.groups[gid]
@@ -6788,7 +6818,7 @@ function alignBar() {
     h('div', { class:'row row-wrap' }, [
       h('button', { class:'btn small', text:'Agrupar', title:'Agrupar (Ctrl+G)', disabled:ls.length < 2 || oneGrp || null, onclick:groupSel }),
       ls.some(l => l.grp) ? h('button', { class:'btn small', text:'Desagrupar', title:'Desagrupar (Ctrl+Shift+G)', onclick:ungroupSel }) : null,
-      n > 1 ? h('button', { class:'btn small', text:'Layout automático', title:'Agrupar em fila, com o mesmo espaço entre eles (Shift+A)', onclick:flowToggle }) : null,
+      n > 1 || (ls.length === 1 && !wholeGroup()) ? h('button', { class:'btn small', text:'Layout automático', title:n > 1 ? 'Agrupar em fila, com o mesmo espaço entre eles (Shift+A)' : 'Pôr num frame com layout automático, com espaço interno em volta (Shift+A)', onclick:flowToggle }) : null,
     ]),
     ...pos, ...keep,
     ls.length > 1 ? h('p', { class:'hint', text:`${ls.length} selecionados${pos.length ? ': a posição move todos juntos' : ''}` }) : null,
@@ -6859,7 +6889,15 @@ function flowToggle() {
   const gid = wholeGroup();
   if (gid) { if (flowOf(gid)) { setFlow(gid, null); toast('Layout automático desligado. Os itens ficaram onde estavam', 3600, UNDO_ACT); } else flowOn(gid); return; }
   const ls = pickedLayers().filter(l => !NOBOX(l));
-  if (new Set(ls.map(l => l.grp ? gtop(l.grp) : l.id)).size < 2) { toast('Selecione dois ou mais elementos (ou um grupo) para o layout automático'); return; }
+  if (!ls.length) { toast('Esse elemento não entra no layout automático'); return; }
+  if (ls.length === 1) { // um elemento só (como no Figma): vira um frame com ele dentro; item de um grupo ganha o frame dentro do grupo
+    const L = ls[0], ng = 'g' + Math.random().toString(36).slice(2, 7);
+    pushUndo();
+    (S.groups ||= {})[ng] = { open:true, name:'Frame' };
+    if (L.grp) S.groups[ng].parent = L.grp;
+    L.grp = ng; RT.picks = new Set([L.id]); RT.selected = L.id; RT.itemPicks = null;
+    changed({ layers:true, props:true }); flowOn(ng); return;
+  }
   // frames inteiros na seleção ficam como estão e passam a ser filhos do novo (layout, nome e animação deles continuam); o resto entra direto
   const whole = [...new Set(ls.filter(l => l.grp).map(l => gtop(l.grp)))].filter(t => gleaves(t).every(l => ls.includes(l)));
   if (!whole.length) { groupSel(); const g = wholeGroup(); if (g) flowOn(g); return; }
@@ -6910,8 +6948,9 @@ function parentBox(gid) {
 // menor tamanho do frame: o do conteúdo (px do formato aberto) => { w, h }
 function flowMin(F, its) {
   const v = F.dir !== 'h', kk = its.reduce((n, i) => n + i.k, 0) / its.length;
+  const P = fpad(F), ph = (P.l + P.r) * kk, pv = (P.t + P.b) * kk;
   const tot = its.reduce((n, i) => n + (v ? i.h : i.w), 0) + (F.auto ? 0 : (F.gap ?? 24) * kk * (its.length - 1)), cr = Math.max(...its.map(i => v ? i.w : i.h));
-  return v ? { w:cr, h:tot } : { w:tot, h:cr };
+  return v ? { w:cr + ph, h:tot + pv } : { w:tot + ph, h:cr + pv };
 }
 function flowResize(D, ex, ey, alt) {
   const F = flowOf(D.gid), its = F ? (flowNow(D.gid) || {}).items || [] : []; if (!its.length) return;
@@ -6920,12 +6959,27 @@ function flowResize(D, ex, ey, alt) {
     if (alt) { const c = (b[k0] + b[k1]) / 2, hw = Math.max(mn / 2, Math.abs(e - c)); b[k0] = c - hw; b[k1] = c + hw; }
     else if (d > 0) b[k1] = Math.max(b[k0] + mn, e); else b[k0] = Math.min(b[k1] - mn, e);
   };
-  const M = marginAt((D.B0.x0 + D.B0.x1) / 2); // texto, logo e botão dentro do frame não passam da margem: a caixa para nela em vez de empurrar o conteúdo
+  const M = marginSpan(S.format, its.map(i => i.cx)); // texto, logo e botão dentro do frame não passam da margem: a caixa para nela em vez de empurrar o conteúdo
   const lock = M && its.some(i => i.L.type !== 'group' && !freeType(i.L));
   const cap = (k0, k1, lo, hi, mn) => { if (b[k1] > hi && D.B0[k1] <= hi + .5) b[k1] = Math.max(hi, b[k0] + mn); if (b[k0] < lo && D.B0[k0] >= lo - .5) b[k0] = Math.min(lo, b[k1] - mn); };
   if (D.hx) { pull(ex, 'x0', 'x1', D.hx, lim.w); if (lock) cap('x0', 'x1', M.x0, M.x1, lim.w); F.w = Math.round((b.x1 - b.x0) / kk); }
   if (D.hy) { pull(ey, 'y0', 'y1', D.hy, lim.h); if (lock) cap('y0', 'y1', M.y0, M.y1, lim.h); F.h = Math.round((b.y1 - b.y0) / kk); }
   flowFill(D.gid, b);
+}
+// espaço interno (padding) de um frame: ks = lados (pt pr pb pl). Frame com tamanho fixo: a caixa fica parada e o conteúdo se afasta
+// da borda (no eixo que abraça, a caixa cresce em volta; nunca fica menor que o conteúdo). Frame que abraça: o conteúdo fica parado
+function flowPadSet(gid, ks, val) {
+  const F = flowOf(gid); if (!F) return;
+  const r = flowNow(gid), old = fpad(F);
+  for (const k of ks) F[k] = val > 0 ? Math.round(val) : undefined;
+  if (r && (F.w != null || F.h != null)) {
+    const nw = fpad(F), kk = r.kk || 1, b = { ...r.box }, lim = flowMin(F, r.items || []);
+    if (F.w == null) { b.x0 -= (nw.l - old.l) * kk; b.x1 += (nw.r - old.r) * kk; }
+    if (F.h == null) { b.y0 -= (nw.t - old.t) * kk; b.y1 += (nw.b - old.b) * kk; }
+    const grow = (k0, k1, mn, fk) => { const d = mn - (b[k1] - b[k0]); if (d > 0) { b[k0] -= d / 2; b[k1] += d / 2; if (F[fk] != null) F[fk] = Math.ceil(mn / kk); } };
+    grow('x0', 'x1', lim.w, 'w'); grow('y0', 'y1', lim.h, 'h');
+    flowFill(gid, b);
+  }
 }
 function flowGroupSec(gid) {
   const F = flowOf(gid), v = !F || F.dir !== 'h';
@@ -6969,7 +7023,18 @@ function flowGroupSec(gid) {
       title:hug ? 'Fixar o tamanho atual (ou puxe a alça no palco)' : 'Voltar a abraçar o conteúdo', onclick:() => set({ [k]:hug ? cur() : undefined }) }));
     return f;
   };
-  sec.append(...[gapF, sizeRow('w', 'Largura'), sizeRow('h', 'Altura'),
+  // espaço interno (padding): dois campos (laterais / em cima e embaixo) ou, com "Cada lado", os quatro
+  const padF = (ks, label, title) => {
+    const f = rangeF({ id:'flow-' + gid + '-' + ks.join('') }, ks[0], label, 0, 400, 1, n => Math.round(n) + 'px', { get:() => +F[ks[0]] || 0, put:val => flowPadSet(gid, ks, val) });
+    f.title = title; f.classList.add('flowgap'); return f;
+  };
+  const padRows = F.padSep
+    ? [padF(['pt'], 'Interno ↑', 'Espaço interno em cima'), padF(['pr'], 'Interno →', 'Espaço interno à direita'), padF(['pb'], 'Interno ↓', 'Espaço interno embaixo'), padF(['pl'], 'Interno ←', 'Espaço interno à esquerda')]
+    : [padF(['pl', 'pr'], 'Interno ↔', 'Espaço interno nas laterais (padding), entre a borda do frame e o conteúdo'), padF(['pt', 'pb'], 'Interno ↕', 'Espaço interno em cima e embaixo (padding), entre a borda do frame e o conteúdo')];
+  padRows[0].append(h('button', { type:'button', class:'btn small flow-auto', 'aria-pressed':String(!!F.padSep), text:'Cada lado',
+    title:F.padSep ? 'Voltar a laterais iguais e em cima/embaixo iguais' : 'Ajustar o espaço interno de cada lado separado',
+    onclick:() => { pushUndo(); if (F.padSep) { delete F.padSep; F.pr = F.pl; F.pb = F.pt; } else F.padSep = true; changed({ props:true }); } }));
+  sec.append(...[gapF, ...padRows, sizeRow('w', 'Largura'), sizeRow('h', 'Altura'),
     field('Alinhar', h('div', { class:'alrow' }, al.map(([k, ic, t]) => tog((F.align || 'center') === k, `Alinhar ${t.toLowerCase()}`, ICONS[ic], () => set({ align:k }))))),
     F.auto ? null : (() => { const f = field('Fixo', h('div', { class:'alrow' }, pins.map(([k, ic, t]) => tog((F.pin || 'start') === k, `Fixo ${t.toLowerCase()}`, ICONS[ic], () => set({ pin:k })))));
       f.title = 'Quando um item cresce (texto maior, outra variação), este lado fica parado e o resto se ajusta'; return f; })(),
@@ -7051,8 +7116,16 @@ function flowGaps() {
   if ((!L || L.type === 'bg') && S.flow) return frameGaps();
   const wg = wholeGroup(), gid = wg || (L && pickedLayers().length === 1 ? L.grp : null);
   if (!L || !gid || !flowOf(gid) || !RT.flowRects) return [];
-  const r = RT.flowRects.get(gid); if (!r || r.rects.length < 2) return [];
+  const r = RT.flowRects.get(gid); if (!r || !r.rects.length) return [];
   const F = flowOf(gid), out = [];
+  // espaço interno (padding) do frame escolhido inteiro: faixas na borda, por dentro da caixa (arrastar muda o valor)
+  if (wg && r.box && r.pad) {
+    const b = r.box, p = r.pad, n = k => Math.round(+F[k] || 0);
+    if (p.t > .5) out.push({ gid, v:true, s0:b.y0, s1:b.y0 + p.t, c0:b.x0, c1:b.x1, n:n('pt'), pad:'t' });
+    if (p.b > .5) out.push({ gid, v:true, s0:b.y1 - p.b, s1:b.y1, c0:b.x0, c1:b.x1, n:n('pb'), pad:'b' });
+    if (p.l > .5) out.push({ gid, v:false, s0:b.x0, s1:b.x0 + p.l, c0:b.y0 + p.t, c1:b.y1 - p.b, n:n('pl'), pad:'l' });
+    if (p.r > .5) out.push({ gid, v:false, s0:b.x1 - p.r, s1:b.x1, c0:b.y0 + p.t, c1:b.y1 - p.b, n:n('pr'), pad:'r' });
+  }
   for (let j = 1; j < r.rects.length; j++) {
     const a = r.rects[j - 1], b = r.rects[j], [A, Z, B, C] = r.v ? ['cy', 'h', 'cx', 'w'] : ['cx', 'w', 'cy', 'h'];
     const s0 = a[A] + a[Z] / 2, s1 = b[A] - b[Z] / 2;
@@ -7147,6 +7220,12 @@ function startGapDrag(ev, pt, g) {
 }
 function gapDrag(D, pt) {
   const F = D.g.gid ? flowOf(D.g.gid) : S.flow; if (!F) return;
+  if (D.g.pad) { // espaço interno: puxar para dentro aumenta; sem "Cada lado" o lado oposto vai junto
+    const sd = D.g.pad, d = (D.g.v ? pt.y - D.pt0.y : pt.x - D.pt0.x) * (sd === 't' || sd === 'l' ? 1 : -1);
+    const ks = F.padSep ? ['p' + sd] : sd === 't' || sd === 'b' ? ['pt', 'pb'] : ['pl', 'pr'];
+    const val = Math.max(0, Math.round(D.gap0 + d)); if (val !== Math.round(+F[ks[0]] || 0)) flowPadSet(D.g.gid, ks, val);
+    return;
+  }
   F.auto = false; F.gap = Math.max(0, Math.round(D.gap0 + (D.g.v ? pt.y - D.pt0.y : pt.x - D.pt0.x)));
 }
 function drawFlowGaps(ctx, px) {
@@ -7449,7 +7528,7 @@ function clickOrRename(L, where, ev) {
   if (ev && (ev.ctrlKey || ev.metaKey) && L.type !== 'bg') { lastClick = { id:null, t:0 }; select(L.id, true); return; }
   const now = performance.now(), dbl = lastClick.id === L.id && now - lastClick.t < 700 && L.type !== 'bg';
   lastClick = dbl ? { id:null, t:0 } : { id:L.id, t:now };
-  if (dbl) renameLayer(L, where); else select(L.id, where === 'tl');  // na timeline o item do grupo se escolhe sozinho; o grupo tem a própria linha
+  if (dbl) renameLayer(L, where); else select(L.id, where === 'tl' || groupOf(L).length === 1);  // na timeline o item do grupo se escolhe sozinho; o grupo tem a própria linha
 }
 // arrastar para reordenar (lista de camadas e nomes da timeline). Topo da tela = mais à frente.
 let dragLayerId = null, dragGroupId = null;
@@ -8786,7 +8865,7 @@ function groupAnimSecs(gid, head, box) {
 const lookFields = L => [rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'), ...blendF(L), ...fxFields(L)];
 // aba "Conteúdo e estilo" do grupo inteiro: rotação, opacidade, mesclagem, sombra e desfoque do conjunto (por fora da de cada item, que continua como está)
 function groupStyleSecs(gid) {
-  const G = gview(gid); G.opacity ??= 1;
+  const G = gview(gid); G.opacity ??= 1; G.rot ??= 0;
   return [h('section', { class:'sec' }, [h('h3', { text:'Aparência do grupo' }),
     h('p', { class:'hint', text:'Vale para o conjunto inteiro, sem mexer nos itens. Cada item pode ter a própria sombra por dentro.' }),
     rotF(G), ...lookFields(G)])];
