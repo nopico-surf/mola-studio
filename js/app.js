@@ -7710,12 +7710,27 @@ function groupCell(gid, where, depth = 0) {
     el.dataset.gid = gid;
   }
   if (depth > 0) el.classList.add('nested');
+  if (g.open === false && mem.some(m => isPicked(m.id)) && !(!itemSel() && mem.every(m => isPicked(m.id)))) el.classList.add('has-sel'); // recolhido com algo escolhido dentro
   cellIndent(el, list, depth, list ? 0 : 6, list ? 10 : 12);
   groupDrop(el, gid);
   el.draggable = true;
   el.addEventListener('dragstart', e => { dragGroupId = gid; dragLayerId = mem[0].id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', gid); setTimeout(() => el.classList.add('dragging')); });
   el.addEventListener('dragend', () => { dragGroupId = null; dragLayerId = null; el.classList.remove('dragging'); document.querySelectorAll('.drop-before,.drop-after,.drop-in').forEach(n => n.classList.remove('drop-before', 'drop-after', 'drop-in')); });
   return el;
+}
+/* A seleção nunca fica escondida (como no Figma): quando ela muda, os frames recolhidos que contêm algo escolhido se abrem.
+   Frame inteiro escolhido abre só os de fora dele (ele mesmo continua como estava). Só na troca de seleção (`RT.revealKey`):
+   recolher à mão depois continua valendo. Quem recolhe com algo escolhido dentro ganha o cabeçalho marcado (`has-sel`). */
+function revealPicks() {
+  const pk = pickedLayers(), key = pk.map(l => l.id).join(',') + '|' + (wholeGroup() || '');
+  if (key === RT.revealKey) return; RT.revealKey = key;
+  const wg = wholeGroup(); let opened = false;
+  for (const L of pk) if (L.grp) for (const g of gchain(L.grp)) {
+    if (g === wg) break; // daqui para dentro faz parte do frame escolhido inteiro
+    const m = gmeta(g); if (m && m.open === false) { m.open = true; opened = true; }
+  }
+  // a timeline cresce com as linhas e o palco encolheria embaixo do mouse (o 2º clique duplo cairia em outro lugar): fica da altura que estava
+  const tl = $('#tl'); if (opened && tl && !tl.hidden && !tl.style.height) tl.style.height = tl.offsetHeight + 'px';
 }
 /* Desempenho (carrossel): a lista e a timeline eram refeitas inteiras a cada clique (com 10 slides, ~60 ms por seleção).
    layersSig = tudo que as duas mostram, menos a seleção; se não mudou desde a última montagem, só acende/apaga as linhas
@@ -7734,17 +7749,20 @@ function layersSig() {
 }
 function syncSel() {
   const on = gid => !itemSel() && gleaves(gid).every(m => isPicked(m.id));
+  // recolhido com algo escolhido dentro (mesma regra do groupCell)
+  const hasSel = gid => gmeta(gid, true).open === false && !on(gid) && gleaves(gid).some(m => isPicked(m.id));
   for (const el of $('#layers').children) {
     if (el.dataset.id) el.setAttribute('aria-selected', String(isPicked(el.dataset.id)));
-    else if (el.dataset.gid) el.setAttribute('aria-selected', String(on(el.dataset.gid)));
+    else if (el.dataset.gid) { el.setAttribute('aria-selected', String(on(el.dataset.gid))); el.classList.toggle('has-sel', hasSel(el.dataset.gid)); }
   }
   const tl = $('#tl'); if (!tl || tl.hidden) return;
   for (const row of tl.querySelectorAll('.tl-row')) {
     if (row.dataset.id) row.classList.toggle('sel', isPicked(row.dataset.id));
-    else if (row.dataset.gid) row.classList.toggle('sel', on(row.dataset.gid));
+    else if (row.dataset.gid) { row.classList.toggle('sel', on(row.dataset.gid)); const c = row.querySelector('.lcell'); if (c) c.classList.toggle('has-sel', hasSel(row.dataset.gid)); }
   }
 }
 function renderLayers() {
+  revealPicks(); // antes da assinatura: abrir um frame muda S.groups e a lista é refeita
   const box = $('#layers'), sig = layersSig();
   if (sig === RT.layersSig && box.childElementCount && !document.querySelector('#layers .nm-edit, #tl .nm-edit')) { syncSel(); return; }
   RT.layersSig = sig; box.innerHTML = '';
@@ -8081,6 +8099,7 @@ function refreshBars() {
 }
 function renderTimeline() {
   const tl = $('#tl'); if (!tl || tl.hidden) return;
+  revealPicks();
   const keep = tl.scrollTop; tl.innerHTML = '';
   const d = S.duration, ruler = h('div', { class:'tl-ruler' }, [h('div', { class:'tl-nm', style:'cursor:default' }, [h('span', { text:'Camadas' })])]);
   const scale = h('div', { class:'tl-scale' });
