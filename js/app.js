@@ -6478,10 +6478,13 @@ function syncVideos() {
     const vt = vidTime(L, T, el);
     if (playing) {
       if (el.seeking) continue;
-      const d = vt - el.currentTime;
-      // longe (ou passou do fim do corte, antes de a conta dar a volta): busca à frente; perto: acelera ou freia
-      if (Math.abs(d) > 1 || el.currentTime > vidCut(L, el).b + .02) { vidRate(el, 1); el.currentTime = vidTime(L, T + (v.lag ?? .3), el); }
-      else vidRate(el, Math.abs(d) < .03 ? 1 : clamp(1 + d * 2, .5, 2));
+      const d = vt - el.currentTime, cb = vidCut(L, el).b;
+      // atrasado mais de 1 s, ou a conta deu a volta (trecho repetindo, agulha voltou): busca à frente pelo tempo da última busca
+      if (d > 1 || d < -1) { vidRate(el, 1); el.currentTime = vidTime(L, T + (v.lag ?? .3), el); continue; }
+      // adiantado (o palco pesado anda mais devagar que o vídeo) ou no fim do corte antes de a conta dar a volta: espera parado,
+      // sem buscar para trás (buscar no meio do vídeo é o que travava com corte)
+      if (d < -.25 || el.currentTime >= cb - .03) { if (!el.paused) el.pause(); continue; }
+      vidRate(el, Math.abs(d) < .03 ? 1 : clamp(1 + d * 2, .5, 2));
       if (el.paused) el.play().catch(() => {});
     } else {
       if (!el.paused) el.pause(); vidRate(el, 1);
