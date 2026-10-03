@@ -667,7 +667,7 @@ async function openCutout(L) {
 
   /* ---- teclado (a janela tem os próprios atalhos; os do editor ficam parados enquanto ela está aberta) ---- */
   function key(e) {
-    if (st.closed) return;
+    if (st.closed || st.asking) return;
     const t = e.target, typing = t && (t.tagName === 'INPUT' && t.type === 'text');
     const k = (e.key || '').toLowerCase(), mod = e.ctrlKey || e.metaKey;
     if (e.type === 'keyup') { if (e.code === 'Space') { spaceDown = false; cv.style.cursor = ''; } if (k === 'c' && st.comp) holdComp(false); return; }
@@ -723,9 +723,14 @@ async function openCutout(L) {
       setTimeout(() => { if (!st.busy) prog.hidden = true; }, 3500);
     }
   }
-  function close(applied) {
-    if (st.closed) return;
-    if (!applied && st.dirty && !confirm('Descartar os retoques deste recorte?')) return;
+  async function close(applied) {
+    if (st.closed || st.asking) return;
+    if (!applied && st.dirty) {
+      st.asking = true; // enquanto pergunta, os atalhos da janela ficam parados (Esc/Enter são da pergunta)
+      const ok = await askConfirm('Descartar os retoques?', 'Os ajustes de pincel deste recorte vão se perder. A foto continua como estava.', 'Descartar', true);
+      st.asking = false;
+      if (!ok) return;
+    }
     st.closed = true; CUTWIN = null;
     clearTimeout(st.fgT); cancelAnimationFrame(raf);
     if (st.worker) st.worker.terminate(); st.worker = null; // libera a memória da IA (RAM e placa de vídeo)
