@@ -6857,6 +6857,7 @@ function groupCell(gid, where, depth = 0) {
     el.onkeydown = e => { if (e.key === 'Enter') selectGroup(gid); };
   }
   if (depth > 0) el.classList.add('nested');
+  if (g.open === false && mem.some(m => isPicked(m.id)) && !(!itemSel() && mem.every(m => isPicked(m.id)))) el.classList.add('has-sel'); // recolhido com algo escolhido dentro
   cellIndent(el, list, depth, list ? 0 : 6, list ? 10 : 12);
   groupDrop(el, gid);
   el.draggable = true;
@@ -6864,7 +6865,22 @@ function groupCell(gid, where, depth = 0) {
   el.addEventListener('dragend', () => { dragGroupId = null; dragLayerId = null; el.classList.remove('dragging'); document.querySelectorAll('.drop-before,.drop-after,.drop-in').forEach(n => n.classList.remove('drop-before', 'drop-after', 'drop-in')); });
   return el;
 }
+/* A seleção nunca fica escondida (como no Figma): quando ela muda, os frames recolhidos que contêm algo escolhido se abrem.
+   Frame inteiro escolhido abre só os de fora dele (ele mesmo continua como estava). Só na troca de seleção (`RT.revealKey`):
+   recolher à mão depois continua valendo. Quem recolhe com algo escolhido dentro ganha o cabeçalho marcado (`has-sel`). */
+function revealPicks() {
+  const pk = pickedLayers(), key = pk.map(l => l.id).join(',') + '|' + (wholeGroup() || '');
+  if (key === RT.revealKey) return; RT.revealKey = key;
+  const wg = wholeGroup(); let opened = false;
+  for (const L of pk) if (L.grp) for (const g of gchain(L.grp)) {
+    if (g === wg) break; // daqui para dentro faz parte do frame escolhido inteiro
+    const m = gmeta(g); if (m && m.open === false) { m.open = true; opened = true; }
+  }
+  // a timeline cresce com as linhas e o palco encolheria embaixo do mouse (o 2º clique duplo cairia em outro lugar): fica da altura que estava
+  const tl = $('#tl'); if (opened && tl && !tl.hidden && !tl.style.height) tl.style.height = tl.offsetHeight + 'px';
+}
 function renderLayers() {
+  revealPicks();
   const box = $('#layers'); box.innerHTML = '';
   for (const n of layerTree([...S.layers].reverse())) box.append(n.gid ? groupCell(n.gid, 'list', n.depth) : layerCell(n.L, 'list', n.depth));
   renderMarks();
@@ -7181,6 +7197,7 @@ function refreshBars() {
 }
 function renderTimeline() {
   const tl = $('#tl'); if (!tl || tl.hidden) return;
+  revealPicks();
   const keep = tl.scrollTop; tl.innerHTML = '';
   const d = S.duration, ruler = h('div', { class:'tl-ruler' }, [h('div', { class:'tl-nm', style:'cursor:default' }, [h('span', { text:'Camadas' })])]);
   const scale = h('div', { class:'tl-scale' });
