@@ -7909,8 +7909,11 @@ const CLIP_TAG = 'mola-camadas:';
 function clipPayload() {
   const ls = pickedLayers(); if (!ls.length) return null;
   const fams = new Set(ls.map(l => l.font).filter(Boolean)), groups = {};
-  ls.forEach(l => { if (l.grp && S.groups && S.groups[l.grp]) groups[l.grp] = S.groups[l.grp]; });
-  return { v:1, dur:S.duration, layers:ls.map(l => { const c = JSON.parse(JSON.stringify(l)); delete c._bounds; return c; }), fonts:S.brand.loaded.filter(f => fams.has(f.family)), groups };
+  // leva a cadeia de frames (frame dentro de frame) até o último que foi copiado inteiro; o de cima que ficou pela metade não vai
+  const ids = new Set(ls.map(l => l.id)), whole = g => gleaves(g).every(l => ids.has(l.id));
+  ls.forEach(l => { for (let g = l.grp, n = 0; g && !groups[g] && whole(g) && n < 20; g = gpar(g), n++) groups[g] = { ...(S.groups && S.groups[g]) }; });
+  Object.values(groups).forEach(m => { if (m.parent && !groups[m.parent]) delete m.parent; });
+  return { v:1, dur:S.duration, layers:ls.map(l => { const c = JSON.parse(JSON.stringify(l)); delete c._bounds; if (c.grp && !groups[c.grp]) delete c.grp; return c; }), fonts:S.brand.loaded.filter(f => fams.has(f.family)), groups };
 }
 /* ------------ inserir dentro do frame selecionado (como no Figma) ------------
    Frame/grupo inteiro selecionado: colar e "Adicionar" põem o novo dentro dele; item de dentro escolhido sozinho: ao lado dele, no mesmo frame.
@@ -7925,7 +7928,7 @@ function insertTarget(ids) {
 function intoFrame(gid, ls) {
   const before = gleaves(gid), last = Math.max(-1, ...before.map(l => S.layers.indexOf(l)));
   for (const L of ls) {
-    if (L.grp) { const m = gmeta(L.grp, true); if (!gpar(L.grp) && L.grp !== gid) m.parent = gid; } else L.grp = gid;
+    if (L.grp) { const t = gtop(L.grp); if (t !== gid) gmeta(t, true).parent = gid; } else L.grp = gid;
     S.layers.splice(S.layers.indexOf(L), 1);
   }
   S.layers.splice(last < 0 ? S.layers.length : last + 1, 0, ...ls);
@@ -7964,14 +7967,18 @@ function pasteLayers(p) {
     (f.src === 'file' ? loadFileFont(f) : loadGoogleFont(f.family)).then(() => renderBrand());
   }
   const gm = {}, out = [], ids = new Set(src.map(o => o.id));
+  // grupo colado ganha id novo; o frame de cima (parent) também, se veio junto, então frame dentro de frame continua igual
+  const regrp = g => {
+    if (gm[g]) return gm[g];
+    const ng = gm[g] = 'g' + Math.random().toString(36).slice(2, 7), m = p.groups && p.groups[g];
+    if (m) { const c = (S.groups ||= {})[ng] = { ...m }; if (m.parent && m.parent !== g && p.groups[m.parent]) c.parent = regrp(m.parent); else delete c.parent; }
+    return ng;
+  };
   for (const o of src) {
     const c = JSON.parse(JSON.stringify(o)); c.id = uid();
     // item copiado de dentro de um grupo (sem o grupo inteiro) chega solto, como no Figma
     if (c.grp && S.groups && S.groups[c.grp] && !gleaves(c.grp).every(l => ids.has(l.id))) delete c.grp;
-    if (c.grp) {
-      if (!gm[c.grp]) { gm[c.grp] = 'g' + Math.random().toString(36).slice(2, 7); if (p.groups && p.groups[c.grp]) { (S.groups ||= {})[gm[c.grp]] = { ...p.groups[c.grp] }; delete S.groups[gm[c.grp]].parent; } }
-      c.grp = gm[c.grp];
-    }
+    if (c.grp) c.grp = regrp(c.grp);
     // o que ia até o fim do vídeo de origem vai até o fim deste; o resto fica dentro da duração
     const toEnd = c.end == null || (p.dur && c.end >= p.dur - .01);
     c.start = clamp(+c.start || 0, 0, Math.max(0, S.duration - .3));
