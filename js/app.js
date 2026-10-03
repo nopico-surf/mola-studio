@@ -2990,9 +2990,10 @@ function drawBlockBody(ctx, L, G, info, R) {
       ctx.clip();
       const pn = panOf(L), iw = G.img.naturalWidth, ih = G.img.naturalHeight, k = Math.max(G.w / iw, G.h / ih) * pn.zoom; // enquadramento do formato aberto
       const dw = iw * k, dh = ih * k;
-      if (L.flipX || L.flipY) ctx.scale(L.flipX ? -1 : 1, L.flipY ? -1 : 1); // virar a imagem dentro da máscara
-      ctx.drawImage(adjImg(L, G.img), -dw / 2 + pn.ix * G.w, -dh / 2 + pn.iy * G.h, dw, dh);
+      // virar a imagem dentro da máscara: espelha em torno do centro da própria imagem, então o deslocamento (Alt + arrastar) segue o mouse
+      ctx.translate(pn.ix * G.w, pn.iy * G.h);
       if (L.flipX || L.flipY) ctx.scale(L.flipX ? -1 : 1, L.flipY ? -1 : 1);
+      ctx.drawImage(adjImg(L, G.img), -dw / 2, -dh / 2, dw, dh);
       if (L.aVig && masked(L)) adjVignette(ctx, L.aVig, G.w, G.h);
       ctx.restore();
       if (strokeSee(L)) strokeOnPath(ctx, L.mask === 'circle' ? (() => { const p = new Path2D(); p.ellipse(0, 0, G.w / 2, G.h / 2, 0, 0, TAU); return p; })() : rrectP(-G.w / 2, -G.h / 2, G.w, G.h, radOf(L)), L);
