@@ -848,6 +848,14 @@ function flowFill(gid, box) {
    em cima, fica no meio ou encosta embaixo; auto = espalha de margem a margem. Foto ou forma que sangra pela borda de cima ou de baixo
    fica de fora e o que está abaixo (ou acima) dela respeita a borda. align: keep = na horizontal fica onde está; start | center | end = na margem.
    As linhas saem das posições guardadas + fsz (estáveis quando algo cresce); a altura de cada linha, do tamanho de agora. */
+// carrossel: a caixa [x0, x1] (px do quadro inteiro) atravessa a divisa entre slides de verdade (um bom pedaço dos dois lados);
+// passar um pouco da borda não conta (é texto torto, não emenda)
+function slideCross(x0, x1) {
+  if (slides() < 2) return false;
+  const tol = Math.max(40, (x1 - x0) * .15);
+  for (let s = 1; s < slides(); s++) { const b = s * W(); if (x0 < b - tol && x1 > b + tol) return true; }
+  return false;
+}
 function frameSolve(base, Hf, M, pos, sizes, D, groups) {
   const FF = S.flow, Mb = M || { x0:0, y0:0, x1:W(), y1:Hf }, gap = FF.gap ?? 24, blocks = new Map(), bands = [], ids = new Set();
   const moving = D && D.flowB;
@@ -961,7 +969,9 @@ function frameSolve(base, Hf, M, pos, sizes, D, groups) {
   // horizontal e saída: cada linha anda inteira
   for (const r of rows) {
     const Mr = slideShift(Mb, slideAt((r.cl + r.cr) / 2)); // carrossel: a margem do slide da linha
-    const dx = FF.align === 'start' ? Mr.x0 - r.cl : FF.align === 'end' ? Mr.x1 - r.cr : FF.align === 'center' ? (Mr.x0 + Mr.x1 - r.cl - r.cr) / 2 : 0, dy = r.Y - r.ct;
+    // carrossel emendado: a linha que atravessa de um slide para o outro fica onde está na horizontal (centralizar puxava
+    // a peça emendada para dentro de um slide só e desfazia a emenda)
+    const dx = slideCross(r.cl, r.cr) ? 0 : FF.align === 'start' ? Mr.x0 - r.cl : FF.align === 'end' ? Mr.x1 - r.cr : FF.align === 'center' ? (Mr.x0 + Mr.x1 - r.cl - r.cr) / 2 : 0, dy = r.Y - r.ct;
     r.dx = dx; r.dy = dy;
     for (const b of r.bs) for (const m of b.ms) pos.set(m.L.id, { cx:m.cx + dx, cy:m.cy + dy });
   }
@@ -4999,7 +5009,7 @@ cv.addEventListener('pointermove', ev => {
     const hd = handleAt(pt), gp = !hd && flowGapAt(pt), ht = !gp && (hitTest(pt) || ghostAt(pt));
     cv.style.cursor = hd ? (hd.rot ? ROT_CUR : hd.rad ? 'default' : HCUR[hd.k]) : gp ? (gp.v ? 'row-resize' : 'col-resize') : ht ? (ev.altKey && (ht.type === 'image' || mediaFill(ht)) ? 'all-scroll' : 'move') : '';
     setHover(hd || gp ? null : ht && ht.id);
-    const gk = gp && !gp.gid ? Math.round(gp.s0) : null; if (RT.gapHot !== gk) { RT.gapHot = gk; needsOv = true; } // espaço do quadro só aparece com o mouse em cima
+    const gk = gp && !gp.gid ? gapKey(gp) : null; if (RT.gapHot !== gk) { RT.gapHot = gk; needsOv = true; } // espaço do quadro só aparece com o mouse em cima
     return;
   }
   const D = RT.drag, L = D.L;
@@ -7369,6 +7379,8 @@ function flowGaps() {
   }
   return out;
 }
+// espaço do quadro com o mouse em cima: a altura e o slide (no carrossel, os slides iguais têm espaços na mesma altura)
+const gapKey = g => Math.round(g.s0) + ':' + slideAt((g.c0 + g.c1) / 2);
 // espaços da coluna do quadro (nada selecionado): entre as linhas que estão na tela agora
 function frameGaps() {
   const fr = RT.frameRows; if (!fr || !fr.rows.length) return [];
@@ -7401,7 +7413,7 @@ function frameToggle() {
   const pos = gs.filter(g => g > 0).sort((p, q) => p - q), M = marginBox() || { x0:0, y0:0, x1:W(), y1:H() };
   const top = Math.min(...rows.map(r => r.ct)), bot = Math.max(...rows.map(r => r.ct + r.H)), mid = ((top + bot) / 2 - M.y0) / (M.y1 - M.y0);
   // na horizontal: quase no centro (ou quase encostado numa margem) já conta; com 10px de tolerância um botão um pouco torto deixava tudo em "Manter" e era preciso alinhar à mão
-  const tol = (M.x1 - M.x0) * .06, near = f => rows.every(r => Math.abs(f(r, areaAt((r.cl + r.cr) / 2))) < tol); // carrossel: a margem do slide da linha
+  const tol = (M.x1 - M.x0) * .06, near = f => rows.filter(r => !slideCross(r.cl, r.cr)).every(r => Math.abs(f(r, areaAt((r.cl + r.cr) / 2))) < tol); // carrossel: a margem do slide da linha
   const align = near((r, M) => (r.cl + r.cr - M.x0 - M.x1) / 2) ? 'center' : near((r, M) => r.cl - M.x0) ? 'start' : near((r, M) => r.cr - M.x1) ? 'end' : 'keep';
   S.flow = { gap:pos.length ? Math.round(pos[pos.length >> 1]) : 40, auto:false, pin:mid < .4 ? 'start' : mid > .6 ? 'end' : 'center', align };
   changed({ props:true });
@@ -7465,7 +7477,7 @@ function gapDrag(D, pt) {
 function drawFlowGaps(ctx, px) {
   for (const g of flowGaps()) {
     // layout do quadro: o espaço não fica fixo na tela, só aparece com o mouse em cima ou arrastando (pedido do usuário)
-    if (!g.gid && !(RT.drag && RT.drag.mode === 'gap' && !RT.drag.g.gid) && RT.gapHot !== Math.round(g.s0)) continue;
+    if (!g.gid && !(RT.drag && RT.drag.mode === 'gap' && !RT.drag.g.gid) && RT.gapHot !== gapKey(g)) continue;
     const [x, y, w, hh] = g.v ? [g.c0, g.s0, g.c1 - g.c0, g.s1 - g.s0] : [g.s0, g.c0, g.s1 - g.s0, g.c1 - g.c0];
     const hot = RT.drag && RT.drag.mode === 'gap' && RT.drag.g.gid === g.gid;
     ctx.fillStyle = hot ? 'rgba(255,92,163,.26)' : 'rgba(255,92,163,.14)'; ctx.fillRect(x, y, w, hh);
