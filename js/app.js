@@ -5265,10 +5265,11 @@ function renderSide(list, ps) {
       title:o.top ? null : 'Clique duas vezes para renomear. Arraste um arquivo para cá para mover',
       onclick:e => { if (e.detail > 1 || FVIEW === pid) return; FVIEW = pid; renderFiles(); }, onkeydown:e => { if (e.key === 'Enter' && e.target === el) el.click(); } }, [
       h('span', { class:'fp-ic', html:o.icon || ICON_FOLDER }), h('span', { class:'fp-nm', text:name }), h('small', { text:String(count(pid)) }),
-      o.top ? null : h('button', { class:'icon-btn fp-del', title:'Renomear projeto', 'aria-label':`Renomear projeto ${name}`, html:ICON_PEN,
+      o.top ? null : h('span', { class:'fp-acts' }, [
+        h('button', { class:'icon-btn fp-del', title:'Renomear projeto', 'aria-label':`Renomear projeto ${name}`, html:ICON_PEN,
         onclick:e => { e.stopPropagation(); if (FVIEW !== pid) { FVIEW = pid; renderFiles().then(() => renameProjInline(pid)); } else renameProjInline(pid); } }),
-      o.top ? null : h('button', { class:'icon-btn fp-del', title:'Apagar projeto (os arquivos vão para Rascunhos)', 'aria-label':`Apagar projeto ${name}`, html:ICONS.trash,
-        onclick:e => { e.stopPropagation(); projDelete(pid); } })]);
+        h('button', { class:'icon-btn fp-del', title:'Apagar projeto (os arquivos vão para Rascunhos)', 'aria-label':`Apagar projeto ${name}`, html:ICONS.trash,
+        onclick:e => { e.stopPropagation(); projDelete(pid); } })])]);
     if (!o.top) el.addEventListener('dblclick', e => { if (!e.target.closest('input')) renameProjInline(pid); });
     if (pid !== '*') {
       el.addEventListener('dragover', e => { if (!dragFileId) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; el.classList.add('drop-in'); });
