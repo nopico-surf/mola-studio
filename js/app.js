@@ -4370,7 +4370,7 @@ function startResize(ev, pt, hd) {
   RT.drag = { L, mode:'rs', cm, how, hx, hy, pad:grp ? 0 : selPad(L), pt0:pt, rotA:ra, items, off:{ x:pt.x - hd.x, y:pt.y - hd.y }, b0:{ w:b.w, h:b.h }, C:{ x:cx, y:cy }, g0:grp ? null : geomNow(L),
     gR:grp && cm ? cm.g.find(e => e.gid === (b.gid || b.rg)) : null, // grupo girado: o pivô anda quando o conjunto escala (ver `put` em resizeTo)
     A:{ x:cx - hx * b.w / 2, y:cy - hy * b.h / 2 }, H0:{ x:cx + hx * b.w / 2, y:cy + hy * b.h / 2 }, s0:items[0].s0, k:b.k || 1, bw:b.w / (b.k || 1),
-    fl:grp ? flowScale(items.map(q => q.o)) : null, fg:grp && b.gid || null }; // grupo com layout: o espaço (e o frame) escala junto
+    fl:grp ? flowScale(items.map(q => q.o)) : null, fg:grp && b.gid || null, tg:snapSetup().tg }; // grupo com layout: o espaço (e o frame) escala junto
   // frame do grupo com layout: os lados mudam o tamanho dele; os cantos escalam tudo junto (como antes)
   if (b.gid && (hx === 0 || hy === 0)) Object.assign(RT.drag, { how:'frame', gid:b.gid, B0:{ x0:b.x, y0:b.y, x1:b.x + b.w, y1:b.y + b.h } }); // alça do frame: muda o tamanho dele
   cv.setPointerCapture(ev.pointerId);
@@ -4415,8 +4415,26 @@ function marginCap(D, axis, ext, alt) {
 // puxa a alça: o lado oposto fica parado (Alt: o centro fica parado)
 function resizeTo(D, pt, ev) {
   const p = D.pad, { hx, hy, L } = D, alt = ev.altKey, q0 = D.items[0], span = alt ? 2 : 1;
-  const ex = pt.x - D.off.x - hx * p, ey = pt.y - D.off.y - hy * p; // onde a borda puxada está agora
   const A = alt ? D.C : D.A;
+  RT.guide = null;
+  if (D.tg && D.how !== 'frame' && !D.rotA && !ev.ctrlKey && !ev.metaKey) { // ímã: a borda puxada gruda no quadro, na margem e nas bordas/centros dos outros elementos (Ctrl desliga)
+    const thr = 7 * FW() / (cv.getBoundingClientRect().width || 1);
+    const near = (v, ax) => { let b = null; for (const t of D.tg) for (const tv of ax === 'x' ? [t.x, t.x + t.w / 2, t.x + t.w] : [t.y, t.y + t.h / 2, t.y + t.h]) { const d = tv - v; if (Math.abs(d) <= thr && (!b || Math.abs(d) < Math.abs(b.d))) b = { d, tv }; } return b; };
+    const ex0 = pt.x - D.off.x - hx * p, ey0 = pt.y - D.off.y - hy * p, uni = D.how === 'uni' && hx && hy;
+    let nx = hx ? near(ex0, 'x') : null, ny = hy ? near(ey0, 'y') : null;
+    if (uni && nx && ny) { if (Math.abs(nx.d) <= Math.abs(ny.d)) ny = null; else nx = null; } // canto: a escala é uma só, gruda no eixo mais perto
+    let dx = nx ? nx.d : 0, dy = ny ? ny.d : 0;
+    const vx = D.H0.x - A.x, vy = D.H0.y - A.y;
+    if (uni && nx && vx) dy = A.y + (ex0 + dx - A.x) * vy / vx - ey0;
+    else if (uni && ny && vy) dx = A.x + (ey0 + dy - A.y) * vx / vy - ex0;
+    if (nx || ny) {
+      pt = { x:pt.x + dx, y:pt.y + dy }; RT.guide = [];
+      const y0 = D.C.y - D.b0.h / 2, y1 = D.C.y + D.b0.h / 2, x0 = D.C.x - D.b0.w / 2, x1 = D.C.x + D.b0.w / 2;
+      if (nx) RT.guide.push({ c:uiA('sel', .9), x0:nx.tv, x1:nx.tv, y0:Math.min(y0, 0), y1:Math.max(y1, H()) });
+      if (ny) RT.guide.push({ c:uiA('sel', .9), y0:ny.tv, y1:ny.tv, x0:Math.min(x0, 0), x1:Math.max(x1, FW()) });
+    }
+  }
+  const ex = pt.x - D.off.x - hx * p, ey = pt.y - D.off.y - hy * p; // onde a borda puxada está agora
   if (D.how === 'frame') { flowResize(D, ex, ey, alt); return; }
   if (D.how === 'tw') { // caixa de largura fixa: o lado oposto fica parado (Alt: os dois lados)
     // não passa da margem: o limite é a distância do lado parado (ou do centro, com Alt) até a margem; só a largura total deixava a borda
