@@ -999,7 +999,7 @@ function mkBg(o = {}) {
 
 /* ------------ roteiros ------------ */
 const TEMPLATES = [
-  { id:'blank', ic:'+', name:'Do zero', desc:'Só o fundo. Você adiciona texto, imagem, logo e botão', dur:8, build:(B,F)=>[mkBg({mode:'mesh', motion:1, grain:.08})] },
+  { id:'blank', ic:'+', name:'Do zero', desc:'Só o fundo. Você adiciona texto, imagem, logo e botão', dur:8, build:(B,F)=>[mkComp('bg')] }, // o fundo do padrão (Componentes)
   { id:'marca-msg', ic:'LOGO', name:'Marca, mensagem e botão', desc:'O logo se desenha, depois entram a mensagem e o botão', dur:10, build:(B,F)=>[
     mkBg({mode:'mesh'}),
     mkLogo('logo',{y:.42,size:.36,start:.2,end:3.4,in:'draw',out:'blur',outDur:.5}),
@@ -1081,9 +1081,11 @@ function applyTemplate(tpl, keepContent = true) {
   RT.selected = layers.find(l => l.type !== 'bg')?.id || layers[0].id;
 }
 
-function newProject() {
-  S = { v:1, format:'4x5', duration:10, fps:30, loop:true, margin:{ on:true, top:64, right:64, bottom:64, left:64 }, brand:defaultBrand(), layers:[], template:null };
+// brand: a marca do arquivo novo (com os componentes); fundo, margem, formato e tempo saem do padrão dela (Componentes)
+function newProject(brand) {
+  S = { v:1, format:'4x5', duration:10, fps:30, loop:true, margin:{ on:true, top:64, right:64, bottom:64, left:64 }, brand:brand || defaultBrand(), layers:[], template:null };
   applyTemplate(TEMPLATES.find(t => t.id === 'blank'), false);
+  compNewFile();
 }
 
 /* ============================================================
@@ -5129,7 +5131,7 @@ async function newFile(project) {
     if (last) try { const st = JSON.parse(await DB.get('file:' + last.id)); if (st && st.brand) brand = st.brand; } catch (e) {}
   }
   if (saveT) await flushSave();
-  newProject(); if (brand) S.brand = brand;
+  newProject(brand);
   let n = 1; while (list.some(f => f.name === (n === 1 ? 'Sem título' : `Sem título ${n}`))) n++;
   await openState(S, newFileId(), n === 1 ? 'Sem título' : `Sem título ${n}`, project);
   await flushSave(); closeFiles(); toast('Arquivo novo criado' + (project ? ` em "${(await projGet(project) || {}).name || 'projeto'}"` : ''));
@@ -9391,7 +9393,7 @@ function fxFields(L) {
 /* ------------ adicionar: câmera, transição, vídeo e preço de/por ------------ */
 function addCamera() {
   const st = RT.userSeek && T > .05 ? Math.min(T, S.duration - .5) : 0;
-  const L = addLayer(base('camera', 'camera', { name:'Câmera', cam:'push', in:'cut', out:'cut', inDur:0, outDur:0, intensity:.5, speed:1 }), { start:st });
+  const L = addLayer(mkComp('camera'), { start:st });
   pause(); T = clamp(st + (S.duration - st) * .6, 0, S.duration); needs = true;
   return L;
 }
@@ -9404,9 +9406,9 @@ function autoCut() {
   return best;
 }
 function addFx() {
-  const d = FXS.bars.dur, mid = RT.userSeek && T > .05 ? T : autoCut(), c = S.brand.colors;
+  const L0 = mkComp('fx'), d = (FXS[L0.fx] || FXS.bars).dur, mid = RT.userSeek && T > .05 ? T : autoCut();
   const st = +clamp(mid - d / 2, 0, Math.max(0, S.duration - d)).toFixed(2);
-  const L = addLayer(base('fx', 'fx', { name:'Transição', fx:'bars', in:'cut', out:'cut', inDur:0, outDur:0, intensity:.5, speed:1, c1:c[2], c2:c[1], c3:c[3] }), { start:st });
+  const L = addLayer(L0, { start:st });
   L.end = +(st + d).toFixed(2); changed({ layers:true });
   pause(); T = clamp(st + d / 2 - .12, 0, S.duration); needs = true;
   toast('No meio da transição a tela fica coberta: é ali que o conteúdo troca. A timeline gruda nesse ponto.', 6000);
