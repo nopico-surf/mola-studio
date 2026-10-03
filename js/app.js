@@ -6167,7 +6167,7 @@ async function renderStills(sl) {
   return out;
 }
 const fileSafe = s => String(s || '').replace(/[\\/:*?"<>|]+/g, '-').trim().slice(0, 40) || 'versao';
-// vários vídeos: numa pasta escolhida (Chrome/Edge) ou um download para cada
+// vários arquivos: um download para cada (dir = pasta, se um dia voltar a ter escolha)
 async function saveOut(dir, blob, fname) {
   if (dir) { try { const fh = await dir.getFileHandle(fname, { create:true }), wr = await fh.createWritable(); await wr.write(blob); await wr.close(); return; } catch (e) { console.warn(e); } }
   await saveFile(blob, fname); await sleep(400);
@@ -6177,11 +6177,7 @@ async function runExport(fmts, vars, pk) {
   const jobs = []; for (const v of vars) for (const f of fmts) jobs.push({ f, v });
   if (!jobs.length || !(pk.vid.length + pk.img.length)) return;
   const n = slides(), nv = jobs.length * pk.vid.length, ni = jobs.length * pk.img.length, many = nv + ni > 1;
-  let dir = null;
-  if (many && window.showDirectoryPicker) {
-    try { dir = await window.showDirectoryPicker({ id:'mola-export', mode:'readwrite' }); }
-    catch (e) { if (e && e.name === 'AbortError') return; dir = null; }
-  }
+  const dir = null; // um download para cada: o seletor de pasta do Chrome recusa a pasta Downloads ("contém arquivos do sistema")
   if (saveT) await flushSave();
   pause(); RT.exporting = true; cancelExport = false;
   const fmt0 = S.format, m = $('#modal'), quiet = !nv; // só imagens: sai direto, sem a janela de progresso
@@ -6252,7 +6248,7 @@ function exportVideo() {
   const upd = () => {
     const k = fm.size * (all ? rows.length + 1 : 1), p = pk(), nv = k * p.vid.length, ni = k * p.img.length, many = nv + ni > 1;
     const parts = [nv ? `${nv} vídeo${nv > 1 ? 's' : ''} MP4 ${hasAudio() ? 'com som' : 'sem som'}` : '', ni ? `${ni} imagem${ni > 1 ? 'ns' : ''} PNG` : ''].filter(Boolean);
-    summary.textContent = !parts.length ? 'Escolha pelo menos um slide.' : `${parts.join(' e ')}${n > 1 && many ? ' (um arquivo por slide)' : ''}.${many ? (window.showDirectoryPicker ? ' Você escolhe a pasta onde salvar.' : ' Cada um baixa separado.') : ''}`;
+    summary.textContent = !parts.length ? 'Escolha pelo menos um slide.' : `${parts.join(' e ')}${n > 1 && many ? ' (um arquivo por slide)' : ''}.${many ? ' Cada um baixa separado.' : ''}`;
     go.disabled = !parts.length;
     go.textContent = nv && ni ? `Exportar ${nv + ni} arquivos` : nv ? (nv > 1 ? `Exportar ${nv} vídeos` : 'Exportar MP4') : ni > 1 ? `Exportar ${ni} imagens` : 'Exportar PNG';
   };
@@ -6320,12 +6316,8 @@ async function saveFramePng(mode) {
   const sel = mode === 'frame' ? [] : pickedLayers().filter(l => l.visible);
   if (sel.length) return saveSelectionPng(sel);
   const n = slides();
-  // carrossel: uma imagem por slide (escolhe a pasta antes de desenhar, enquanto o clique ainda vale)
-  let dir = null;
-  if (n > 1 && window.showDirectoryPicker) {
-    try { dir = await window.showDirectoryPicker({ id:'mola-export', mode:'readwrite' }); }
-    catch (e) { if (e && e.name === 'AbortError') return; dir = null; }
-  }
+  // carrossel: uma imagem por slide, cada uma um download (o Chrome não deixa escolher a pasta Downloads no seletor de pasta)
+  const dir = null;
   await document.fonts.ready; await seekVideos(T);
   const c = document.createElement('canvas'); c.width = FW(); c.height = H();
   renderFrame(c.getContext('2d'), T, 1, true); needs = true;
