@@ -4060,14 +4060,27 @@ function heroTime() {
 /* ------------ arrastar no palco ------------ */
 function stagePt(ev) { const r = cv.getBoundingClientRect(); return { x:(ev.clientX - r.left) / r.width * FW(), y:(ev.clientY - r.top) / r.height * H() }; }
 // carrossel: o último slide clicado no palco vira o atual (é onde entra o que for adicionado)
+// clicar em "Slide N" (acima do quadro) escolhe tudo que está nele; com Shift soma ou tira outro slide, então o que for mudado vale para todos os escolhidos
+function selectSlides(list) {
+  const set = new Set(list), ls = S.layers.filter(l => l.type !== 'bg' && !NOBOX(l) && l.visible && !l.locked && set.has(slideAt(posOf(l).x * W())));
+  RT.slidePicks = set; if (!ls.length) { toast('Nenhum elemento nesse slide.'); return; }
+  RT.picks = new Set(ls.map(l => l.id)); RT.selected = ls[ls.length - 1].id; RT.itemPicks = RT.picks;
+  renderLayers(); renderProps(); needs = true;
+}
+function selectAllSlides() { selectSlides([...Array(slides()).keys()]); }
 $('#stageBox').addEventListener('pointerdown', ev => {
   if (slides() < 2) return;
   if (RT.slidePick != null) { RT.slidePick = null; needs = true; }
   // nome acima do slide: um clique seleciona o slide, dois renomeiam (como o nome do frame no Figma)
+  // Shift + clique escolhe tudo que está no slide (e soma/tira outros slides): o que for mudado vale para todos os escolhidos
   const ls = !RT.hand && ev.button === 0 && !RT.pen ? slideLabelAt(ev) : -1;
   if (ls >= 0) {
     ev.stopImmediatePropagation(); ev.preventDefault();
-    pickSlide(ls);
+    if (ev.shiftKey) {
+      const cur = new Set(RT.slidePicks || []);
+      cur.has(ls) ? cur.delete(ls) : cur.add(ls); if (!cur.size) cur.add(ls);
+      RT.slide = ls; selectSlides([...cur]);
+    } else { RT.slidePicks = null; pickSlide(ls); }
     return;
   }
   const p = stagePt(ev); if (p.x < 0 || p.x > FW() || p.y < 0 || p.y > H()) return;
@@ -5323,7 +5336,7 @@ async function openState(st, id, name, project = FILES.project) {
   FILES.id = id; FILES.name = name; FILES.project = project || null; showFileName(); showProject();
   DB.set('currentId', id);
   undoStack.length = 0; redoStack.length = 0; redoBase = null; syncHist();
-  S = st; RT.layout.clear(); RT.slide = 0;
+  S = st; RT.layout.clear(); RT.slide = 0; RT.slidePicks = null;
   RT.selected = S.layers.find(l => l.type === 'logo')?.id || S.layers.find(l => l.type !== 'bg')?.id || S.layers[0]?.id;
   renderAll(); fitStage();
   await refreshLogo(); ensureFonts();
@@ -9124,7 +9137,7 @@ document.addEventListener('keydown', e => {
     else if (k === 'y') { e.preventDefault(); redo(); }
     else if (k === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); }
     else if (k === 'd') { e.preventDefault(); const L = selL(); if (L && L.type !== 'bg') duplicateLayer(L); }
-    else if (k === 'a') { e.preventDefault(); selectAll(); }
+    else if (k === 'a') { e.preventDefault(); if (e.shiftKey && slides() > 1) selectAllSlides(); else selectAll(); }
     else if (k === 'h' && e.shiftKey) { e.preventDefault(); toggleVisible(); }
     else if (k === 'l' && e.shiftKey) { e.preventDefault(); toggleLock(); }
     else if (k === 'e' && e.shiftKey) { e.preventDefault(); exportVideo(); }
@@ -9168,7 +9181,7 @@ const KEYS = [
   ['Zoom e painéis', [['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco'], ['Ctrl + \\', 'Esconde ou mostra todos os painéis']]],
   ['Caneta e pontos', [['P', 'Caneta (modos Caneta, Curvas e Mão livre no topo do palco)'], ['Shift + P', 'Caneta à mão livre'], ['Clique duplo na forma', 'Edita os pontos (qualquer forma vira vetor)'], ['Arrastar a linha', 'Curva o trecho (na edição de pontos)'], ['Clique duplo no ponto', 'Curva / canto']]],
   ['Editar', [['Ctrl + Z', 'Desfazer'], ['Ctrl + Shift + Z', 'Refazer'], ['Ctrl + C / X / V', 'Copiar, recortar, colar (vale entre arquivos)'], ['Ctrl + D', 'Duplicar'], ['Delete', 'Apagar'], ['Ctrl + A', 'Selecionar tudo'], ['Esc', 'Tirar a seleção / sair do texto'], ['/', 'Buscar animação']]],
-  ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Alt + Shift + U S I E', 'Pathfinder: unir, subtrair, interseção, excluir (formas)'], ['Ctrl + E', 'Pathfinder: achatar as formas em um vetor'], ['Ctrl + Shift + O', 'Converter em vetor: texto em curvas e contorno em forma'], ['Shift + A', 'Layout automático (sem nada selecionado: o quadro todo)'], ['Arrastar o espaço rosa', 'Muda o espaço do layout'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear']]],
+  ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Alt + Shift + U S I E', 'Pathfinder: unir, subtrair, interseção, excluir (formas)'], ['Ctrl + E', 'Pathfinder: achatar as formas em um vetor'], ['Ctrl + Shift + O', 'Converter em vetor: texto em curvas e contorno em forma'], ['Shift + A', 'Layout automático (sem nada selecionado: o quadro todo)'], ['Arrastar o espaço rosa', 'Muda o espaço do layout'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear'], ['Clique em "Slide N"', 'Escolhe tudo do slide (Shift soma outros slides; o que mudar vale para todos)'], ['Ctrl + Shift + A', 'Escolhe tudo de todos os slides']]],
   ['Arquivo', [['Ctrl + S', 'Salvar agora (já salva sozinho)'], ['Ctrl + Shift + S', 'Salvar cópia'], ['Ctrl + Shift + E', 'Exportar (MP4, ou PNG com Duração 0)'], ['Exportar PNG / SVG', 'No transporte. Com algo selecionado salva só a seleção; sem seleção, o quadro da agulha (SVG parado, com o texto em curvas)'], ['Ctrl + V', 'Colar imagem ou SVG'], ['?', 'Este painel']]],
 ];
 function showKeys(on) {
