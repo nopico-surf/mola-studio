@@ -26,8 +26,24 @@ function h(tag, attrs = {}, kids = []) {
     else e.setAttribute(k, v === true ? '' : v);
   }
   for (const c of [].concat(kids)) if (c != null) e.append(c);
+  if (tag === 'input' && attrs.type === 'range') rangeFill(e);
   return e;
 }
+// Slider com zero no meio (min < 0 < max): o preenchimento sai do zero para o lado em que a bolinha está (como no Figma),
+// em vez de ficar preso na esquerda. `.bi` + `--p` (bolinha) e `--z` (zero), 0..1; o CSS desenha. Os outros sliders seguem como eram.
+function rangeFill(inp) {
+  const min = parseFloat(inp.min), max = parseFloat(inp.max), bi = min < 0 && max > 0;
+  inp.classList.toggle('bi', bi);
+  if (!bi) return;
+  inp.style.setProperty('--p', ((parseFloat(inp.value) - min) / (max - min)).toFixed(4));
+  inp.style.setProperty('--z', (-min / (max - min)).toFixed(4));
+}
+// `inp.value = x` em código também atualiza o preenchimento (não dispara `input`)
+(() => {
+  const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  Object.defineProperty(HTMLInputElement.prototype, 'value', { ...d, set(v) { d.set.call(this, v); if (this.type === 'range') rangeFill(this); } });
+  document.addEventListener('input', e => { if (e.target.type === 'range') rangeFill(e.target); }, true);
+})();
 // cor com opacidade = "#rrggbbaa" (o canvas e o CSS já entendem); opaca segue "#rrggbb"
 function colA(c) { const x = String(c || '').replace('#', ''); return x.length === 8 ? parseInt(x.slice(6), 16) / 255 : 1; }
 function withA(c, a) {

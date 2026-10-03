@@ -611,6 +611,9 @@ input[type=range]{-webkit-appearance:none;appearance:none;background:transparent
 /* slider: trilha fina, bolinha pequena com anel claro; o preenchimento é a borda-imagem da bolinha esticada para a esquerda */
 input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:var(--raised-2)}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:6px;height:6px;border:0;border-radius:50%;background:transparent;outline:3px solid var(--fg);border-image:linear-gradient(var(--muted),var(--muted)) 0 fill / 0 / 0 0 0 100vw}
+/* slider com zero no meio (.bi, ver rangeFill): o preenchimento vai do zero até a bolinha, para o lado que ela está; o centro da bolinha anda de 3px a 100% - 3px da trilha */
+input[type=range].bi::-webkit-slider-thumb{border-image:none}
+input[type=range].bi::-webkit-slider-runnable-track{background:linear-gradient(to right,transparent calc(3px + min(var(--p),var(--z))*(100% - 6px)),var(--muted) 0,var(--muted) calc(3px + max(var(--p),var(--z))*(100% - 6px)),transparent 0),var(--raised-2)}
 input[type=range]:disabled{opacity:.5}
 ::placeholder{color:color-mix(in srgb,var(--muted) 55%,var(--faint));opacity:1}
 /* caixa de marcar: marcada = fundo do acento com o visto escuro (--accent-ink), para ler de longe; desmarcada = contorno visível */
