@@ -2820,7 +2820,7 @@ void main() {
 const ADJC = new Map(); // id da camada → { key, cv }
 function adjImg(L, img) {
   if (!img || !adjOn(L)) return img;
-  const vid = img.tagName === 'VIDEO';
+  const vid = img.tagName === 'VIDEO' || img._vid; // _vid = quadro do vídeo copiado na exportação
   if (vid && img.readyState < 2) return img;
   const iw = img.naturalWidth, ih = img.naturalHeight; if (!iw || !ih) return img;
   const fit = !masked(L);
@@ -2868,7 +2868,7 @@ const IMGC = new WeakMap(), IMG_KEEP = 4, IMG_MAX = 3e7;
 let IMG_PX = 0;
 const IMG_ALL = new Set(); // { img, k, c } de todas as fotos, para o teto de memória
 function imgFor(ctx, img, dw, dh, fx, fy, exact) {
-  if (!img || img.tagName === 'VIDEO') return null;
+  if (!img || img.tagName === 'VIDEO' || img._vid) return null; // _vid: quadro do vídeo copiado na exportação (muda a cada quadro, não guarda)
   const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height; if (!iw || !ih) return null;
   let lv = 0;
   if (!exact && iw * ih > 1.5e6) {
@@ -6426,10 +6426,12 @@ function videoEl(L) {
     Object.defineProperty(el, 'naturalHeight', { get:() => el.videoHeight });
     v = { el, ok:false, media:L.video }; VIDS.set(L.id, v);
     el.addEventListener('loadeddata', () => { v.ok = true; needs = true; });
-    el.addEventListener('seeked', () => { needs = true; });
+    // quanto a busca leva (segundos): tocando, a busca mira esse tanto à frente para não chegar atrasada
+    el.addEventListener('seeking', () => { v.s0 = performance.now(); v.mt = null; v.gOk = false; });
+    el.addEventListener('seeked', () => { if (v.s0) v.lag = clamp(.6 * (v.lag ?? .3) + .4 * (performance.now() - v.s0) / 1000, .05, 3); v.s0 = 0; needs = true; });
     mediaUrl(L.video).then(u => { if (u) el.src = u; else v.missing = true; });
   }
-  return v.ok ? v.el : null;
+  return v.ok ? (RT.exporting && v.gOk ? v.grab : v.el) : null; // exportando: o quadro copiado por seekVideos
 }
 // camada que toca vídeo agora: a de imagem com vídeo, ou fundo/forma com preenchimento "Vídeo"
 const vidOn = L => !!L.video && (L.type === 'image' || (L.type === 'shape' || L.type === 'bg') && L.mode === 'video');
@@ -6438,9 +6440,11 @@ function vidCut(L, el) {
   const d = (el && el.duration) || L.vdur || 1, a = clamp(L.vIn || 0, 0, Math.max(0, d - .1));
   return { a, b:clamp(L.vOut ?? d, a + .1, d), d };
 }
+// + VID_EPS: o tempo exato do quadro às vezes cai uns décimos de ms antes dele (WebM guarda em ms) e mostrava o anterior
+const VID_EPS = 1 / 240;
 function vidTime(L, t, el) {
   const { a, b } = vidCut(L, el), len = b - a, vt = Math.max(0, t - L.start);
-  return a + (vt < len - .02 ? vt : vt % len);
+  return a + (vt < len - .02 ? vt : vt % len) + VID_EPS;
 }
 // a camada dura o trecho (como um clipe num editor de vídeo): o fim da barra acompanha o corte
 function vidFitEnd(o) {
@@ -6454,33 +6458,97 @@ function vidTrim(o, v, mode) {
   if (mode === 'l') { const a = clamp(v.a + o.start - v.s, 0, v.b - .1); if (a > 1e-3) o.vIn = +a.toFixed(3); else delete o.vIn; }
   else if (mode === 'r' && v.e - v.s <= v.b - v.a + .05) { const b = v.a + (o.end ?? S.duration) - o.start; if (b < v.d - 1e-3) o.vOut = +b.toFixed(3); else delete o.vOut; }
 }
-// prévia: toca junto quando o palco toca; pausado, fica no quadro da agulha
+// prévia: toca junto quando o palco toca; pausado, fica no quadro da agulha.
+// Buscar no meio do vídeo (corte) é lento: o navegador decodifica desde o quadro-chave anterior. Por isso nunca se busca
+// de novo antes de a busca anterior terminar (buscar a cada 0,25 s de atraso virava uma cascata e o vídeo congelava),
+// diferença pequena se acerta na velocidade, e fora da tela o vídeo já espera parado no começo do trecho.
+const vidRate = (el, r) => { if (Math.abs(el.playbackRate - r) > .01) el.playbackRate = r; };
 function syncVideos() {
   for (const [id, v] of VIDS) {
     const L = S.layers.find(l => l.id === id);
     if (!L || !vidOn(L) || L.video !== v.media) { v.el.pause(); v.el.removeAttribute('src'); v.el.load(); VIDS.delete(id); continue; }
-    const el = v.el; if (!v.ok) continue;
-    if (!L.visible || !phase(L, T) || RT.exporting) { if (!el.paused) el.pause(); continue; }
+    const el = v.el; if (!v.ok || v.step) continue; // v.step: a exportação está tocando até o quadro (vidStep)
+    if (!RT.exporting) v.gOk = false;
+    if (!L.visible || RT.exporting) { if (!el.paused) el.pause(); continue; }
+    if (!phase(L, T)) {
+      if (!el.paused) el.pause(); vidRate(el, 1);
+      const a = vidCut(L, el).a; if (!el.seeking && Math.abs(el.currentTime - a) > .02) el.currentTime = a;
+      continue;
+    }
     const vt = vidTime(L, T, el);
     if (playing) {
+      if (el.seeking) continue;
+      const d = vt - el.currentTime;
+      // longe (ou passou do fim do corte, antes de a conta dar a volta): busca à frente; perto: acelera ou freia
+      if (Math.abs(d) > 1 || el.currentTime > vidCut(L, el).b + .02) { vidRate(el, 1); el.currentTime = vidTime(L, T + (v.lag ?? .3), el); }
+      else vidRate(el, Math.abs(d) < .03 ? 1 : clamp(1 + d * 2, .5, 2));
       if (el.paused) el.play().catch(() => {});
-      // tocando sozinho o <video> passaria do fim do corte antes de a conta dar a volta
-      if (Math.abs(el.currentTime - vt) > .25 || el.currentTime > vidCut(L, el).b + .02) el.currentTime = vt;
     } else {
-      if (!el.paused) el.pause();
+      if (!el.paused) el.pause(); vidRate(el, 1);
       if (Math.abs(el.currentTime - vt) > .02 && !el.seeking) el.currentTime = vt;
     }
   }
 }
-// exportação e PNG: cada vídeo exatamente no quadro t
+// exportação e PNG: cada vídeo exatamente no quadro t.
+// Buscar quadro a quadro decodifica desde o quadro-chave a cada vez (com corte, no meio do vídeo, ficava lento e,
+// passando do limite de espera, saía o quadro velho). Por isso, exportando e com o alvo logo à frente, o vídeo toca
+// (velocidade 1; mais rápido pula quadros) até o quadro que cobre o alvo; o quadro é copiado no próprio
+// requestVideoFrameCallback (v.grab), porque depois da pausa o vídeo pode já mostrar o seguinte, e o desenho usa a cópia
+// (videoEl). Se pular o quadro, cai na busca exata. Mesmos pixels da busca, medido. v.mt/v.fd = último quadro visto e duração.
+const vidSeek = el => new Promise(res => { const fin = () => { clearTimeout(k); el.removeEventListener('seeked', fin); res(); }; el.addEventListener('seeked', fin); const k = setTimeout(fin, 20000); });
+// at = tempo pedido, ft = início do quadro copiado (null = não se sabe; só vale para o mesmo tempo)
+function vidGrab(v, at, ft) {
+  const el = v.el; let c = v.grab;
+  if (!c) {
+    c = v.grab = document.createElement('canvas'); c._vid = true;
+    Object.defineProperty(c, 'naturalWidth', { get:() => c.width });
+    Object.defineProperty(c, 'naturalHeight', { get:() => c.height });
+  }
+  if (c.width !== el.videoWidth || c.height !== el.videoHeight) { c.width = el.videoWidth; c.height = el.videoHeight; }
+  c.getContext('2d').drawImage(el, 0, 0);
+  c.currentTime = at; v.gAt = at; v.gT = ft; v.gOk = true;
+}
+function vidStep(v, tg) {
+  const el = v.el;
+  return new Promise(res => {
+    let done = false;
+    const end = ok => { if (done) return; done = true; v.step = false; clearTimeout(k); el.pause(); res(ok); };
+    const k = setTimeout(() => end(false), 2000);
+    const f = (now, m) => {
+      if (done) return;
+      // duração do quadro = menor distância entre quadros seguidos (presentedFrames andou 1: o callback não perdeu
+      // nenhum), só depois de aparecer duas vezes; grande demais faria aceitar o quadro anterior ao alvo
+      if (v.mt != null && m.mediaTime > v.mt && m.presentedFrames - v.pf === 1) {
+        const d = m.mediaTime - v.mt;
+        if (!v.fd0 || d < v.fd0 - .0015) { v.fd0 = d; v.fdN = 1; } else if (d < v.fd0 + .0015) { v.fd0 = Math.min(v.fd0, d); v.fdN++; }
+        v.fd = v.fdN >= 2 ? v.fd0 : 0;
+      }
+      v.mt = m.mediaTime; v.pf = m.presentedFrames;
+      if (m.mediaTime > tg + 1e-4) end(false); // passou do quadro do alvo
+      // sem saber a duração do quadro, só aceita o que começa logo antes do alvo
+      else if (m.mediaTime + (v.fd || VID_EPS) > tg) { vidGrab(v, tg, m.mediaTime); end(true); }
+      else el.requestVideoFrameCallback(f);
+    };
+    v.step = true; el.requestVideoFrameCallback(f); vidRate(el, 1); el.play().catch(() => end(false));
+  });
+}
 async function seekVideos(t) {
   const jobs = [];
   for (const L of S.layers) {
     if (!vidOn(L) || !L.visible || !phase(L, t)) continue;
     const v = VIDS.get(L.id); if (!v || !v.ok) continue;
     const el = v.el; if (!el.paused) el.pause();
-    const vt = vidTime(L, t, el); if (Math.abs(el.currentTime - vt) < .0005 && !el.seeking) continue;
-    jobs.push(new Promise(res => { let ok = false; const fin = () => { if (ok) return; ok = true; el.removeEventListener('seeked', fin); res(); }; el.addEventListener('seeked', fin); el.currentTime = vt; setTimeout(fin, 2500); }));
+    if (el.seeking) await vidSeek(el);
+    const vt = vidTime(L, t, el), cur = el.currentTime, same = Math.abs(cur - vt) < .0005;
+    if (!RT.exporting) { if (!same) jobs.push((async () => { const w = vidSeek(el); el.currentTime = vt; await w; })()); continue; }
+    // a cópia já é deste quadro (vídeo com menos quadros por segundo que o projeto repete o quadro)
+    if (v.gOk && (Math.abs(v.gAt - vt) < .0005 || (v.gT != null && v.fd && vt >= v.gT && vt < v.gT + v.fd - 1e-4))) continue;
+    jobs.push((async () => {
+      // aba escondida não mostra quadros: só a busca funciona
+      if (!same && !document.hidden && el.requestVideoFrameCallback && vt > cur && vt - cur < .6 && await vidStep(v, vt)) return;
+      if (!same) { const w = vidSeek(el); el.currentTime = vt; await w; }
+      vidGrab(v, vt, null);
+    })());
   }
   await Promise.all(jobs);
 }
