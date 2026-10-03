@@ -145,7 +145,7 @@ function openComps(id = 'title') {
   let cur = id, prevT = 0, prevL = null;
   const list = h('div', { class:'comp-nav', role:'listbox', 'aria-label':'Componentes' });
   const body = h('div', { class:'comp-body' });
-  const pv = h('canvas', { class:'comp-pv', width:640, height:300 });
+  const pv = h('canvas', { class:'comp-pv', width:1280, height:600 });
   const pvBox = h('div', { class:'comp-pvbox' }, [pv, h('button', { class:'btn small ghost comp-play', text:'▶ Ver entrada', title:'Toca a entrada uma vez', onclick:() => playPrev() })]);
   const close = () => { cancelAnimationFrame(prevRaf); closePicker(); document.removeEventListener('keydown', onKey); ov.remove(); COMPWIN = null; renderComps(); renderAdds(); needs = true; };
   // Esc também quando o foco caiu fora da janela (os campos são refeitos a cada mudança)
@@ -167,7 +167,7 @@ function openComps(id = 'title') {
     x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.filter = 'none';
     x.fillStyle = S.brand.colors[0]; x.fillRect(0, 0, cw, ch);
     if (L.type === 'image') {
-      x.fillStyle = S.brand.colors[1]; x.globalAlpha = .5; x.font = '500 22px ' + getComputedStyle(document.body).fontFamily; x.textAlign = 'center';
+      x.fillStyle = S.brand.colors[1]; x.globalAlpha = .5; x.font = '500 40px ' + getComputedStyle(document.body).fontFamily; x.textAlign = 'center';
       x.fillText('A foto entra com essa animação e moldura', cw / 2, ch / 2); x.globalAlpha = 1;
       return;
     }
@@ -278,6 +278,9 @@ function openComps(id = 'title') {
       h('button', { class:'btn small', text:same.length ? `Aplicar nos ${same.length} deste arquivo` : 'Aplicar neste arquivo', disabled:!same.length || null,
         title:'Passa o padrão para os elementos deste tipo que já estão no arquivo (o texto, a posição e o tempo ficam). Ctrl+Z desfaz',
         onclick:() => { pushUndo(); compApply(same, cur); changed({ props:true, layers:true }); toast(`Padrão aplicado em ${same.length} elemento${same.length > 1 ? 's' : ''}`, 5000, UNDO_ACT); } }),
+      h('button', { class:'btn small', text:'Aplicar no projeto', disabled:!FILES.project || null,
+        title:FILES.project ? 'Passa o padrão para os elementos deste tipo em todos os arquivos do projeto (texto, posição e tempo ficam)' : 'Este arquivo não está num projeto',
+        onclick:() => compApplyProject(cur) }),
       h('button', { class:'btn small ghost', text:'Voltar ao de fábrica', disabled:!compCustom(cur) || null,
         onclick:() => { pushUndo(); delete compsOf()[cur]; autosave(); draw(); refresh(); } }),
     ]));
@@ -294,4 +297,22 @@ function openComps(id = 'title') {
   document.body.append(ov);
   draw();
   list.querySelector('[aria-selected="true"]')?.focus();
+}
+
+// o padrão em todos os arquivos do projeto (o aberto com desfazer; os outros são regravados)
+async function compApplyProject(id) {
+  if (!FILES.project) return;
+  const mine = S.layers.filter(l => compKindOf(l) === id);
+  if (mine.length) { pushUndo(); compApply(mine, id); changed({ props:true, layers:true }); }
+  await flushSave();
+  const list = ((await DB.get('files')) || []).filter(f => f.project === FILES.project && f.id !== FILES.id);
+  let n = mine.length, files = mine.length ? 1 : 0;
+  for (const f of list) {
+    let st; try { st = JSON.parse(await DB.get('file:' + f.id)); } catch (e) { continue; }
+    if (!st || !st.layers) continue;
+    const ls = st.layers.filter(l => compKindOf(l) === id); if (!ls.length) continue;
+    st.brand = S.brand; compApply(ls, id); n += ls.length; files++;
+    await DB.set('file:' + f.id, JSON.stringify(st));
+  }
+  toast(n ? `Padrão aplicado em ${n} elemento${n > 1 ? 's' : ''}, em ${files} arquivo${files > 1 ? 's' : ''} do projeto` : 'Nenhum elemento desse tipo no projeto');
 }

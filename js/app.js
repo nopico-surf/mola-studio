@@ -5073,6 +5073,7 @@ async function flushSave() {
   if (!FILES.id) return;
   saving = true;
   const id = FILES.id, ok = await DB.set('file:' + id, JSON.stringify(S));
+  if (FILES.project) await DB.set('pbrand:' + FILES.project, JSON.stringify(S.brand)); // a marca é do projeto: vale para todos os arquivos dele
   const list = (await DB.get('files')) || [];
   let rec = list.find(f => f.id === id);
   if (!rec) { rec = { id, name:FILES.name, createdAt:Date.now() }; if (FILES.project) rec.project = FILES.project; list.unshift(rec); }
@@ -5097,6 +5098,7 @@ function showFileName() { const el = $('#fileName'); if (el && document.activeEl
 async function openState(st, id, name, project = FILES.project) {
   if (saveT) await flushSave();
   if (!st || !st.layers || !st.brand) { toast('Arquivo de projeto inválido'); return false; }
+  if (project) try { const pb = JSON.parse(await DB.get('pbrand:' + project) || 'null'); if (pb) st.brand = pb; } catch (e) {} // marca do projeto
   await internImages(st); // foto em dataURL (arquivo antigo ou .json importado) vai para fora do JSON
   fixTornGroups(st);
   FILES.id = id; FILES.name = name; FILES.project = project || null; showFileName(); showProject();
@@ -5209,7 +5211,13 @@ async function moveFile(id, project) {
   if ((rec.project || null) === (project || null)) return;
   if (project) rec.project = project; else delete rec.project;
   await DB.set('files', list);
-  if (id === FILES.id) { FILES.project = project || null; showProject(); }
+  if (id === FILES.id) {
+    FILES.project = project || null; showProject();
+    // entrou num projeto: passa a usar a marca dele (projeto sem marca ainda fica com a deste arquivo)
+    let pb = null; if (project) try { pb = JSON.parse(await DB.get('pbrand:' + project) || 'null'); } catch (e) {}
+    if (pb) { pushUndo(); S.brand = pb; RT.layout.clear(); renderBrand(); renderProps(); await refreshLogo(); ensureFonts(); }
+    changed();
+  }
   toast(`"${rec.name}" foi para ${project ? `"${PROJ_NAMES.get(project)}"` : 'Rascunhos'}`);
   if (!$('#files').hidden) renderFiles();
 }
@@ -5255,11 +5263,13 @@ function renderSide(list, ps) {
   const row = (pid, name, o = {}) => {
     const el = h('div', { class:'fproj' + (o.top ? ' top' : ''), role:'button', tabindex:'0', 'data-id':pid, 'aria-current':String(FVIEW === pid),
       title:o.top ? null : 'Clique duas vezes para renomear. Arraste um arquivo para cá para mover',
-      onclick:() => { FVIEW = pid; renderFiles(); }, onkeydown:e => { if (e.key === 'Enter' && e.target === el) el.click(); } }, [
+      onclick:e => { if (e.detail > 1 || FVIEW === pid) return; FVIEW = pid; renderFiles(); }, onkeydown:e => { if (e.key === 'Enter' && e.target === el) el.click(); } }, [
       h('span', { class:'fp-ic', html:o.icon || ICON_FOLDER }), h('span', { class:'fp-nm', text:name }), h('small', { text:String(count(pid)) }),
+      o.top ? null : h('button', { class:'icon-btn fp-del', title:'Renomear projeto', 'aria-label':`Renomear projeto ${name}`, html:ICON_PEN,
+        onclick:e => { e.stopPropagation(); if (FVIEW !== pid) { FVIEW = pid; renderFiles().then(() => renameProjInline(pid)); } else renameProjInline(pid); } }),
       o.top ? null : h('button', { class:'icon-btn fp-del', title:'Apagar projeto (os arquivos vão para Rascunhos)', 'aria-label':`Apagar projeto ${name}`, html:ICONS.trash,
         onclick:e => { e.stopPropagation(); projDelete(pid); } })]);
-    if (!o.top) el.addEventListener('dblclick', () => renameProjInline(pid));
+    if (!o.top) el.addEventListener('dblclick', e => { if (!e.target.closest('input')) renameProjInline(pid); });
     if (pid !== '*') {
       el.addEventListener('dragover', e => { if (!dragFileId) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; el.classList.add('drop-in'); });
       el.addEventListener('dragleave', () => el.classList.remove('drop-in'));
@@ -9598,7 +9608,8 @@ $('#varBtn').onclick = openVars;
   let saved = null;
   if (id) try { saved = JSON.parse(await DB.get('file:' + id)); } catch (e) {}
   const fresh = !(saved && saved.layers && saved.brand);
-  if (!fresh) { S = saved; FILES.id = id; FILES.name = list.find(f => f.id === id).name; FILES.project = list.find(f => f.id === id).project || null; }
+  if (!fresh) { const pj = list.find(f => f.id === id).project; if (pj) try { const pb = JSON.parse(await DB.get('pbrand:' + pj) || 'null'); if (pb) saved.brand = pb; } catch (e) {}
+    S = saved; FILES.id = id; FILES.name = list.find(f => f.id === id).name; FILES.project = list.find(f => f.id === id).project || null; }
   else { newProject(); FILES.id = newFileId(); FILES.name = 'Sem título'; }
   const interned = !fresh && await internImages(S);
   const torn = !fresh && fixTornGroups(S);
