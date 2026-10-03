@@ -196,7 +196,7 @@ function compMeta(id, p = compProps(id)) {
   if (t === 'file') return `${fmtLabel(p.format)} · ${String(p.duration).replace('.', ',')} s` + (p.slides > 1 ? ` · ${p.slides} slides` : '');
   if (t === 'fx') return (FXS[p.fx] || {}).label || '';
   if (t === 'camera') return (CAMS[p.cam] || {}).label || '';
-  if (t === 'logo') return `${Math.round(p.sizeA * 100)}% · ${Math.round(p.sizeS * 100)}%`;
+  if (t === 'logo') return `${Math.round(p.sizeA * W())} px · ${Math.round(p.sizeS * W())} px`;
   return '';
 }
 
@@ -401,13 +401,12 @@ function openComps(id = 'title') {
         rangeF(P, 'padX', 'Folga lateral', 10, 160, 1, px), rangeF(P, 'padY', 'Folga vertical', 6, 80, 1, px));
     } else if (d.type === 'shape') {
       put(selectF(P, 'kind', 'Forma', Object.entries(SHAPE_KINDS).filter(([k]) => k !== 'custom' || P.kind === 'custom')),
-        colorPick('c1', 'Cor 1'), colorPick('c2', 'Cor 2'), rangeF(P, 'size', 'Largura', .02, 1.6, .01, v => Math.round(v * 100) + '%'),
-        rangeF(P, 'mh', 'Altura', .02, 2.6, .01, v => Math.round(v * 100) + '%'), rangeF(P, 'radius', 'Cantos', 0, 600, 1, px));
+        colorPick('c1', 'Cor 1'), colorPick('c2', 'Cor 2'), pxF(P, 'size', 'Largura', .02, 1.6),
+        pxF(P, 'mh', 'Altura', .02, 2.6), rangeF(P, 'radius', 'Cantos', 0, 600, 1, px));
     } else if (d.type === 'image') {
-      put(rangeF(P, 'size', 'Largura', .1, 1.6, .01, v => Math.round(v * 100) + '%'), rangeF(P, 'radius', 'Cantos', 0, 600, 1, px));
+      put(pxF(P, 'size', 'Largura', .1, 1.6), rangeF(P, 'radius', 'Cantos', 0, 600, 1, px));
     } else if (d.type === 'logo') {
-      const pct = v => Math.round(v * 100) + '%';
-      put(rangeF(P, 'sizeA', 'Sozinho', .05, .95, .005, pct, { cap:3 }), rangeF(P, 'sizeS', 'Com outros', .03, .6, .005, pct, { cap:3 }),
+      put(pxF(P, 'sizeA', 'Sozinho', .05, .95, { cap:3 }), pxF(P, 'sizeS', 'Com outros', .03, .6, { cap:3 }),
         h('p', { class:'hint', text:'Largura do logo em % do quadro. "Sozinho" vale quando ele é o único elemento (fica grande, no meio); "Com outros", quando já tem algo no quadro (fica no topo).' }),
         colorPick('drawColor', 'Cor do traço'));
     } else if (d.type === 'bg') {

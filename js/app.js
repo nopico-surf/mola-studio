@@ -323,6 +323,10 @@ const stillSlides = () => { if (S.still || slides() < 2 || !S.sdur) return []; c
 const slideOfL = L => slides() < 2 ? 0 : clamp(Math.floor(L.__sx ?? (+L.x || 0)), 0, slides() - 1);
 const layerStill = L => !!L && !S.still && slides() > 1 && !!S.sdur && L.type !== 'bg' && !NOBOX(L) && slideStill(slideOfL(L));
 const stillNow = L => S.still || RT.stillPass || layerStill(L);
+/* nome do slide (pedido do usuário: clicar no nome acima do slide seleciona o slide, clique duplo renomeia). S.snames[i] = nome dado
+   (ausente = "Slide N"). Aparece acima do slide, na Duração do topo, na exportação (chips e nome do arquivo) e na timeline */
+const slideName = i => (S.snames && S.snames[i] && String(S.snames[i]).trim()) || `Slide ${i + 1}`;
+const slideFile = i => `-${String(i + 1).padStart(2, '0')}${S.snames && S.snames[i] && String(S.snames[i]).trim() ? '-' + fileSafe(S.snames[i]) : ''}`;
 // fim de quem vai "até o fim" num slide: a duração dele (imagem: o vídeo todo, o tempo não conta)
 const slideEnd = i => slideDur(i) || S.duration;
 // margem do slide em que fica px; sem margem, o próprio slide
@@ -3787,9 +3791,11 @@ function drawOverlays() {
   if (slides() > 1) { // número de cada slide, acima do quadro (o atual em destaque: é onde entra o que você adicionar)
     const px = 1 / OS * dpr, cur = curSlide(); ctx.save();
     ctx.font = `600 ${11 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
-    // com durações diferentes (ou imagens), cada um diz o que é: "Slide 2 · imagem", "Slide 1 · 6,0s"
-    const tag = s => !S.sdur || S.still ? '' : slideStill(s) ? ' · imagem' : ` · ${fmtSec(slideDur(s))}`;
-    for (let s = 0; s < slides(); s++) { ctx.fillStyle = s === cur ? uiC('sel') : 'rgba(255,255,255,.5)'; ctx.fillText(`Slide ${s + 1}${tag(s)}`, s * W() + 2 * px, -6 * px); }
+    // com durações diferentes (ou imagens), cada um diz o que é: "Slide 2 · imagem", "Slide 1 · 6,0s" (slideLabel)
+    for (let s = 0; s < slides(); s++) { ctx.fillStyle = s === cur ? uiC('sel') : 'rgba(255,255,255,.5)'; ctx.fillText(slideLabel(s), s * W() + 2 * px, -6 * px); }
+    // slide selecionado pelo nome: contorno da seleção em volta dele (some ao escolher um elemento)
+    const sl = selL(), sp = RT.slidePick;
+    if (sp != null && sp < slides() && (!sl || sl.type === 'bg')) { ctx.lineWidth = 2 * px; ctx.strokeStyle = uiC('sel'); ctx.strokeRect(sp * W(), 0, W(), H()); }
     ctx.restore();
   }
   const ub = selUnion();
@@ -3994,9 +4000,60 @@ function stagePt(ev) { const r = cv.getBoundingClientRect(); return { x:(ev.clie
 // carrossel: o último slide clicado no palco vira o atual (é onde entra o que for adicionado)
 $('#stageBox').addEventListener('pointerdown', ev => {
   if (slides() < 2) return;
+  if (RT.slidePick != null) { RT.slidePick = null; needs = true; }
+  // nome acima do slide: um clique seleciona o slide, dois renomeiam (como o nome do frame no Figma)
+  const ls = !RT.hand && ev.button === 0 && !RT.pen ? slideLabelAt(ev) : -1;
+  if (ls >= 0) {
+    ev.stopImmediatePropagation(); ev.preventDefault();
+    pickSlide(ls);
+    return;
+  }
   const p = stagePt(ev); if (p.x < 0 || p.x > FW() || p.y < 0 || p.y > H()) return;
   const s = slideAt(p.x); if (s !== RT.slide) { RT.slide = s; needs = true; }
 }, true);
+$('#stageBox').addEventListener('dblclick', ev => {
+  if (slides() < 2 || RT.pen) return;
+  const ls = slideLabelAt(ev); if (ls < 0) return;
+  ev.stopImmediatePropagation(); ev.preventDefault(); renameSlide(ls);
+}, true);
+// rótulo de cada slide no palco ("Capa · 6,0s"): o mesmo texto que o overlay desenha, 11 px, 6 px acima do quadro
+function slideLabel(s) { return slideName(s) + (!S.sdur || S.still ? '' : slideStill(s) ? ' · imagem' : ` · ${fmtSec(slideDur(s))}`); }
+let slideMeasure = null;
+function slideLabelAt(ev) {
+  const r = cv.getBoundingClientRect(); if (!r.height) return -1;
+  const k = H() / r.height, p = stagePt(ev); // k = unidades do vídeo por px da tela
+  if (p.y > -1 * k || p.y < -22 * k) return -1;
+  const s = Math.floor(p.x / W()); if (s < 0 || s >= slides()) return -1;
+  slideMeasure ||= document.createElement('canvas').getContext('2d');
+  slideMeasure.font = '600 11px Inter, system-ui, sans-serif';
+  const w = Math.max(40, slideMeasure.measureText(slideLabel(s)).width + 8);
+  return p.x - s * W() <= w * k ? s : -1;
+}
+// slide selecionado: sem elemento escolhido (fica o fundo), contorno verde no slide e a Duração do topo passa a ser a dele
+function pickSlide(s) {
+  if (RT.vec) vecExit();
+  selectBg(); RT.slide = s; RT.slidePick = s; updDur(true); needs = true;
+}
+function renameSlide(s) {
+  document.querySelector('.slide-nm')?.remove();
+  const r = cv.getBoundingClientRect(), k = H() / r.height, cur = S.snames && S.snames[s] ? String(S.snames[s]) : '';
+  const inp = h('input', { type:'text', class:'slide-nm', value:cur, placeholder:`Slide ${s + 1}`, maxlength:'40', 'aria-label':`Nome do slide ${s + 1}`, spellcheck:'false' });
+  inp.style.left = Math.max(4, r.left + s * W() / k - 6) + 'px'; inp.style.top = Math.max(4, r.top - 30) + 'px';
+  let done = false;
+  const end = ok => {
+    if (done) return; done = true; inp.remove();
+    const v = inp.value.trim(); if (!ok || v === cur) return;
+    pushUndo();
+    const a = (S.snames || []).slice(0, SLIDES_MAX); a[s] = v || null;
+    while (a.length && !a[a.length - 1]) a.pop();
+    if (a.length) S.snames = a.map(x => x || null); else delete S.snames;
+    updDur(true); needs = true; changed();
+  };
+  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') end(true); if (e.key === 'Escape') end(false); });
+  inp.addEventListener('blur', () => end(true));
+  ['pointerdown', 'click', 'dblclick'].forEach(n => inp.addEventListener(n, e => e.stopPropagation()));
+  document.body.append(inp); inp.focus(); inp.select();
+}
 // A câmera mexe no desenho (zoom, deslocamento, giro, paralaxe) e os grupos girados giram o conjunto por cima dela (`g`: do grupo mais de dentro
 // para o de fora, cada um com o pivô e o ângulo), então contornos e alças ficam no que se vê na tela: `camFwd` leva um ponto do espaço da camada
 // para a tela e `camInv` volta. As contas de arrastar e escalar continuam no espaço da camada (`_bounds`). `skip` = ids de quem se move junto:
@@ -4507,7 +4564,7 @@ $('#stageBox').addEventListener('pointerdown', e => {
 });
 $('#stageBox').addEventListener('pointermove', e => {
   if (RT.drag || RT.marq || e.target.closest('#cv') || e.target.closest('#stageHint')) return;
-  const hd = handleAt(stagePt(e)); $('#stageBox').style.cursor = hd ? (hd.rot ? ROT_CUR : HCUR[hd.k]) : '';
+  const hd = handleAt(stagePt(e)); $('#stageBox').style.cursor = hd ? (hd.rot ? ROT_CUR : HCUR[hd.k]) : slides() > 1 && slideLabelAt(e) >= 0 ? 'pointer' : '';
 });
 /* ------------ caneta (P) e edição de pontos do vetor ------------ */
 // A caneta desenha uma forma "Vetor" (kind 'custom'): o d continua sendo a verdade do desenho e `L.vec` guarda os pontos para editar,
@@ -5221,8 +5278,8 @@ async function projAll() { return (await DB.get('projects')) || []; }
 async function projGet(id) { return (await projAll()).find(p => p.id === id); }
 function showProject() {
   const b = $('#projBtn'); if (!b) return;
-  b.firstChild.textContent = FILES.project ? (PROJ_NAMES.get(FILES.project) || 'Projeto') : 'Rascunhos';
-  b.title = FILES.project ? 'Projeto deste arquivo. Clique para ver os arquivos do projeto ou mover' : 'Este arquivo não está em nenhum projeto. Clique para mover para um';
+  b.querySelector('span').textContent = FILES.project ? (PROJ_NAMES.get(FILES.project) || 'Projeto') : 'Rascunhos';
+  b.title = (FILES.project ? 'Arquivos e projetos. Este arquivo está neste projeto' : 'Arquivos e projetos. Este arquivo está em Rascunhos') + ': clique para ver os arquivos, criar um novo ou mover este';
 }
 const PROJ_NAMES = new Map(); // id → nome (para a barra de cima, sem esperar o banco)
 async function projSync() { const ps = await projAll(); PROJ_NAMES.clear(); ps.forEach(p => PROJ_NAMES.set(p.id, p.name)); showProject(); return ps; }
@@ -5282,13 +5339,15 @@ function moveMenu(anchor, fileId, cur) {
   m.style.left = Math.max(8, Math.min(r.left, innerWidth - mr.width - 8)) + 'px';
   m.style.top = (r.bottom + 4 + mr.height > innerHeight ? Math.max(8, r.top - mr.height - 4) : r.bottom + 4) + 'px';
 }
-// botão do projeto na barra de cima: ver os arquivos dele, mover este arquivo, criar um projeto
+// botão único de arquivos e projetos na barra de cima (pedido do usuário: "Arquivos" e o projeto eram dois botões):
+// mostra o projeto do arquivo aberto; o menu abre todos os arquivos, os do projeto, cria um arquivo e move este
 function projMenu() {
   const b = $('#projBtn');
   if (document.querySelector('.ctx.projmenu')) { closeMenu(); return; }
   moveMenu(b, FILES.id, FILES.project);
   const m = document.querySelector('.ctx'); m.classList.add('projmenu');
-  m.prepend(h('button', { onclick:() => { closeMenu(); openFiles(FILES.project || ''); } }, [h('span', { text:FILES.project ? 'Ver arquivos do projeto' : 'Ver rascunhos' })]),
+  m.prepend(h('button', { onclick:() => { closeMenu(); openFiles('*'); } }, [h('span', { text:'Todos os arquivos' })]),
+    h('button', { onclick:() => { closeMenu(); openFiles(FILES.project || ''); } }, [h('span', { text:FILES.project ? `Arquivos de "${PROJ_NAMES.get(FILES.project) || 'Projeto'}"` : 'Ver rascunhos' })]),
     h('button', { onclick:() => { closeMenu(); newFile(FILES.project); } }, [h('span', { text:'Novo arquivo aqui' })]), h('hr'));
 }
 function renameProjInline(id) {
@@ -5577,7 +5636,7 @@ async function runExport(fmts, vars, pk) {
     $('#mVideo').hidden = true; $('#mSave').hidden = true; $('#mBar').style.width = '0%'; $('#mClose').textContent = 'Cancelar';
   }
   const prog = p => { $('#mBar').style.width = (clamp(p) * 100).toFixed(1) + '%'; };
-  const num = s => n > 1 ? `-${String(s + 1).padStart(2, '0')}` : ''; // carrossel: nome-4x5-01.mp4, nome-4x5-02.png… (o número do slide)
+  const num = s => n > 1 ? slideFile(s) : ''; // carrossel: nome-4x5-01.mp4, nome-4x5-02-capa.png… (o número do slide e o nome, se tiver)
   const ds = [...new Set(pk.vid.map(slideDur))].sort((a, b) => a - b), durTxt = ds.length > 1 ? `${ds[0]}s a ${ds[ds.length - 1]}s` : `${ds[0]}s`;
   const done = []; let fail = false, failImg = false, last = null;
   try {
@@ -5652,7 +5711,7 @@ function exportVideo() {
     const same = list => list.length === ss.size && list.every(i => ss.has(i));
     const quick = chips([['all', `Todos (${n})`], ['vid', `Só os vídeos (${vidIds.length})`], ['img', `Só as imagens (${imgIds.length})`]],
       k => same(k === 'all' ? ids : k === 'vid' ? vidIds : imgIds), k => { ss.clear(); (k === 'all' ? ids : k === 'vid' ? vidIds : imgIds).forEach(i => ss.add(i)); }, () => each.draw());
-    const each = chips(ids.map(i => [i, `${i + 1} · ${isImg(i) ? 'Imagem' : `Vídeo ${fmtSec(slideDur(i))}`}`]), i => ss.has(i),
+    const each = chips(ids.map(i => [i, `${S.snames && S.snames[i] ? slideName(i) : i + 1} · ${isImg(i) ? 'Imagem' : `Vídeo ${fmtSec(slideDur(i))}`}`]), i => ss.has(i),
       i => { if (ss.has(i)) { if (ss.size > 1) ss.delete(i); } else ss.add(i); }, () => quick.draw());
     slideSec = [h('h3', { text:'Slides' }), vidIds.length && imgIds.length ? quick : null, each,
       h('p', { class:'hint', text:'Vídeo sai em MP4 e imagem em PNG. Para um slide virar imagem, escolha o slide e ponha a Duração em 0, no topo.' })];
@@ -5726,7 +5785,7 @@ async function saveFramePng(mode) {
     x.clearRect(0, 0, one.width, one.height); x.drawImage(c, s * W(), 0, W(), H(), 0, 0, W(), H());
     const blob = await new Promise(r => one.toBlob(r, 'image/png'));
     if (!blob) { toast('Não consegui gerar a imagem'); return; }
-    await saveOut(dir, blob, `${nm}-${String(s + 1).padStart(2, '0')}.png`);
+    await saveOut(dir, blob, `${nm}${slideFile(s)}.png`);
   }
   toast(dir ? `${n} imagens salvas na pasta "${dir.name}"` : `${n} imagens baixadas, uma por slide`);
 }
@@ -7368,7 +7427,7 @@ function renderTimeline() {
   scale.append(endH);
   for (const b of beatTimes()) scale.append(h('u', { class:'tl-beat', style:`left:${(b / d * 100).toFixed(3)}%` })); // batidas da música
   // carrossel: onde termina cada slide mais curto que a timeline (o arquivo dele para ali)
-  if (S.sdur && !S.still) for (let s = 0; s < slides(); s++) { const e = slideDur(s); if (e > 0 && e < d - .01) scale.append(h('s', { class:'tl-send', style:`left:${(e / d * 100).toFixed(3)}%`, title:`Fim do slide ${s + 1} (${fmtSec(e)})`, text:`S${s + 1}` })); }
+  if (S.sdur && !S.still) for (let s = 0; s < slides(); s++) { const e = slideDur(s); if (e > 0 && e < d - .01) scale.append(h('s', { class:'tl-send', style:`left:${(e / d * 100).toFixed(3)}%`, title:`Fim de ${slideName(s)} (${fmtSec(e)})`, text:`S${s + 1}` })); }
   ruler.append(scale); tl.append(ruler);
   if (S.audio) tl.append(audioRow());
   const els = S.layers.filter(L => L.type !== 'bg').reverse();
@@ -7779,10 +7838,9 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
   out.title = `Digite o valor${unit && unit !== 'pílula' ? ' em ' + unit : ''}. Setas ↑↓ ajustam, Shift vai de 10 em 10.`;
   return field(label, h('div', { class:'rng' }, [inp, out]), id);
 }
-// largura/altura guardadas em fração da largura do quadro; o painel mostra em % ou px (escolha vale para todos os campos, fora de `S`)
-let SZ_UNIT = (() => { try { return localStorage.getItem('mola-szunit') === 'px' ? 'px' : '%'; } catch (e) { return '%'; } })();
+// largura/altura guardadas em fração da largura do quadro; o painel mostra sempre em px do vídeo (pedido do usuário: tamanho em pixel, nada em %)
+const pxF = (L, k, label, min, max, opts = {}) => rangeF(L, k, label, min, max, 1 / W(), v => Math.round(v * W()) + 'px', { ...opts, scale:W(), dec:0 });
 function sizeF(L, k, label, min, max, step, opts = {}) {
-  const px = SZ_UNIT === 'px';
   // fora do formato principal a máscara tem tamanho próprio (fpos ww/hh, px do bloco) e escala k: o campo mostra e grava o que está na tela
   if (fmtOwn() && (k === 'mh' || (k === 'size' && (L.type === 'image' || L.type === 'shape'))) && L.type !== 'text') {
     const wd = k === 'size', own = () => { const G = blockGeom(L); return G ? { G, k:placeOf(L).k || 1 } : null; };
@@ -7790,12 +7848,7 @@ function sizeF(L, k, label, min, max, step, opts = {}) {
       get: () => { const o = own(); return o ? (wd ? geomNow(L).w : geomNow(L).h) * o.k / W() : L[k]; },
       put: v => { const o = own(); if (!o) { L[k] = v; return; } for (const q of peersOf(L)) { const g = blockGeom(q); if (g) setFmt(q, wd ? { ww:+(v * W() / o.k).toFixed(2) } : { hh:+(v * W() / o.k).toFixed(2) }); } RT.layout.clear(); } };
   }
-  const f = px ? rangeF(L, k, label, min, max, 1 / W(), v => Math.round(v * W()) + 'px', { ...opts, scale:W(), dec:0 })
-    : rangeF(L, k, label, min, max, step, v => Math.round(v * 100) + '%', opts);
-  f.classList.add('flowgap');
-  f.append(h('button', { type:'button', class:'btn small flow-auto', 'aria-pressed':String(px), text:'px', title:px ? 'Mostrar em % da largura do quadro' : 'Mostrar em pixels do vídeo',
-    onclick:() => { SZ_UNIT = px ? '%' : 'px'; try { localStorage.setItem('mola-szunit', SZ_UNIT); } catch (e) {} renderProps(); } }));
-  return f;
+  return pxF(L, k, label, min, max, opts);
 }
 // aceita "#1a2b3c", "1a2b3c", "abc", "#ABC", "#1a2b3c80", "rgb(1, 42, 28)", "rgba(1, 42, 28, .5)";
 // devolve "#rrggbb" (ou "#rrggbbaa" se vier com opacidade) ou null
@@ -8469,7 +8522,7 @@ function styleProps(L) {
       rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
       rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
       (() => { // largura: abraça o texto (quebra na largura máx.) ou fixa (a caixa tem essa largura; alça lateral no palco)
-        const f = rangeF(L, 'maxW', L.fixW ? 'Largura' : 'Largura máx.', .1, 1, .01, v => Math.round(v * 100) + '%', { layout:true });
+        const f = pxF(L, 'maxW', L.fixW ? 'Largura' : 'Largura máx.', .1, 1, { layout:true });
         f.classList.add('flowgap');
         f.append(h('button', { type:'button', class:'btn small flow-auto', 'aria-pressed':String(!L.fixW), text:'Abraçar', title:L.fixW ? 'Voltar a abraçar o texto (a caixa fica do tamanho da linha mais longa)' : 'Fixar a largura da caixa (ou puxe a lateral no palco)',
           onclick:() => { pushUndo(); const v = !L.fixW; for (const o of peersOf(L)) o.fixW = v || undefined; RT.layout.clear(); changed({ props:true }); } }));
@@ -8754,11 +8807,11 @@ function setDuration(v) {
 // campo Duração: no carrossel é a do slide atual (o do elemento escolhido, senão o último clicado)
 function updDur(force) {
   const el = $('#dur'), car = slides() > 1, si = curSlide();
-  const key = [car, si, S.still, S.duration, S.sdur ? S.sdur.join(',') : ''].join('|');
+  const key = [car, si, S.still, S.duration, S.sdur ? S.sdur.join(',') : '', S.snames ? S.snames.join('\u0001') : ''].join('|');
   if (!force && (RT.durKey === key || document.activeElement === el)) return;
   RT.durKey = key;
   el.value = car ? slideDur(si) : S.still ? 0 : S.duration;
-  $('#durL').textContent = car ? `Duração do slide ${si + 1}` : 'Duração';
+  $('#durL').textContent = car ? (S.snames && S.snames[si] ? `Duração · ${slideName(si)}` : `Duração do slide ${si + 1}`) : 'Duração';
   el.closest('label').title = car ? `Cada slide tem a sua duração. 0 = este slide é uma imagem (sai em PNG); os outros continuam como estão`
     : '0 = imagem estática: sem animação, sem timeline, exporta PNG';
 }
@@ -9289,7 +9342,6 @@ $('#fontFile').addEventListener('change', async e => {
 });
 
 // arquivos
-$('#filesBtn').onclick = () => openFiles();
 $('#filesOpen').onclick = () => openFiles();
 $('#projBtn').onclick = projMenu;
 $('#filesClose').onclick = closeFiles;
