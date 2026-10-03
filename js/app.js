@@ -260,6 +260,8 @@ const IDLE_BY = { text:['none','float','breathe','sway','pulse'], logo:['none','
 for (const t in IDLE_BY) IDLE_BY[t].push(...['shine','float3d','bounce','wiggle','glow','glitch','spin'].filter(k => !IDLE_BY[t].includes(k)));
 const SHAPE_KINDS = { rect:'Retângulo', ellipse:'Círculo', triangle:'Triângulo', polygon:'Polígono', star:'Estrela', line:'Linha', custom:'Vetor' };
 const BG_MODES = { mesh:'Gradiente vivo', linear:'Linear girando', spot:'Holofote', solid:'Sólido', image:'Imagem' };
+// fundo e forma também enchem com vídeo (pedido do usuário); os Componentes continuam só com BG_MODES
+const FILL_MODES = { ...BG_MODES, video:'Vídeo' };
 
 const FORMATS = { '1x1':{w:1080,h:1080,label:'1:1'}, '4x5':{w:1080,h:1350,label:'4:5'}, '3x4':{w:1080,h:1440,label:'3:4'}, '9x16':{w:1080,h:1920,label:'9:16'} };
 const FPS_OPTS = [24, 25, 30, 50, 60];
@@ -3095,6 +3097,17 @@ function noiseTile() {
 function drawBg(ctx, L, t, R) { paintFill(ctx, L, t, FW(), H()); }
 // degradê exato (SVG importado): paradas em [posição 0..1 na caixa, cor]; só vale enquanto as três cores são as de quando entrou (editou a cor = volta ao degradê de três paradas)
 const gradStops = L => { const s = L.gst; return L.mode === 'linear' && s && s.stops && s.key === [L.c1, L.c2, L.c3].join('|') ? s.stops : null; };
+// imagem ou vídeo do preenchimento (vídeo: o quadro atual; até carregar, o pôster L.vsrc)
+const fillMedia = L => L.mode === 'video' ? (L.video && videoEl(L)) || imgNow(L.vsrc) : L.mode === 'image' ? imgNow(L.src) : null;
+const mediaFill = L => !!L && (L.type === 'shape' || L.type === 'bg') && (L.mode === 'image' && !!L.src || L.mode === 'video' && !!L.video);
+// onde a imagem/vídeo cai no retângulo 0,0 → w,hh: cobre sem distorcer, com zoom (fzoom) e deslocamento (fix/fiy, fração da caixa),
+// como a imagem dentro da máscara (Alt + arrastar e roda do mouse no palco, ou os campos do painel)
+function fillRect(L, img, w, hh, t) {
+  const nw = img.naturalWidth || img.width, nh = img.naturalHeight || img.height, m = L.motion ?? 1;
+  const k = Math.max(w / nw, hh / nh) * (L.fzoom ?? 1) * (1 + .1 * m * (t / Math.max(1, S.duration)));
+  const iw = nw * k, ih = nh * k;
+  return { x:(w - iw) / 2 + (L.fix || 0) * w, y:(hh - ih) / 2 + (L.fiy || 0) * hh, w:iw, h:ih };
+}
 // preenchimento animado (usado pelo fundo e pelas formas): pinta o retângulo 0,0 → w,hh
 function paintFill(ctx, L, t, w, hh) {
   const m = L.motion ?? 1, gs = gradStops(L);
@@ -3119,12 +3132,11 @@ function paintFill(ctx, L, t, w, hh) {
     const g = ctx.createRadialGradient(px, py, 0, px, py, Math.max(w, hh) * .7);
     g.addColorStop(0, hexA(L.c2, .95)); g.addColorStop(.55, hexA(L.c2, .25)); g.addColorStop(1, hexA(L.c2, 0));
     ctx.fillStyle = g; ctx.fillRect(0, 0, w, hh);
-  } else if (L.mode === 'image') {
-    const img = imgNow(L.src);
-    if (img) {
-      const k = Math.max(w / img.naturalWidth, hh / img.naturalHeight) * (1 + .1 * m * (t / Math.max(1, S.duration)));
-      const iw = img.naturalWidth * k, ih = img.naturalHeight * k;
-      ctx.drawImage(img, (w - iw) / 2, (hh - ih) / 2, iw, ih);
+  } else if (L.mode === 'image' || L.mode === 'video') {
+    const img = fillMedia(L);
+    if (img && img.naturalWidth) {
+      const r = fillRect(L, img, w, hh, t);
+      ctx.drawImage(img, r.x, r.y, r.w, r.h);
       if (L.darken > 0) { ctx.fillStyle = `rgba(0,0,0,${L.darken})`; ctx.fillRect(0, 0, w, hh); }
     }
   }
@@ -3707,7 +3719,32 @@ function fitStage() {
   RS = Math.min(1.5, (cw * dpr) / FW());
   cv.width = Math.round(FW() * RS); cv.height = Math.round(H() * RS);
   RT.fitK = Math.min(bw / FW(), bh / H());
-  updZoomUI(); needs = true;
+  clampPan(); updZoomUI(); needs = true;
+}
+/* Mão / botão do meio passam da borda (pedido do usuário: no carrossel o quadro ocupa a largura toda e só sobrava a mesa de 36 px).
+   A rolagem anda primeiro; o que ela não alcança vira um deslocamento livre do quadro (RT.pan, transform no .stage-pad), como no Figma.
+   Sempre sobra um pedaço do quadro à vista (PAN_KEEP px). Ajustar (zoomFit) volta ao centro */
+const PAN_KEEP = 48;
+function applyPan() { const p = RT.pan || { x:0, y:0 }; $('.stage-pad').style.transform = p.x || p.y ? `translate(${p.x}px, ${p.y}px)` : ''; needs = true; }
+function clampPan() {
+  const p = RT.pan; if (!p || (!p.x && !p.y)) return;
+  applyPan();
+  const sc = $('#stageScroll'), b = sc.getBoundingClientRect(), r = cv.getBoundingClientRect(), vw = sc.clientWidth, vh = sc.clientHeight;
+  const kx = Math.min(PAN_KEEP, r.width / 2), ky = Math.min(PAN_KEEP, r.height / 2);
+  if (r.right < b.left + kx) p.x += b.left + kx - r.right; else if (r.left > b.left + vw - kx) p.x -= r.left - (b.left + vw - kx);
+  if (r.bottom < b.top + ky) p.y += b.top + ky - r.bottom; else if (r.top > b.top + vh - ky) p.y -= r.top - (b.top + vh - ky);
+  p.x = Math.round(p.x); p.y = Math.round(p.y); applyPan();
+}
+// o quadro anda (dx, dy) px na tela: primeiro desfaz o deslocamento livre, depois rola, e o resto vira deslocamento livre
+function shiftView(dx, dy) {
+  const sc = $('#stageScroll'), p = RT.pan || (RT.pan = { x:0, y:0 });
+  const axis = (d, k, sk) => {
+    if (p[k] && Math.sign(d) === -Math.sign(p[k])) { const t = Math.sign(d) * Math.min(Math.abs(d), Math.abs(p[k])); p[k] += t; d -= t; }
+    const s0 = sc[sk]; sc[sk] = s0 - d; d -= s0 - sc[sk];
+    p[k] += d;
+  };
+  axis(dx, 'x', 'scrollLeft'); axis(dy, 'y', 'scrollTop');
+  clampPan(); applyPan();
 }
 new ResizeObserver(fitStage).observe($('#stageBox'));
 // zoom mantendo o ponto sob o cursor (ou o centro da área visível) no mesmo lugar
@@ -3718,29 +3755,35 @@ function setZoom(z, cx, cy) {
   const u = (cx - r.left) / (r.width || 1), v = (cy - r.top) / (r.height || 1);
   RT.zoom = z; fitStage();
   const r2 = cv.getBoundingClientRect();
-  sc.scrollLeft += r2.left + u * r2.width - cx; sc.scrollTop += r2.top + v * r2.height - cy;
+  shiftView(cx - (r2.left + u * r2.width), cy - (r2.top + v * r2.height));
   needs = true;
 }
 const zoomPct = () => Math.round((RT.fitK || 1) * (RT.zoom || 1) * 100);
 function updZoomUI() { const el = $('#zVal'); if (el) el.textContent = zoomPct() + '%'; }
-function zoomFit() { RT.zoom = 1; fitStage(); const sc = $('#stageScroll'); sc.scrollLeft = 0; sc.scrollTop = 0; }
+function zoomFit() { RT.zoom = 1; RT.pan = null; applyPan(); fitStage(); const sc = $('#stageScroll'); sc.scrollLeft = 0; sc.scrollTop = 0; }
 function zoom100() { setZoom(1 / (RT.fitK || 1)); }
 $('#zIn').addEventListener('click', () => setZoom((RT.zoom || 1) * 1.25));
 $('#zOut').addEventListener('click', () => setZoom((RT.zoom || 1) / 1.25));
-$('#zVal').addEventListener('click', () => (RT.zoom || 1) === 1 ? zoom100() : zoomFit());
-// Ctrl + roda (ou pinça do trackpad) faz zoom no ponto do cursor; a roda sozinha rola
+$('#zVal').addEventListener('click', () => (RT.zoom || 1) === 1 && !(RT.pan && (RT.pan.x || RT.pan.y)) ? zoom100() : zoomFit());
+// Ctrl + roda (ou pinça do trackpad) faz zoom no ponto do cursor; a roda sozinha rola (Shift = para os lados), também além da borda
 $('#stageBox').addEventListener('wheel', ev => {
-  if (!(ev.ctrlKey || ev.metaKey)) return;
+  if (ev.defaultPrevented) return; // a roda já foi usada no zoom da imagem dentro da máscara/forma
+  if (!(ev.ctrlKey || ev.metaKey)) {
+    ev.preventDefault();
+    const m = ev.deltaMode === 1 ? 33 : ev.deltaMode === 2 ? 400 : 1;
+    let dx = ev.deltaX * m, dy = ev.deltaY * m; if (ev.shiftKey && !dx) { dx = dy; dy = 0; }
+    shiftView(-dx, -dy); return;
+  }
   ev.preventDefault();
   const d = ev.deltaMode === 1 ? ev.deltaY * 33 : ev.deltaY;
   setZoom((RT.zoom || 1) * Math.exp(clamp(-d * .0025, -.6, .6)), ev.clientX, ev.clientY);
 }, { passive:false });
 $('#stageScroll').addEventListener('scroll', () => { needs = true; });
-// botão do meio arrasta o palco
+// botão do meio (e a mão, com o espaço) arrasta o palco, também além da borda (shiftView)
 function panStage(ev) {
-  const sc = $('#stageScroll'), x0 = ev.clientX, y0 = ev.clientY, l0 = sc.scrollLeft, t0 = sc.scrollTop;
+  let x0 = ev.clientX, y0 = ev.clientY;
   ev.preventDefault(); $('#stageBox').style.cursor = 'grabbing';
-  const mv = e => { sc.scrollLeft = l0 - (e.clientX - x0); sc.scrollTop = t0 - (e.clientY - y0); };
+  const mv = e => { shiftView(e.clientX - x0, e.clientY - y0); x0 = e.clientX; y0 = e.clientY; };
   const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); $('#stageBox').style.cursor = ''; };
   addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
 }
@@ -3843,6 +3886,11 @@ function drawOverlays() {
       ctx.strokeStyle = uiA('sel', .9);
       outlineBox(ctx, L._bounds, L, selPad(L)); // girada (forma ou grupo): a caixa gira junto
       handlesOf(L).forEach(hdl);
+      for (const q of radDots(L)) { // cantos arredondados: bolinha vazada dentro de cada canto
+        const on = RT.drag && RT.drag.mode === 'rad' && RT.drag.ci === q.ci;
+        ctx.beginPath(); ctx.arc(q.x, q.y, hRad() * (on ? .5 : .4), 0, TAU);
+        ctx.fillStyle = on ? uiC('sel') : uiC('bg'); ctx.fill(); ctx.lineWidth = hRad() / 7; ctx.strokeStyle = uiC('sel'); ctx.stroke();
+      }
     }
   }
   drawFlowGaps(ctx, 1 / OS * dpr); // espaços do layout automático
@@ -3857,8 +3905,8 @@ function drawOverlays() {
     ctx.beginPath(); ctx.moveTo(cx - hw, 0); ctx.lineTo(cx - hw, H()); ctx.moveTo(cx + hw, 0); ctx.lineTo(cx + hw, H()); ctx.stroke(); ctx.setLineDash([]);
   }
   const px = FW() / (cv.getBoundingClientRect().width || 1); // 1 px da tela em unidades do vídeo
-  if (RT.drag && RT.drag.mode === 'rot' && RT.drag.show != null) { // ângulo enquanto gira
-    const c = camFwd(RT.drag.cm, RT.drag.C), txt = Math.round(RT.drag.show * 10) / 10 + '°';
+  if (RT.drag && (RT.drag.mode === 'rot' || RT.drag.mode === 'rad') && RT.drag.show != null) { // ângulo enquanto gira, raio enquanto arredonda
+    const c = camFwd(RT.drag.cm, RT.drag.C), txt = RT.drag.mode === 'rad' ? 'Cantos ' + RT.drag.show + ' px' : Math.round(RT.drag.show * 10) / 10 + '°';
     ctx.font = `600 ${12 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(txt).width + 14 * px, th = 20 * px;
     ctx.fillStyle = uiC('sel'); rrect(ctx, c.x - tw / 2, c.y - th / 2, tw, th, 4 * px); ctx.fill();
@@ -4211,6 +4259,7 @@ function handleAt(pt) {
   const r = hRad() * 1.3, d = q => Math.hypot(pt.x - q.x, pt.y - q.y);
   const hs = handlesOf(selL()), hit = hs.filter(q => Math.abs(pt.x - q.x) <= r && Math.abs(pt.y - q.y) <= r).sort((a, b) => d(a) - d(b))[0];
   if (hit) return hit;
+  const rd = radDots(selL()).filter(q => d(q) <= hRad() * 1.1).sort((a, b) => d(a) - d(b))[0]; if (rd) return rd; // cantos arredondados
   const t = rotTarget(), L = selL(), cs = t ? hs.filter(q => q.hx && q.hy) : [];
   if (cs.length) {
     const rr = hRad() * 3.6, q = cs.filter(c => d(c) <= rr).sort((a, b) => d(a) - d(b))[0];
@@ -4238,6 +4287,40 @@ function rotateTo(D, pt, ev) {
   r = ((r + 180) % 360 + 360) % 360 - 180; r = Math.round(r * 10) / 10;
   D.O.rot = r; D.show = r;
   const i = document.getElementById(fid(D.O, 'rot')); if (i) { i.value = r; const o = i.parentElement.querySelector('.num'); if (o && document.activeElement !== o) o.value = Math.round(r) + '°'; }
+}
+/* Cantos pelo mouse (pedido do usuário: o que o painel faz, o mouse também faz; como no Figma): uma bolinha dentro de cada canto
+   do retângulo (forma, máscara retangular da imagem, botão); arrastar para dentro arredonda. Sem Alt, todos os cantos ficam
+   iguais (um raio só); Alt mexe só naquele canto (liga "Cada canto"; o botão tem um raio só). Some se o elemento está pequeno na tela */
+const radTarget = L => !!L && !L.locked && (L.type === 'shape' && L.kind === 'rect' || L.type === 'image' && L.mask === 'rect' && (!L.device || L.device === 'none') || L.type === 'cta');
+function radDots(L) {
+  if (playing || RT.pen || RT.vec || (RT.drag && RT.drag.mode !== 'rad')) return [];
+  if (!radTarget(L) || selUnion() || pickedLayers().length !== 1 || !L._bounds || !L.visible || !phase(L, T)) return [];
+  const b = L._bounds, G = geomNow(L); if (!G || !G.w || !G.h) return [];
+  const k = b.w / G.w, min = hRad() * 2.4, half = Math.min(b.w, b.h) / 2;
+  if (half < min * 1.6) return [];
+  const rr = radii4(radOf(L), G.w, G.h), cm = camOf(L), ra = rotOf(L), c = boxC(b);
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy], i) => {
+    const off = clamp(rr[i] * k, min, half), l = { x:sx < 0 ? b.x + off : b.x + b.w - off, y:sy < 0 ? b.y + off : b.y + b.h - off };
+    const v = camFwd(cm, ra ? rotPt(l, c, ra) : l);
+    return { k:'rad', rad:true, ci:i, sx, sy, x:v.x, y:v.y, hx:0, hy:0 };
+  });
+}
+function startRadius(ev, pt, hd) {
+  const L = selL(), G = geomNow(L), b = L._bounds; pushUndo();
+  const cm = camOf(L), C = boxC(b), ra = rotOf(L);
+  let p0 = camInv(cm, pt); if (ra) p0 = rotPt(p0, C, -ra);
+  RT.drag = { L, cm, mode:'rad', C, ra, ci:hd.ci, sx:hd.sx, sy:hd.sy, p0, k:b.w / G.w, r0:radii4(radOf(L), G.w, G.h)[hd.ci], max:Math.min(G.w, G.h) / 2, raw:radOf(L) };
+  cv.setPointerCapture(ev.pointerId);
+}
+function radiusTo(D, pt, ev) {
+  const L = D.L, p = D.ra ? rotPt(pt, D.C, -D.ra) : pt; // pt já vem no espaço da camada (D.cm)
+  const d = ((p.x - D.p0.x) * -D.sx + (p.y - D.p0.y) * -D.sy) / 2; // para dentro, na diagonal do canto
+  const r = Math.round(clamp(D.r0 + d / D.k, 0, D.max));
+  if (ev.altKey && L.type !== 'cta') {
+    if (!L.radSep) RAD_KEYS.forEach((k, i) => { L[k] = Array.isArray(D.raw) ? D.raw[i] : D.raw; });
+    L.radSep = true; L[RAD_KEYS[D.ci]] = r;
+  } else { L.radSep = false; L.radius = r; }
+  D.show = r;
 }
 // devolve a escala que valeu de fato (os limites e o arredondamento do tamanho podem segurar um pouco)
 function scaleLayer(L, s0, f) {
@@ -4415,9 +4498,15 @@ function cvDown(ev) {
   if (ev.button === 1) { panStage(ev); return; }
   if (ev.button === 2) return; // botão direito abre o menu (contextmenu)
   let pt = stagePt(ev), hd = handleAt(pt);
-  if (hd) { hd.rot ? startRotate(ev, pt) : startResize(ev, pt, hd); return; }
+  if (hd) { hd.rot ? startRotate(ev, pt) : hd.rad ? startRadius(ev, pt, hd) : startResize(ev, pt, hd); return; }
   const gp = flowGapAt(pt); if (gp) { startGapDrag(ev, pt, gp); return; } // espaço do layout automático
   const L = hitTest(pt) || ghostAt(pt); // sem nada na tela ali, a seleção que está fora da tela também pega
+  // fundo escolhido com imagem/vídeo: Alt + arrastar no vazio move a imagem dentro do quadro
+  const sb = selL();
+  if (!L && ev.altKey && sb && sb.type === 'bg' && mediaFill(sb) && pt.x >= 0 && pt.x <= FW() && pt.y >= 0 && pt.y <= H()) {
+    pushUndo(); RT.drag = { L:sb, mode:'fpan', pt0:pt, x0:sb.fix || 0, y0:sb.fiy || 0, bw:FW(), bh:H(), ra:0 };
+    cv.setPointerCapture(ev.pointerId); return;
+  }
   if (!L) { marquee(ev); return; } // no vazio: arrastar seleciona por área; só um clique solta a seleção (com Shift, não)
   if (ev.shiftKey) { // segundo clique do clique duplo com Shift: o item já foi somado no primeiro, não tira de volta
     const now = performance.now(), again = RT.shiftTap && RT.shiftTap.id === L.id && now - RT.shiftTap.t < 500;
@@ -4432,9 +4521,11 @@ function cvDown(ev) {
   else if (grp) { RT.selected = L.id; renderLayers(); renderProps(); needs = true; } else select(L.id);
   pushUndo();
   // arrastar parte do espaço da camada; o grupo girado que anda inteiro não conta (deslocamento na tela = deslocamento no espaço dele)
-  const pan = ev.altKey && L.type === 'image', cm = camOf(L, pan ? null : new Set([L, ...freePicked()].map(o => o.id)));
+  // Alt + arrastar: a imagem dentro da máscara, ou a imagem/vídeo do preenchimento dentro da forma
+  const pan = ev.altKey && !L.locked && L._bounds && (L.type === 'image' || mediaFill(L)), cm = camOf(L, pan ? null : new Set([L, ...freePicked()].map(o => o.id)));
   pt = camInv(cm, pt);
-  if (pan) { const pn = panOf(L); RT.drag = { L, cm, mode:'pan', pt0:pt, ix0:pn.ix, iy0:pn.iy, bw:L._bounds.w, bh:L._bounds.h }; }
+  if (pan && L.type === 'image') { const pn = panOf(L); RT.drag = { L, cm, mode:'pan', pt0:pt, ix0:pn.ix, iy0:pn.iy, bw:L._bounds.w, bh:L._bounds.h }; }
+  else if (pan) RT.drag = { L, cm, mode:'fpan', pt0:pt, x0:L.fix || 0, y0:L.fiy || 0, bw:L._bounds.w, bh:L._bounds.h, ra:rotOf(L) };
   else { const p = posOf(L); RT.drag = { L, cm, mode:'move', tap:grp, pxy:[ev.clientX, ev.clientY], ox:pt.x - p.x * W(), oy:pt.y - p.y * H(), others:freePicked().filter(o => o !== L).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y }; }), x0:p.x, y0:p.y, ...snapSetup() }; RT.drag.fb = marginHold([L, ...RT.drag.others.map(q => q.o)]); flowGrab(RT.drag); }
   cv.setPointerCapture(ev.pointerId);
 }
@@ -4477,7 +4568,7 @@ cv.addEventListener('pointermove', ev => {
   if (!RT.drag) {
     if (RT.marq) return;
     const hd = handleAt(pt), gp = !hd && flowGapAt(pt), ht = !gp && (hitTest(pt) || ghostAt(pt));
-    cv.style.cursor = hd ? (hd.rot ? ROT_CUR : HCUR[hd.k]) : gp ? (gp.v ? 'row-resize' : 'col-resize') : ht ? (ev.altKey && ht.type === 'image' ? 'all-scroll' : 'move') : '';
+    cv.style.cursor = hd ? (hd.rot ? ROT_CUR : hd.rad ? 'default' : HCUR[hd.k]) : gp ? (gp.v ? 'row-resize' : 'col-resize') : ht ? (ev.altKey && (ht.type === 'image' || mediaFill(ht)) ? 'all-scroll' : 'move') : '';
     setHover(hd || gp ? null : ht && ht.id);
     const gk = gp && !gp.gid ? Math.round(gp.s0) : null; if (RT.gapHot !== gk) { RT.gapHot = gk; needs = true; } // espaço do quadro só aparece com o mouse em cima
     return;
@@ -4492,6 +4583,11 @@ cv.addEventListener('pointermove', ev => {
   else if (D.mode === 'rot') rotateTo(D, pt, ev);
   else if (D.mode === 'rs') resizeTo(D, pt, ev); // largura de quebra do texto ('tw'): parte da largura real do bloco (não da máx.), senão o começo do arrasto não faz nada; +1 px para não quebrar no empate
   else if (D.mode === 'pan') setPan(L, clamp(D.ix0 + (pt.x - D.pt0.x) / D.bw, -2, 2), clamp(D.iy0 + (pt.y - D.pt0.y) / D.bh, -2, 2));
+  else if (D.mode === 'fpan') { // forma girada: o deslocamento é no espaço dela
+    const d = rotPt({ x:pt.x - D.pt0.x, y:pt.y - D.pt0.y }, { x:0, y:0 }, -D.ra);
+    L.fix = +clamp(D.x0 + d.x / D.bw, -2, 2).toFixed(4); L.fiy = +clamp(D.y0 + d.y / D.bh, -2, 2).toFixed(4);
+  }
+  else if (D.mode === 'rad') radiusTo(D, pt, ev);
   else {
     let x = (pt.x - D.ox) / W(), y = (pt.y - D.oy) / H();
     RT.guide = null;
@@ -4521,15 +4617,21 @@ cv.addEventListener('pointermove', ev => {
   RT.gRev++; // arrastando, a caixa dos grupos (pivô do giro) se refaz a cada movimento
   needs = true;
 });
-// roda do mouse sobre a imagem selecionada: zoom da imagem dentro da máscara
+// roda do mouse sobre a imagem selecionada: zoom da imagem dentro da máscara (forma com imagem/vídeo: dentro da forma;
+// fundo: com Alt, senão a roda sozinha seria sempre do fundo e não rolaria mais o palco)
 let wheelT = null;
 cv.addEventListener('wheel', ev => {
   if (ev.ctrlKey || ev.metaKey) return; // Ctrl + roda é o zoom do palco (#stageBox)
-  const L = selL(); if (!L || L.type !== 'image' || L.locked || !L._bounds) return;
-  const pt = stagePt(ev), b = visB(L); if (pt.x < b.x || pt.x > b.x + b.w || pt.y < b.y || pt.y > b.y + b.h) return;
+  const L = selL(); if (!L || L.locked || !(L.type === 'image' || mediaFill(L))) return;
+  const pt = stagePt(ev);
+  if (L.type === 'bg') { if (!ev.altKey || pt.x < 0 || pt.x > FW() || pt.y < 0 || pt.y > H()) return; }
+  else { if (!L._bounds) return; const b = visB(L); if (pt.x < b.x || pt.x > b.x + b.w || pt.y < b.y || pt.y > b.y + b.h) return; }
   ev.preventDefault();
   if (!wheelT) pushUndo();
-  setFrame(L, { zoom:clamp(panOf(L).zoom * (ev.deltaY < 0 ? 1.06 : 1 / 1.06), .2, 5) }); needs = true; // fora do principal, só neste formato
+  const f = (ev.deltaY || ev.deltaX) < 0 ? 1.06 : 1 / 1.06;
+  if (L.type === 'image') setFrame(L, { zoom:clamp(panOf(L).zoom * f, .2, 5) }); // fora do principal, só neste formato
+  else L.fzoom = +clamp((L.fzoom ?? 1) * f, .2, 5).toFixed(4);
+  needs = true;
   clearTimeout(wheelT); wheelT = setTimeout(() => { wheelT = null; changed({ props:true }); }, 350);
 }, { passive:false });
 const endDrag = () => {
@@ -4554,6 +4656,7 @@ function drillSelect(L) {
 }
 cv.addEventListener('dblclick', ev => {
   if (RT.pen || RT.vec) return; // caneta e edição de pontos tratam o clique sozinhas
+  const hd0 = handleAt(stagePt(ev)); if (hd0 && hd0.rad) return; // bolinha do canto: não entra na edição de pontos
   const L = hitTest(stagePt(ev)); if (!L) return;
   if (ev.shiftKey || ev.ctrlKey || ev.metaKey) return; // Shift/Ctrl + clique duplo só soma o item, não sobe para o grupo
   const pk0 = pickedLayers();
@@ -5886,6 +5989,8 @@ function videoEl(L) {
   }
   return v.ok ? v.el : null;
 }
+// camada que toca vídeo agora: a de imagem com vídeo, ou fundo/forma com preenchimento "Vídeo"
+const vidOn = L => !!L.video && (L.type === 'image' || (L.type === 'shape' || L.type === 'bg') && L.mode === 'video');
 // corte: L.vIn/L.vOut = trecho do vídeo em segundos (ausente = do começo / até o fim); o trecho repete se a camada for mais longa
 function vidCut(L, el) {
   const d = (el && el.duration) || L.vdur || 1, a = clamp(L.vIn || 0, 0, Math.max(0, d - .1));
@@ -5897,6 +6002,7 @@ function vidTime(L, t, el) {
 }
 // a camada dura o trecho (como um clipe num editor de vídeo): o fim da barra acompanha o corte
 function vidFitEnd(o) {
+  if (o.type !== 'image') return; // preenchimento com vídeo (fundo, forma) repete dentro da barra que já existe
   const { a, b } = vidCut(o); o.end = +Math.min(S.duration, o.start + b - a).toFixed(3);
 }
 // borda da barra na timeline = corte. v = estado no começo do arrasto ({ a, b, d, s, e } de vidCut + barra).
@@ -5910,7 +6016,7 @@ function vidTrim(o, v, mode) {
 function syncVideos() {
   for (const [id, v] of VIDS) {
     const L = S.layers.find(l => l.id === id);
-    if (!L || L.video !== v.media) { v.el.pause(); v.el.removeAttribute('src'); v.el.load(); VIDS.delete(id); continue; }
+    if (!L || !vidOn(L) || L.video !== v.media) { v.el.pause(); v.el.removeAttribute('src'); v.el.load(); VIDS.delete(id); continue; }
     const el = v.el; if (!v.ok) continue;
     if (!L.visible || !phase(L, T) || RT.exporting) { if (!el.paused) el.pause(); continue; }
     const vt = vidTime(L, T, el);
@@ -5928,7 +6034,7 @@ function syncVideos() {
 async function seekVideos(t) {
   const jobs = [];
   for (const L of S.layers) {
-    if (!L.video || L.type !== 'image' || !L.visible || !phase(L, t)) continue;
+    if (!vidOn(L) || !L.visible || !phase(L, t)) continue;
     const v = VIDS.get(L.id); if (!v || !v.ok) continue;
     const el = v.el; if (!el.paused) el.pause();
     const vt = vidTime(L, t, el); if (Math.abs(el.currentTime - vt) < .0005 && !el.seeking) continue;
@@ -5937,7 +6043,7 @@ async function seekVideos(t) {
   await Promise.all(jobs);
 }
 async function videosReady() {
-  const ls = S.layers.filter(L => L.video && L.type === 'image' && L.visible); ls.forEach(L => videoEl(L));
+  const ls = S.layers.filter(L => vidOn(L) && L.visible); ls.forEach(L => videoEl(L));
   const t0 = performance.now();
   while (ls.some(L => { const v = VIDS.get(L.id); return v && !v.ok && !v.missing; }) && performance.now() - t0 < 8000) await sleep(50);
 }
@@ -7686,7 +7792,7 @@ function tlDrag(e, L, bar, mode) {
   const grp = isPicked(L.id) ? freePicked().filter(o => o !== L).map(o => ({ o, s:o.start, e:o.end })) : [];
   const d = S.duration, s0 = L.start, e0 = L.end ?? d, end0 = L.end, x0 = e.clientX, y0 = e.clientY, grid = v => Math.round(v * 10) / 10, MIN = .3;
   // vídeo: as bordas cortam o vídeo (vidTrim); a esquerda não passa do começo do vídeo
-  const vid0 = new Map([L, ...grp.map(q => q.o)].filter(o => o.video).map(o => [o, { ...vidCut(o), rIn:o.vIn, rOut:o.vOut, s:o.start, e:o.end ?? d }]));
+  const vid0 = new Map([L, ...grp.map(q => q.o)].filter(o => o.type === 'image' && o.video).map(o => [o, { ...vidCut(o), rIn:o.vIn, rOut:o.vOut, s:o.start, e:o.end ?? d }]));
   const sMin = o => { const v = vid0.get(o); return v ? Math.max(0, v.s - v.a) : 0; };
   // ímã: início, fim, agulha e as bordas das outras camadas (Shift desliga)
   const pts = [0, d, T, ...extraSnaps(L)]; // + batidas da música e o meio das transições
@@ -8629,7 +8735,7 @@ function styleProps(L) {
       rangeF(L, 'ix', 'Imagem ↔', -1, 1, .005, pct),
       rangeF(L, 'iy', 'Imagem ↕', -1, 1, .005, pct),
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Preencher a máscara', onclick:() => { pushUndo(); setFrame(L, { zoom:1, ix:0, iy:0 }); changed({ props:true }); } })]),
-      h('p', { class:'hint', text:'A imagem nunca distorce. No palco: a alça do canto aumenta tudo, as das laterais mudam a máscara, a roda do mouse dá zoom na imagem e Alt + arrastar move a imagem dentro.' }),
+      h('p', { class:'hint', text:'A imagem nunca distorce. No palco: a alça do canto aumenta tudo, as das laterais mudam a máscara, a roda do mouse dá zoom na imagem, Alt + arrastar move a imagem dentro e as bolinhas nos cantos arredondam (Alt = só um canto).' }),
       ...strokeSecs(L),
       ...look(),
       lineF(L));
@@ -8674,12 +8780,12 @@ function fillStyleF(L) {
   const draw = () => {
     wrap.innerHTML = ''; const none = fillVoid(L);
     const pick = (t, on, fn) => wrap.append(h('button', { 'aria-pressed':String(on), text:t, onclick:() => { pushUndo(); for (const o of peersOf(L)) fn(o); RT.layout.clear(); draw(); changed(); renderProps(); } }));
-    for (const [v, t] of Object.entries(BG_MODES)) pick(t, !none && L.mode === v, o => {
+    for (const [v, t] of Object.entries(FILL_MODES)) pick(t, !none && L.mode === v, o => {
       const was = fillVoid(o); o.mode = v;
       if (was) for (const k of used(o)) o[k] = withA(o[k] || S.brand.colors[2], 1);
     });
     pick('Sem preenchimento', none, o => {
-      if (o.mode === 'image') o.mode = 'solid';
+      if (o.mode === 'image' || o.mode === 'video') o.mode = 'solid';
       for (const k of used(o)) o[k] = withA(o[k] || S.brand.colors[2], 0);
     });
   };
@@ -8687,16 +8793,37 @@ function fillStyleF(L) {
   return field('Estilo', wrap, null, true);
 }
 function fillProps(L, sec) {
-  sec.append(L.type === 'shape' ? fillStyleF(L) : segF(L, 'mode', 'Estilo', Object.entries(BG_MODES)));
+  sec.append(L.type === 'shape' ? fillStyleF(L) : segF(L, 'mode', 'Estilo', Object.entries(FILL_MODES)));
   if (L.type === 'shape' && fillVoid(L)) return; // sem preenchimento: nada de cor, ângulo, movimento ou granulado
   const lbl =   { mesh:['Base', 'Mancha 1', 'Mancha 2', 'Mancha 3'], linear:['Cor 1', 'Cor 2', 'Cor 3'], spot:['Base', 'Luz'], solid:['Cor'], image:[] }[L.mode] || [];
   lbl.forEach((t, i) => sec.append(colorF(L, 'c' + (i + 1), t)));
+  const media = L.mode === 'image' || L.mode === 'video', bg = L.type === 'bg';
   if (L.mode === 'image') {
-    sec.append(uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem de fundo', 'image/*', async f => { const src = await imageSrc(f); pushUndo(); L.src = src; await getImage(L.src); changed(); }));
-    sec.append(rangeF(L, 'darken', 'Escurecer', 0, .85, .01, v => Math.round(v * 100) + '%'));
+    sec.append(uploadF(L.src ? 'Trocar imagem' : bg ? 'Enviar imagem de fundo' : 'Enviar imagem', 'image/*', async f => { const src = await imageSrc(f); pushUndo(); L.src = src; await getImage(L.src); changed({ props:true }); }));
+  }
+  if (L.mode === 'video') {
+    if (L.video) sec.append(h('p', { class:'hint', text:'Vídeo sem som. Repete enquanto a camada estiver na tela.' }), ...vidCutFields(L));
+    sec.append(uploadF(L.video ? 'Trocar vídeo' : bg ? 'Enviar vídeo de fundo' : 'Enviar vídeo', 'video/*', async f => {
+      toast('Abrindo o vídeo…');
+      try {
+        const id = await putMedia(f), p = await videoPoster(await mediaUrl(id)); pushUndo();
+        L.video = id; L.vsrc = p.src; L.vdur = p.dur; delete L.vIn; delete L.vOut; await getImage(L.vsrc);
+        changed({ props:true }); toast('Vídeo no preenchimento');
+      } catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
+    }));
+  }
+  if (media) {
+    // o mesmo enquadramento da imagem dentro da máscara; no palco: Alt + arrastar move, a roda dá zoom
+    sec.append(rangeF(L, 'fzoom', 'Zoom', .2, 5, .01, v => (v ?? 1).toFixed(2) + '×', { get:() => L.fzoom ?? 1 }),
+      rangeF(L, 'fix', (L.mode === 'video' ? 'Vídeo' : 'Imagem') + ' ↔', -1, 1, .005, v => Math.round((v || 0) * 100) + '%', { get:() => L.fix || 0 }),
+      rangeF(L, 'fiy', (L.mode === 'video' ? 'Vídeo' : 'Imagem') + ' ↕', -1, 1, .005, v => Math.round((v || 0) * 100) + '%', { get:() => L.fiy || 0 }),
+      h('div', { class:'row' }, [h('button', { class:'btn small', text:bg ? 'Preencher o quadro' : 'Preencher a forma', onclick:() => { pushUndo(); for (const o of peersOf(L)) { delete o.fzoom; delete o.fix; delete o.fiy; } changed({ props:true }); } })]),
+      h('p', { class:'hint', text:bg ? `No palco, com o fundo escolhido: Alt + arrastar no vazio move ${L.mode === 'video' ? 'o vídeo' : 'a imagem'} e Alt + roda dá zoom.`
+        : `No palco: Alt + arrastar move ${L.mode === 'video' ? 'o vídeo' : 'a imagem'} dentro da forma e, com ela escolhida, a roda do mouse dá zoom.` }),
+      rangeF(L, 'darken', 'Escurecer', 0, .85, .01, v => Math.round(v * 100) + '%'));
   }
   if (L.mode === 'linear') sec.append(rangeF(L, 'angle', 'Ângulo', 0, 360, 1, v => Math.round(v) + '°'));
-  if (L.mode !== 'solid') sec.append(rangeF(L, 'motion', L.mode === 'image' ? 'Zoom lento' : 'Movimento', 0, 3, .05, v => v.toFixed(2) + '×'));
+  if (L.mode !== 'solid') sec.append(rangeF(L, 'motion', media ? 'Zoom lento' : 'Movimento', 0, 3, .05, v => v.toFixed(2) + '×'));
   sec.append(rangeF(L, 'grain', 'Granulado', 0, .4, .01, v => Math.round(v * 100) + '%'));
 }
 function renderAll() { renderFormats(); renderAdds(); renderBrand(); renderLayers(); renderProps(); renderAudio(); $('#loop').checked = S.loop !== false; syncHist(); }

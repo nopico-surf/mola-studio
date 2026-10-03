@@ -629,11 +629,12 @@ async function svgPaint(L, x, y, w, hh, X) {
   } else if (L.mode === 'spot') {
     const px = x + w * (.5 + .08 * Math.sin(t * .5 * m)), py = y + hh * (.42 + .05 * Math.cos(t * .4 * m));
     out += rect(`fill="url(#${grad('radialGradient', `cx="${sn(px)}" cy="${sn(py)}" r="${sn(Math.max(w, hh) * .7)}"`, [[0, L.c2, .95], [.55, L.c2, .25], [1, L.c2, 0]])})"`);
-  } else if (L.mode === 'image') {
-    const img = imgNow(L.src), data = img && await svgImgData({ ...L, video:false, cut:null }, img);
+  } else if (L.mode === 'image' || L.mode === 'video') { // vídeo: o quadro de agora
+    const img = fillMedia(L), vid = L.mode === 'video' && img && img.tagName === 'VIDEO';
+    const data = img && await svgImgData({ ...L, src:vid ? L.src : L.mode === 'video' ? L.vsrc : L.src, video:vid, cut:null }, img);
     if (!data) return '';
-    const [nw, nh] = imgNat(img), k = Math.max(w / nw, hh / nh) * (1 + .1 * m * (t / Math.max(1, S.duration))), iw = nw * k, ih = nh * k;
-    out = `<image x="${sn(x + (w - iw) / 2)}" y="${sn(y + (hh - ih) / 2)}" width="${sn(iw)}" height="${sn(ih)}" preserveAspectRatio="none" xlink:href="${data}"/>`;
+    const [nw, nh] = imgNat(img), r = fillRect(L, { naturalWidth:nw, naturalHeight:nh }, w, hh, t);
+    out = rect(svgFill(L.c1)) + `<image x="${sn(x + r.x)}" y="${sn(y + r.y)}" width="${sn(r.w)}" height="${sn(r.h)}" preserveAspectRatio="none" xlink:href="${data}"/>`;
     if (L.darken > 0) out += rect('fill="#000"', ` fill-opacity="${L.darken}"`);
   }
   return out;
