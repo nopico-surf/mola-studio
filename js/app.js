@@ -3134,10 +3134,13 @@ function drawBlockBody(ctx, L, G, info, R) {
   }
   if (L.type === 'shape') {
     const V = shapeVec(L, G), pp = info.pp, drawing = info.key === 'draw';
-    const filled = shFilled(L), stroked = strokeOn(L); // fill desligado e contorno ligado são independentes (o "sem cor" é só uma cor)
+    // RT.bbMask = máscara do "Desfocar atrás" (drawLayerFx0): o preenchimento opaco, mesmo transparente ou "sem cor"
+    const bbm = RT.bbMask, filled = bbm ? L.kind !== 'line' && (L.fill !== false || V.closed) : shFilled(L), stroked = strokeOn(L); // fill desligado e contorno ligado são independentes (o "sem cor" é só uma cor)
     const dp = drawing ? Ease.cubicInOut(clamp(pp / .72)) : 1;
     const fillA = !filled ? 0 : drawing ? Ease.cubicInOut(clamp((pp - .5) / .5)) : 1;
-    if (fillA > 0) {
+    if (fillA > 0 && bbm) {
+      ctx.save(); ctx.globalAlpha *= fillA; ctx.fillStyle = '#fff'; ctx.fill(V.path, L.fillRule === 'evenodd' ? 'evenodd' : 'nonzero'); ctx.restore();
+    } else if (fillA > 0) {
       ctx.save(); ctx.clip(V.path, L.fillRule === 'evenodd' ? 'evenodd' : 'nonzero'); ctx.globalAlpha *= fillA; ctx.translate(-G.w / 2, -G.h / 2);
       paintFill(ctx, L, info.t, G.w, G.h); ctx.restore();
     }
@@ -3588,23 +3591,41 @@ const BLURS = {
   bblur: [[0, 'Nenhum'], [8, 'Leve'], [20, 'Vidro'], [44, 'Fosco']],
 };
 const blurOn = L => (L.lblur || 0) > 0 || (L.type !== 'bg' && (L.bblur || 0) > 0);
-// borra o que já está em tc (o quadro até aqui) e põe de volta só onde a camada (src) existe
-function backBlur(tc, src, b, lb = 0) {
-  const m = frameBuf(src, 'bb', padOf(src)), c = m.getContext('2d'), o = bufAt(m, tc.canvas);
+// borra o que já está em tc (o quadro até aqui) e põe de volta só onde a camada existe. mask = a forma da camada (forma: o
+// preenchimento opaco, mesmo "sem cor", como no Figma); sem ela vale o alfa de src, reforçado (boost)
+// Pedido do usuário (o vidro saía fantasma): antes o quadro era ampliado em volta do centro para a borda não escurecer, o que
+// deslocava o que aparece atrás (o rosto borrado ficava ao lado do rosto de verdade), e o alfa fraco de um vidro quase transparente
+// deixava a foto nítida aparecer por baixo. Agora o fundo é lido no lugar, só em volta da camada (3 × o desfoque), e a borda do
+// quadro é esticada (clampEdges), como o backdrop-filter do CSS
+function backBlur(tc, src, b, lb = 0, mask = null) {
+  const msk = mask || src, m = frameBuf(src, 'bb', padOf(src)), c = m.getContext('2d');
+  const T = tc.canvas, tp = padOf(T), tv = T._vo, fw = tv ? tv.fw : T.width - 2 * tp, fh = tv ? tv.fh : T.height - 2 * tp;
+  // o pedaço do quadro atrás da camada, com folga para o alcance do desfoque (px do quadro inteiro); em degraus de 64 px
+  const r = Math.ceil((b * 3 + 2) / 16) * 16, Q = 64, mx = voX(m) - padOf(m), my = voY(m) - padOf(m);
+  const x0 = Math.max(0, Math.floor(mx - r)), y0 = Math.max(0, Math.floor(my - r));
+  const x1 = Math.min(fw, Math.ceil(mx + m.width + r)), y1 = Math.min(fh, Math.ceil(my + m.height + r));
+  if (x1 <= x0 || y1 <= y0) return;
+  const gw = Math.min(fw, Math.ceil((x1 - x0) / Q) * Q), gh = Math.min(fh, Math.ceil((y1 - y0) / Q) * Q);
+  const bk = frameBuf(T, 'bk', r, { x:Math.min(x0, fw - gw), y:Math.min(y0, fh - gh), w:gw, h:gh }), k = bk.getContext('2d'), ko = bufAt(bk, T);
+  k.setTransform(1, 0, 0, 1, 0, 0); k.globalAlpha = 1; k.filter = 'none'; k.globalCompositeOperation = 'source-over'; k.clearRect(0, 0, bk.width, bk.height);
+  k.drawImage(T, ko.x, ko.y);
+  clampEdges(bk); // além da borda do quadro, a última linha/coluna dele (sem isso a borda escurecia)
   c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 1; c.filter = 'none'; c.globalCompositeOperation = 'source-over'; c.clearRect(0, 0, m.width, m.height);
-  // a forma da camada com o alfa reforçado: vidro com preenchimento quase transparente ainda desfoca tudo atrás
-  for (let i = 0; i < 6; i++) c.drawImage(src, 0, 0);
-  // um pouco maior que o quadro, para a borda da tela não escurecer o desfoque
-  const w = tc.canvas.width, hh = tc.canvas.height, F = frameCenter(tc.canvas), k = 1 + b * 3 / Math.min(F.w, F.h);
+  const mo = bufAt(m, msk);
+  // a forma da camada com o alfa reforçado: vidro com preenchimento quase transparente ainda desfoca tudo atrás.
+  // Com a máscara da forma, o alfa dela já é o da animação e da opacidade (entrar com fade também traz o desfoque aos poucos)
+  for (let i = 0, n = mask ? 1 : 6; i < n; i++) c.drawImage(msk, mo.x, mo.y);
+  const o = bufAt(m, bk);
   c.globalCompositeOperation = 'source-in'; c.filter = `blur(${b.toFixed(2)}px)`;
-  c.drawImage(tc.canvas, o.x + F.cx * (1 - k), o.y + F.cy * (1 - k), w * k, hh * k);
+  c.drawImage(bk, o.x, o.y);
   c.filter = 'none'; c.globalCompositeOperation = 'source-over';
   // com desfoque da camada, a borda do vidro também borra: o fundo desfocado se dissolve no quadro em vez de cortar em linha seca
   if (lb > .2 && padOf(m)) clampEdges(m);
+  const to = bufAt(T, m);
   tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1;
-  if (lb > .2) blurClip(tc, -o.x, -o.y, m.width, m.height, lb);
+  if (lb > .2) blurClip(tc, to.x, to.y, m.width, m.height, lb);
   tc.filter = lb > .2 ? `blur(${lb.toFixed(2)}px)` : 'none'; tc.globalCompositeOperation = 'source-over';
-  tc.drawImage(m, -o.x, -o.y); tc.restore();
+  tc.drawImage(m, to.x, to.y); tc.restore();
 }
 // estica a última linha/coluna do quadro pela margem da tela: o desfoque continua a camada além da borda do quadro
 // (sem isso, o que encosta ou passa da borda clareava perto dela). Com recorte (palco com zoom), só nos lados em que o canvas
@@ -3634,9 +3655,9 @@ function frameCenter(c) {
   return { w, h:hh, cx:w / 2 - voX(c), cy:hh / 2 - voY(c) };
 }
 // devolve ao quadro a camada pronta (src, em pixels): desfoque do fundo atrás, sombra, desfoque da camada e mesclagem
-function composeOnto(tc, src, L, sh, bm, rs) {
+function composeOnto(tc, src, L, sh, bm, rs, mask = null) {
   const lb = (L.lblur || 0) * rs, bb = L.type === 'bg' ? 0 : (L.bblur || 0) * rs;
-  if (bb > .2) backBlur(tc, src, bb, lb);
+  if (bb > .2) backBlur(tc, src, bb, lb, mask);
   if (sh && !bm && lb <= .2) { drawShadowed(tc, src, L, sh, rs); return; }
   // a sombra mistura e borra junto com a camada (como no CSS e no Figma): primeiro camada + sombra, depois o modo e o desfoque
   let out = src;
@@ -3753,10 +3774,19 @@ function drawLayerFx0(tc, L, t, R, cam, depth, one) {
     if (!sh && !bm && !blurOn(L)) { tc.save(); applyCam(tc, cam, L, depth); one(tc, L); tc.restore(); return; }
     if (!phase(L, t)) return;
     // sombra, mesclagem e desfoque pedem a camada inteira pronta, à parte
-    const P = fxPad(L, sh, R.rs, tc.canvas.width, tc.canvas.height), src = frameBuf(tc.canvas, 1, P, L.type === 'bg' ? null : fxGeo(tc, L, t, cam, depth)), lc = src.getContext('2d');
-    lc.setTransform(1, 0, 0, 1, 0, 0); lc.clearRect(0, 0, src.width, src.height);
-    lc.setTransform(R.rs, 0, 0, R.rs, P - voX(src), P - voY(src)); applyCam(lc, cam, L, depth); one(lc, L);
-    composeOnto(tc, src, L, sh, bm, R.rs);
+    const P = fxPad(L, sh, R.rs, tc.canvas.width, tc.canvas.height), geo = L.type === 'bg' ? null : fxGeo(tc, L, t, cam, depth);
+    const paint = slot => {
+      const c = frameBuf(tc.canvas, slot, P, geo), x = c.getContext('2d');
+      x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, c.width, c.height);
+      x.setTransform(R.rs, 0, 0, R.rs, P - voX(c), P - voY(c)); applyCam(x, cam, L, depth); one(x, L);
+      return c;
+    };
+    const src = paint(1);
+    // "Desfocar atrás" numa forma: o desfoque vale na forma inteira, mesmo com o preenchimento transparente ou "sem cor" (como no
+    // Figma). A forma é desenhada de novo com o preenchimento opaco (RT.bbMask) e essa é a máscara do vidro
+    let mask = null;
+    if (L.type === 'shape' && (L.bblur || 0) * R.rs > .2) { RT.bbMask = true; try { mask = paint('bm'); } finally { RT.bbMask = false; } }
+    composeOnto(tc, src, L, sh, bm, R.rs, mask);
   } finally { if (back) Object.assign(L, back); }
 }
 
@@ -4009,9 +4039,9 @@ function fitRes() {
    #cvr cobre só a parte vista e uma margem em volta (VIEW_M da área visível para cada lado, no mínimo VIEW_MIN px da tela):
    arrastar com a mão ou rolar dentro da margem não redesenha nada; passou dela, o recorte anda (viewCovered no tick).
    O desenho é o mesmo do quadro inteiro (renderFrame com c._vo, ver frameBuf). Câmera com desfoque/chicote lê o quadro longe
-   dali: nesses quadros o palco desenha o quadro inteiro (viewFull). "Borrar atrás" lê o que já está desenhado em volta e amplia
-   em volta do centro do quadro (backBlur): perto de um lado do recorte que não é borda do quadro sai errado, então a margem
-   cresce e essa faixa (V.g, viewGuard) nunca aparece */
+   dali: nesses quadros o palco desenha o quadro inteiro (viewFull). "Desfocar atrás" lê o que já está desenhado em volta
+   (backBlur): perto de um lado do recorte que não é borda do quadro sai errado, então a margem cresce e essa faixa
+   (V.g, viewGuard) nunca aparece */
 const VIEW_M = .3, VIEW_MIN = 200;
 let VIEW = null; // { x, y, w, h, fw, fh, g } em px do quadro inteiro na resolução RS; null = quadro inteiro
 function stageVis() {
@@ -4032,15 +4062,14 @@ function viewFull() {
   if (S.still) return false;
   const cam = camAt(T); return cam.blur > .3 || cam.whip;
 }
-// faixa (px do canvas) perto dos lados do recorte em que "borrar atrás" sai errado: o alcance do desfoque mais a ampliação
-// em volta do centro do quadro (no pior caso, na borda do quadro)
+// faixa (px do canvas) perto dos lados do recorte em que "desfocar atrás" sai errado: o alcance do desfoque (backBlur lê o que
+// está desenhado em volta da camada)
 function viewGuard(fw, fh, rs = RS) {
   let b = 0;
   for (const L of S.layers) if (L.visible && L.type !== 'bg' && L.bblur > 0 && phase(L, T)) b = Math.max(b, L.bblur);
   const gs = S.groups || {}; for (const g in gs) if (gs[g] && gs[g].bblur > 0) b = Math.max(b, gs[g].bblur);
   if (!b) return 0;
-  b *= rs; const k = 1 + b * 3 / Math.min(fw, fh);
-  return Math.ceil(b * 3 + (1 - 1 / k) * Math.max(fw, fh) / 2) + 8;
+  return Math.ceil(b * rs * 3) + 24;
 }
 function setView(full, rs = RS) {
   const fw = Math.max(1, Math.round(FW() * rs)), fh = Math.max(1, Math.round(H() * rs)), v = full ? null : stageVis();
@@ -10188,10 +10217,10 @@ function fxFields(L) {
   // desfoque da camada e do fundo (vidro), em px
   for (const k of L.type === 'bg' ? ['lblur'] : ['lblur', 'bblur']) {
     L[k] ??= 0;
-    out.push(rangeF(L, k, k === 'lblur' ? 'Desfoque' : 'Borrar atrás', 0, 800, 1, v => Math.round(v || 0) + ' px', { after:renderProps }),
+    out.push(rangeF(L, k, k === 'lblur' ? 'Desfoque' : 'Desfocar atrás', 0, 800, 1, v => Math.round(v || 0) + ' px', { after:renderProps }),
       segPick(L, k, BLURS[k].map(([v, t]) => [v, t, v ? `${t}: ${v} px` : t]), null, null, 0, peersAny));
   }
-  if (L.type !== 'bg' && L.bblur > 0) out.push(h('p', { class:'hint', text:'Borra o que está atrás, no formato do elemento. Com preenchimento meio transparente, vira vidro.' }));
+  if (L.type !== 'bg' && L.bblur > 0) out.push(h('p', { class:'hint', text:'Desfoca o que está atrás, no formato do elemento. Com preenchimento meio transparente, vira vidro.' }));
   return out.filter(Boolean);
 }
 
