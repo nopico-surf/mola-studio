@@ -2965,7 +2965,9 @@ function drawBlockBody(ctx, L, G, info, R) {
       ctx.clip();
       const pn = panOf(L), iw = G.img.naturalWidth, ih = G.img.naturalHeight, k = Math.max(G.w / iw, G.h / ih) * pn.zoom; // enquadramento do formato aberto
       const dw = iw * k, dh = ih * k;
+      if (L.flipX || L.flipY) ctx.scale(L.flipX ? -1 : 1, L.flipY ? -1 : 1); // virar a imagem dentro da máscara
       ctx.drawImage(adjImg(L, G.img), -dw / 2 + pn.ix * G.w, -dh / 2 + pn.iy * G.h, dw, dh);
+      if (L.flipX || L.flipY) ctx.scale(L.flipX ? -1 : 1, L.flipY ? -1 : 1);
       if (L.aVig && masked(L)) adjVignette(ctx, L.aVig, G.w, G.h);
       ctx.restore();
       if (strokeSee(L)) strokeOnPath(ctx, L.mask === 'circle' ? (() => { const p = new Path2D(); p.ellipse(0, 0, G.w / 2, G.h / 2, 0, 0, TAU); return p; })() : rrectP(-G.w / 2, -G.h / 2, G.w, G.h, radOf(L)), L);
@@ -7132,6 +7134,11 @@ function openMenu(ev, L) {
     item(L.visible ? 'Ocultar' : 'Mostrar', () => { if (isBg) { pushUndo(); L.visible = !L.visible; changed({ layers:true }); } else toggleVisible(); }, { kbd:'Ctrl+Shift+H' }),
     item('Trazer para frente', () => move(i, 1), { off:isBg || i >= S.layers.length - 1, kbd:'Ctrl+]' }),
     item('Enviar para trás', () => move(i, -1), { off:isBg || i <= 1, kbd:'Ctrl+[' }),
+    item('Trazer para a frente de tudo', () => restack(L, 2), { off:isBg || i >= S.layers.length - 1, kbd:'Ctrl+Shift+]' }),
+    item('Enviar para trás de tudo', () => restack(L, -2), { off:isBg || i <= 1, kbd:'Ctrl+Shift+[' }),
+    ...(L.type === 'image' ? [
+      item('Virar na horizontal', () => { pushUndo(); L.flipX ? delete L.flipX : (L.flipX = true); changed({ layers:true }); renderProps(); }),
+      item('Virar na vertical', () => { pushUndo(); L.flipY ? delete L.flipY : (L.flipY = true); changed({ layers:true }); renderProps(); })] : []),
     h('hr'),
     item('Converter em vetor', vectorize, { off:isBg || !(L.type === 'text' || canOutline(L)), kbd:'Ctrl+Shift+O' }),
     item('Salvar seleção (PNG)', () => saveFramePng(), { off:isBg }),
@@ -9210,6 +9217,8 @@ function mediaFields(L) {
       catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
     }) : uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem', 'image/*', async f => { const src = await imageSrc(f); pushUndo(); L.src = src; delete L.cut; await getImage(L.src); changed({ props:true }); }),
     cutoutF(L),
+    field('Virar', h('div', { class:'segs tight', role:'group' }, [['flipX', 'Horizontal', 'Espelhar na horizontal'], ['flipY', 'Vertical', 'Espelhar na vertical']].map(([k, t, tip]) =>
+      h('button', { 'aria-pressed':String(!!L[k]), text:t, title:tip, onclick:() => { pushUndo(); const on = !L[k]; for (const o of peersOf(L)) { if (on) o[k] = true; else delete o[k]; } changed({ layers:true }); renderProps(); } })))),
     field('Moldura', segPick(L, 'device', Object.entries(DEVICES), (v, o) => {
       if (v === 'phone') { o.mask = 'rect'; o.mh = +(o.size * 2.05).toFixed(4); o.radius = Math.round(o.size * W() * .12); o.zoom = 1; o.ix = 0; o.iy = 0; }
       if (v === 'browser') { o.mask = 'rect'; if (o.mh == null) { const G = blockGeom(o); o.mh = +((G ? G.h / W() : o.size * .62)).toFixed(4); } o.radius = 0; }

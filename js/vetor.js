@@ -717,8 +717,9 @@ async function svgImage(L, X) {
       : r4.every(v => Math.abs(v - r4[0]) < .01) ? a => `<rect x="${sn(-G.w / 2)}" y="${sn(-G.h / 2)}" width="${sn(G.w)}" height="${sn(G.h)}"${r4[0] > .01 ? ` rx="${sn(r4[0])}"` : ''} ${a}/>`
         : a => `<path d="${vecD(shapePts({ ...L, kind:'rect' }, G))}" ${a}/>`;
     const id = X.id(); X.defs.push(`<clipPath id="${id}">${el('')}</clipPath>`);
-    body = `<g clip-path="url(#${id})"><image x="${sn(-dw / 2 + pn.ix * G.w)}" y="${sn(-dh / 2 + pn.iy * G.h)}" width="${sn(dw)}" height="${sn(dh)}" preserveAspectRatio="none" xlink:href="${data}"/></g>${svgStroke(L, el, X)}`;
-  } else body = `<image x="${sn(-G.w / 2)}" y="${sn(-G.h / 2)}" width="${sn(G.w)}" height="${sn(G.h)}" preserveAspectRatio="none" xlink:href="${data}"/>`;
+    const fl = L.flipX || L.flipY ? ` transform="scale(${L.flipX ? -1 : 1} ${L.flipY ? -1 : 1})"` : '';
+    body = `<g clip-path="url(#${id})"><image${fl} x="${sn(-dw / 2 + pn.ix * G.w)}" y="${sn(-dh / 2 + pn.iy * G.h)}" width="${sn(dw)}" height="${sn(dh)}" preserveAspectRatio="none" xlink:href="${data}"/></g>${svgStroke(L, el, X)}`;
+  } else body = `<image${L.flipX || L.flipY ? ` transform="scale(${L.flipX ? -1 : 1} ${L.flipY ? -1 : 1})"` : ''} x="${sn(-G.w / 2)}" y="${sn(-G.h / 2)}" width="${sn(G.w)}" height="${sn(G.h)}" preserveAspectRatio="none" xlink:href="${data}"/>`;
   return svgWrap(L, `<g transform="translate(${sn(cx)} ${sn(cy)})${Math.abs(k - 1) > 1e-4 ? ` scale(${+k.toFixed(5)})` : ''}">${body}</g>`, X);
 }
 // logo SVG entra como SVG de verdade (o desenho continua vetorial); logo PNG, como imagem
