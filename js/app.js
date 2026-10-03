@@ -2177,6 +2177,22 @@ function blurClip(ctx, x, y, w, h, b) {
   const M = ctx.getTransform(), s = Math.min(Math.hypot(M.a, M.b), Math.hypot(M.c, M.d)) || 1, m = (b * 3 + 3) / s;
   ctx.beginPath(); ctx.rect(x - m, y - m, w + 2 * m, h + 2 * m); ctx.clip();
 }
+// o Chrome ignora blur() abaixo de ~0,7 px e trata 0,8 a 1,2 px como o mesmo valor: com o palco reduzido (carrossel, zoom
+// afastado) o desfoque da camada e o "desfocar atrás" sumiam. Abaixo de SUB_BLUR px, subBlur desfoca numa tela ampliada e volta
+// ao tamanho (mesma margem e recorte de src); devolve null quando o filtro normal basta
+const SUB_BLUR = 2, UPBUF = {};
+function upBuf(k, w, hh) { let c = UPBUF[k]; if (!c) c = UPBUF[k] = document.createElement('canvas'); if (c.width !== w || c.height !== hh) { c.width = w; c.height = hh; } return c; }
+function subBlur(src, b) {
+  if (!(b > 0 && b < SUB_BLUR)) return null;
+  const w = src.width, hh = src.height, f = Math.min(Math.ceil(2.5 / b), Math.floor(4096 / Math.max(w, hh)));
+  if (f < 2) return null;
+  const big = upBuf('up', w * f, hh * f), bx = big.getContext('2d'), out = upBuf('dn', w, hh), ox = out.getContext('2d');
+  bx.setTransform(1, 0, 0, 1, 0, 0); bx.globalAlpha = 1; bx.globalCompositeOperation = 'source-over'; bx.clearRect(0, 0, big.width, big.height);
+  bx.imageSmoothingEnabled = true; bx.filter = `blur(${(b * f).toFixed(2)}px)`; bx.drawImage(src, 0, 0, w * f, hh * f); bx.filter = 'none';
+  ox.setTransform(1, 0, 0, 1, 0, 0); ox.globalAlpha = 1; ox.filter = 'none'; ox.globalCompositeOperation = 'source-over'; ox.clearRect(0, 0, w, hh);
+  ox.imageSmoothingEnabled = true; ox.imageSmoothingQuality = 'high'; ox.drawImage(big, 0, 0, w, hh);
+  out._pad = src._pad; out._vo = src._vo; return out;
+}
 function fxFilter(st, rs) { return st.blur > .15 ? `blur(${(st.blur * rs).toFixed(2)}px)` : ''; }
 function brightCol(c, b) {
   if (!(b > 1.005)) return c;
@@ -3387,7 +3403,7 @@ function fxPad(L, sh, rs, w, hh) {
   if (L.type === 'bg') return 0; // o fundo não passa do quadro (o desfoque dele já desenha um pouco maior)
   let p = (L.lblur || 0) * rs * 3;
   if (sh) { const k = shadowK(L) * rs; p += sh.long ? 28 * Math.max(.75, 3.4 * k) : ((sh.blur || 0) + Math.max(Math.abs(sh.x || 0), Math.abs(sh.y || 0))) * k; }
-  return p < 1 ? 0 : Math.min(Math.ceil(p / 32) * 32, Math.ceil(Math.max(w, hh) / 2));
+  return p <= 0 ? 0 : Math.min(Math.ceil(p / 32) * 32, Math.ceil(Math.max(w, hh) / 2));
 }
 
 /* ------------ mesclagem (blend mode): como a camada se mistura com o que está atrás dela.
@@ -3615,17 +3631,17 @@ function backBlur(tc, src, b, lb = 0, mask = null) {
   // a forma da camada com o alfa reforçado: vidro com preenchimento quase transparente ainda desfoca tudo atrás.
   // Com a máscara da forma, o alfa dela já é o da animação e da opacidade (entrar com fade também traz o desfoque aos poucos)
   for (let i = 0, n = mask ? 1 : 6; i < n; i++) c.drawImage(msk, mo.x, mo.y);
-  const o = bufAt(m, bk);
-  c.globalCompositeOperation = 'source-in'; c.filter = `blur(${b.toFixed(2)}px)`;
-  c.drawImage(bk, o.x, o.y);
+  const o = bufAt(m, bk), sb = subBlur(bk, b);
+  c.globalCompositeOperation = 'source-in'; c.filter = sb ? 'none' : `blur(${b.toFixed(2)}px)`;
+  c.drawImage(sb || bk, o.x, o.y);
   c.filter = 'none'; c.globalCompositeOperation = 'source-over';
   // com desfoque da camada, a borda do vidro também borra: o fundo desfocado se dissolve no quadro em vez de cortar em linha seca
-  if (lb > .2 && padOf(m)) clampEdges(m);
-  const to = bufAt(T, m);
+  if (lb > 0 && padOf(m)) clampEdges(m);
+  const to = bufAt(T, m), sl = subBlur(m, lb), nb = lb > 0 && !sl;
   tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1;
-  if (lb > .2) blurClip(tc, to.x, to.y, m.width, m.height, lb);
-  tc.filter = lb > .2 ? `blur(${lb.toFixed(2)}px)` : 'none'; tc.globalCompositeOperation = 'source-over';
-  tc.drawImage(m, to.x, to.y); tc.restore();
+  if (nb) blurClip(tc, to.x, to.y, m.width, m.height, lb);
+  tc.filter = nb ? `blur(${lb.toFixed(2)}px)` : 'none'; tc.globalCompositeOperation = 'source-over';
+  tc.drawImage(sl || m, to.x, to.y); tc.restore();
 }
 // estica a última linha/coluna do quadro pela margem da tela: o desfoque continua a camada além da borda do quadro
 // (sem isso, o que encosta ou passa da borda clareava perto dela). Com recorte (palco com zoom), só nos lados em que o canvas
@@ -3657,8 +3673,8 @@ function frameCenter(c) {
 // devolve ao quadro a camada pronta (src, em pixels): desfoque do fundo atrás, sombra, desfoque da camada e mesclagem
 function composeOnto(tc, src, L, sh, bm, rs, mask = null) {
   const lb = (L.lblur || 0) * rs, bb = L.type === 'bg' ? 0 : (L.bblur || 0) * rs;
-  if (bb > .2) backBlur(tc, src, bb, lb, mask);
-  if (sh && !bm && lb <= .2) { drawShadowed(tc, src, L, sh, rs); return; }
+  if (bb > 0) backBlur(tc, src, bb, lb, mask);
+  if (sh && !bm && lb <= 0) { drawShadowed(tc, src, L, sh, rs); return; }
   // a sombra mistura e borra junto com a camada (como no CSS e no Figma): primeiro camada + sombra, depois o modo e o desfoque
   let out = src;
   if (sh) {
@@ -3666,13 +3682,13 @@ function composeOnto(tc, src, L, sh, bm, rs, mask = null) {
     oc.setTransform(1, 0, 0, 1, 0, 0); oc.clearRect(0, 0, out.width, out.height);
     drawShadowed(oc, src, L, sh, rs);
   }
-  if (lb > .2 && padOf(out)) clampEdges(out);
-  const w = out.width, hh = out.height, F = frameCenter(out), k = L.type === 'bg' && lb > .2 ? 1 + lb * 3 / Math.min(F.w, F.h) : 1; // o fundo borrado não mostra borda
-  const o = bufAt(tc.canvas, out);
+  if (lb > 0 && padOf(out)) clampEdges(out);
+  const w = out.width, hh = out.height, F = frameCenter(out), k = L.type === 'bg' && lb > 0 ? 1 + lb * 3 / Math.min(F.w, F.h) : 1; // o fundo borrado não mostra borda
+  const o = bufAt(tc.canvas, out), sl = subBlur(out, lb), nb = lb > 0 && !sl;
   tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1;
-  if (lb > .2 && k === 1) blurClip(tc, o.x, o.y, w, hh, lb); // fundo (k > 1) cobre o quadro: recorte não ajuda
-  tc.globalCompositeOperation = bm || 'source-over'; tc.filter = lb > .2 ? `blur(${lb.toFixed(2)}px)` : 'none';
-  tc.drawImage(out, o.x + F.cx * (1 - k), o.y + F.cy * (1 - k), w * k, hh * k);
+  if (nb && k === 1) blurClip(tc, o.x, o.y, w, hh, lb); // fundo (k > 1) cobre o quadro: recorte não ajuda
+  tc.globalCompositeOperation = bm || 'source-over'; tc.filter = nb ? `blur(${lb.toFixed(2)}px)` : 'none';
+  tc.drawImage(sl || out, o.x + F.cx * (1 - k), o.y + F.cy * (1 - k), w * k, hh * k);
   tc.restore();
 }
 // carrossel, "Manter dentro do slide" (L.slideClip, pedido do usuário): o elemento continua podendo vazar na posição, mas só aparece
@@ -3785,7 +3801,7 @@ function drawLayerFx0(tc, L, t, R, cam, depth, one) {
     // "Desfocar atrás" numa forma: o desfoque vale na forma inteira, mesmo com o preenchimento transparente ou "sem cor" (como no
     // Figma). A forma é desenhada de novo com o preenchimento opaco (RT.bbMask) e essa é a máscara do vidro
     let mask = null;
-    if (L.type === 'shape' && (L.bblur || 0) * R.rs > .2) { RT.bbMask = true; try { mask = paint('bm'); } finally { RT.bbMask = false; } }
+    if (L.type === 'shape' && (L.bblur || 0) * R.rs > 0) { RT.bbMask = true; try { mask = paint('bm'); } finally { RT.bbMask = false; } }
     composeOnto(tc, src, L, sh, bm, R.rs, mask);
   } finally { if (back) Object.assign(L, back); }
 }
