@@ -3470,10 +3470,12 @@ function composeOnto(tc, src, L, sh, bm, rs) {
   tc.drawImage(out, o - (k - 1) * w / 2, o - (k - 1) * hh / 2, w * k, hh * k);
   tc.restore();
 }
-// carrossel, "Manter dentro do slide" (L.inSlide, pedido do usuário): o elemento continua podendo vazar na posição, mas só aparece
-// dentro do slide dele (recorte no retângulo do slide, no espaço do quadro; a câmera move o recorte junto)
+// carrossel, "Manter dentro do slide" (L.slideClip, pedido do usuário): o elemento continua podendo vazar na posição, mas só aparece
+// dentro do slide dele (recorte no retângulo do slide, no espaço do quadro; a câmera move o recorte junto).
+// Não usar L.inSlide: é a direção do deslize de entrada ('L', 'R'…); por um tempo a caixa gravou true ali (slideClipOf lê os dois)
+const slideClipOf = L => !!L.slideClip || L.inSlide === true;
 function drawLayerFx(tc, L, t, R, cam, depth, one) {
-  if (!L.inSlide || slides() < 2 || L.type === 'bg') return drawLayerFx0(tc, L, t, R, cam, depth, one);
+  if (!slideClipOf(L) || slides() < 2 || L.type === 'bg') return drawLayerFx0(tc, L, t, R, cam, depth, one);
   const si = slideOfL(L);
   tc.save(); tc.beginPath(); tc.rect(si * W(), 0, W(), H()); tc.clip();
   try { drawLayerFx0(tc, L, t, R, cam, depth, one); } finally { tc.restore(); }
@@ -6597,9 +6599,10 @@ function alignBar() {
     ? [checkF(L, 'keepIn', 'Manter dentro da margem'), h('p', { class:'hint', text:`Precisa da margem ligada. Se ${L.type === 'image' ? 'a imagem' : 'a forma'} não couber, ela encolhe.` })] : [];
   // carrossel: recorta no slide (o elemento pode vazar na posição, mas o que passa da borda do slide some)
   if (slides() > 1 && ls.length) {
-    const on = ls.every(l => l.inSlide), id = 'inSlide-' + ls.map(l => l.id).join('-');
+    const on = ls.every(slideClipOf), id = 'slideClip-' + ls.map(l => l.id).join('-');
     const inp = h('input', { type:'checkbox', id, checked:on });
-    inp.addEventListener('change', () => { pushUndo(); for (const o of ls) o.inSlide = inp.checked || undefined; changed(); needs = true; });
+    inp.addEventListener('change', () => { pushUndo();
+      for (const o of ls) { o.slideClip = inp.checked || undefined; if (o.inSlide === true) delete o.inSlide; } changed(); needs = true; });
     keep.push(h('label', { class:'check', for:id, title:'O que passar da borda do slide fica escondido, como uma máscara no slide' }, [inp, 'Manter dentro do slide']));
   }
   return h('section', { class:'sec' }, [
