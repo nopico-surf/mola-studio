@@ -7990,6 +7990,9 @@ function pasteLayers(p) {
   const src = (p && Array.isArray(p.layers) ? p.layers : []).filter(o => o && o.type && o.type !== 'bg');
   if (!src.length) return;
   const fr = insertTarget(new Set(src.map(o => o.id)));
+  // cola logo acima do que está escolhido; sem seleção, acima do original copiado (se ainda existe); senão no topo
+  const topIdx = ids_ => Math.max(-1, ...S.layers.map((l, i) => ids_.has(l.id) ? i : -1));
+  let at = topIdx(RT.picks || new Set()); if (at < 0) at = topIdx(new Set(src.map(o => o.id)));
   pushUndo();
   let fontsAdded = false;
   for (const f of p.fonts || []) if (f && f.family && !S.brand.loaded.some(x => x.family === f.family)) {
@@ -8014,10 +8017,11 @@ function pasteLayers(p) {
     c.start = clamp(+c.start || 0, 0, Math.max(0, S.duration - .3));
     c.end = toEnd ? S.duration : clamp(c.end, c.start + .3, S.duration);
     if (c.src) getImage(c.src);
-    S.layers.push(c); out.push(c);
+    out.push(c);
   }
+  S.layers.splice(at < 0 ? S.layers.length : at + 1, 0, ...out);
   // carrossel: Meus elementos entram no slide atual; colado que cairia depois do último slide (veio de um carrossel maior) também
-  if (!fr) { const s0 = Math.floor(clamp(Math.min(...out.map(l => +l.x || 0)), 0, 1e3)); if (p.here || s0 >= slides()) toSlide(out, s0, curSlide()); }
+  if (!fr) { const s0 = Math.floor(clamp(Math.min(...out.map(l => +l.x || 0)), 0, 1e3)); if (slides() > 1) toSlide(out, s0, curSlide()); }
   if (fr) intoFrame(fr, out);
   RT.picks = new Set(out.map(l => l.id)); RT.selected = out[out.length - 1].id;
   if (fontsAdded) renderBrand();
