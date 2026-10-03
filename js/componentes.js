@@ -16,7 +16,8 @@ const COMP_DEF = {
   hl:     { type:'text', role:'offer', label:'Destaque', y:.6, p:{ text:'frete grátis hoje', font:'@f1', weight:700, size:56, color:'@c0', hl:'@c2', in:'highlight' } },
   impact: { type:'text', role:'k1', label:'Impacto', name:'Frase de impacto', y:.5, p:{ text:'Sem pressa.', font:'@f2', weight:800, size:132, upper:true, lh:1, color:'@c1', hl:'@c2', in:'stamp' } },
   cta:    { type:'cta', role:'cta', label:'Botão', y:.74, p:{ text:'Peça agora  →', font:'@f1', weight:700, size:40, color:'@c0', bg:'@c2', lineColor:'@c2', in:'pop', idle:'pulse' } },
-  logo:   { type:'logo', label:'Logo', p:{ drawColor:'@c2', lineColor:'@c2', tintColor:'@c1', idle:'shine' } },
+  // sizeA/sizeS = largura do logo sozinho no quadro / com outros elementos (fração da largura); viram L.size ao inserir
+  logo:   { type:'logo', label:'Logo', p:{ sizeA:.36, sizeS:.14, drawColor:'@c2', lineColor:'@c2', tintColor:'@c1', idle:'shine' } },
   image:  { type:'image', label:'Imagem', y:.42, p:{ idle:'float', lineColor:'@c2' } },
   shape:  { type:'shape', label:'Forma', y:.5, p:{ c1:'@c2', c2:'@c0', c3:'@c3', c4:'@c4', strokeColor:'@c1' } },
   // quadro e cena (pedido do usuário: margem, fundo e o resto que faz sentido). Fundo, margem e formato valem para o arquivo novo
@@ -82,9 +83,10 @@ function mkComp(id) {
   if (d.type === 'logo') { // sozinho no quadro = logo grande; com outros = logo pequeno no topo. Escreve com a caneta se o logo permitir
     const pen = RT.logo && RT.logo.pen, alone = !S.layers.some(l => l.type !== 'bg');
     role = alone ? 'logo' : 'logoSmall';
-    Object.assign(o, { y:alone ? .42 : .12, size:alone ? .36 : .14, in:pen ? 'handwrite' : 'spring', inDur:pen ? BP.handwrite.dur : BP.spring.dur });
+    Object.assign(o, { y:alone ? .42 : .12, in:pen ? 'handwrite' : 'spring', inDur:pen ? BP.handwrite.dur : BP.spring.dur });
   }
   const p = compProps(id);
+  if (d.type === 'logo') { o.size = role === 'logo' ? p.sizeA : p.sizeS; delete p.sizeA; delete p.sizeS; }
   if (p.in && p.inDur == null) delete o.inDur; // preset trocado no padrão: duração do preset
   Object.assign(o, p);
   return d.type === 'text' ? mkText(role, o) : d.type === 'cta' ? mkCta(o) : d.type === 'logo' ? mkLogo(role, o) : d.type === 'image' ? mkImage(o) : mkShape(o);
@@ -97,7 +99,8 @@ function compCapture(L, id) {
     const v = L[k] && typeof L[k] === 'object' ? JSON.parse(JSON.stringify(L[k])) : L[k];
     out[k] = toBrandRef(k, v, raw[k]);
   }
-  if (COMP_DEF[id].type === 'logo') { delete out.size; delete out.drawOrig; } // tamanho do logo depende de estar sozinho ou não
+  // tamanho do logo: vai para o de sozinho ou o de com outros, conforme o papel do selecionado
+  if (COMP_DEF[id].type === 'logo') { if (out.size > 0) out[L.role === 'logo' ? 'sizeA' : 'sizeS'] = out.size; delete out.size; delete out.drawOrig; }
   // guarda só o que difere da fábrica (o resto continua seguindo a fábrica e a marca)
   const fac = COMP_DEF[id].p, keep = S.brand.comps && S.brand.comps[id];
   if (S.brand.comps) delete S.brand.comps[id];
@@ -105,6 +108,7 @@ function compCapture(L, id) {
   if (keep) S.brand.comps[id] = keep;
   const off = !strokeOn(L); // os campos do contorno ficam na camada mesmo desligado (o painel preenche): sem contorno, não contam
   for (const k in out) {
+    if ((k === 'sizeA' || k === 'sizeS') && out[k] === raw[k]) { delete out[k]; continue; }
     if (L0[k] === undefined && (!out[k] || out[k] === 'none' || off && /^stroke[A-Z]/.test(k))) { delete out[k]; continue; }
     const same = JSON.stringify(brandRef(out[k])) === JSON.stringify(L0[k]);
     if (same && (out[k] === fac[k] || !(typeof fac[k] === 'string' && fac[k][0] === '@'))) delete out[k];
@@ -147,10 +151,12 @@ function compFromLayer(L, id = compKindOf(L)) {
 // o padrão de volta num elemento que já está no arquivo (texto, posição e tempo ficam)
 function compApply(ls, id, D = S.duration) { // D = duração do arquivo dessas camadas
   const p = compProps(id); delete p.text;
-  const M = COMP_DEF[id].type === 'text' ? TP : BP;
+  const M = COMP_DEF[id].type === 'text' ? TP : BP, sz = COMP_DEF[id].type === 'logo' && { A:p.sizeA, S:p.sizeS };
+  if (sz) { delete p.sizeA; delete p.sizeS; }
   for (const L of ls) {
     const fx0 = L.fx;
     Object.assign(L, p);
+    if (sz) L.size = L.role === 'logo' ? sz.A : sz.S; // logo grande (sozinho) ou pequeno (com outros)
     if (p.in && compRaw(id).inDur == null && M[p.in]) L.inDur = M[p.in].dur;
     // outra transição: mantém o meio e usa a duração dela (como no painel)
     if (L.type === 'fx' && L.fx !== fx0 && FXS[L.fx] && FXS[L.fx].dur) {
@@ -190,6 +196,7 @@ function compMeta(id, p = compProps(id)) {
   if (t === 'file') return `${fmtLabel(p.format)} · ${String(p.duration).replace('.', ',')} s` + (p.slides > 1 ? ` · ${p.slides} slides` : '');
   if (t === 'fx') return (FXS[p.fx] || {}).label || '';
   if (t === 'camera') return (CAMS[p.cam] || {}).label || '';
+  if (t === 'logo') return `${Math.round(p.sizeA * 100)}% · ${Math.round(p.sizeS * 100)}%`;
   return '';
 }
 
@@ -335,6 +342,7 @@ function openComps(id = 'title') {
   const REDRAW = new Set(['mode', 'fx', 'cam', 'on']); // mudam quais campos aparecem
   const proxy = () => {
     const tgt = mkComp(cur);
+    if (COMP_DEF[cur].type === 'logo') { const p = compProps(cur); tgt.sizeA = p.sizeA; tgt.sizeS = p.sizeS; } // mkComp já trocou por size
     if (COMP_FILE.has(cur)) tgt.id = 'comp-' + cur; // margem/formato não são camadas: id só para os campos
     return new Proxy(tgt, { set(o, k, v) {
       o[k] = v;
@@ -398,7 +406,9 @@ function openComps(id = 'title') {
     } else if (d.type === 'image') {
       put(rangeF(P, 'size', 'Largura', .1, 1.6, .01, v => Math.round(v * 100) + '%'), rangeF(P, 'radius', 'Cantos', 0, 600, 1, px));
     } else if (d.type === 'logo') {
-      put(h('p', { class:'hint', text:'O tamanho do logo depende de estar sozinho no quadro (grande) ou com outros elementos (pequeno, no topo).' }),
+      const pct = v => Math.round(v * 100) + '%';
+      put(rangeF(P, 'sizeA', 'Sozinho', .05, .95, .005, pct, { cap:3 }), rangeF(P, 'sizeS', 'Com outros', .03, .6, .005, pct, { cap:3 }),
+        h('p', { class:'hint', text:'Largura do logo em % do quadro. "Sozinho" vale quando ele é o único elemento (fica grande, no meio); "Com outros", quando já tem algo no quadro (fica no topo).' }),
         colorPick('drawColor', 'Cor do traço'));
     } else if (d.type === 'bg') {
       // as mesmas cores e estilos do painel do fundo (fillProps), ligados à marca
@@ -448,12 +458,12 @@ function openComps(id = 'title') {
     if (extra) put(h('p', { class:'hint', text:`Mais ${extra} ajuste${extra > 1 ? 's' : ''} copiado${extra > 1 ? 's' : ''} de um elemento (sombra, contorno, ritmo…). Também entram.` }));
     // ações
     const L = selL(), lb = d.label.toLowerCase(), o_ = d.fem ? 'a' : 'o';
-    let fit = L && compKindOf(L) && COMP_DEF[compKindOf(L)].type === d.type ? L : (L && L.type === d.type && !d.grp ? L : null), useTxt = 'Usar o estilo do selecionado';
+    let fit = L && compKindOf(L) && COMP_DEF[compKindOf(L)].type === d.type ? L : (L && L.type === d.type && !d.grp ? L : null), useTxt = 'Copiar do elemento selecionado';
     if (!fit && d.grp && !COMP_FILE.has(cur)) { fit = S.layers.find(l => l.type === d.type) || null; useTxt = `Copiar ${o_} ${lb} deste arquivo`; } // fundo, transição, câmera: a que está no arquivo
     const useB = COMP_FILE.has(cur)
       ? h('button', { class:'btn small', text:cur === 'margin' ? 'Usar a margem deste arquivo' : 'Usar o deste arquivo', title:'O que o arquivo aberto usa vira o padrão',
           onclick:() => { compFromFile(cur); draw(); } })
-      : h('button', { class:'btn small', text:useTxt, disabled:!fit || null, title:fit ? `Copia o estilo de "${fit.name}" para este padrão` : `Selecione um elemento do tipo ${TYPE_LABEL[d.type].toLowerCase()} no palco`,
+      : h('button', { class:'btn small', text:useTxt, disabled:!fit || null, title:fit ? `O estilo e a animação de "${fit.name}" viram este padrão` : `Selecione no palco ${d.fem ? 'uma' : 'um'} ${lb} já arrumad${o_} para copiar o estilo ${d.fem ? 'dela' : 'dele'}`,
           onclick:() => { compFromLayer(fit, cur); draw(); refresh(); } });
     put(h('div', { class:'comp-acts' }, [
       useB,
@@ -463,10 +473,11 @@ function openComps(id = 'title') {
       h('button', { class:'btn small ghost', text:'Voltar ao de fábrica', disabled:!compCustom(cur) || null,
         onclick:() => { pushUndo(); delete compsOf()[cur]; autosave(); draw(); refresh(); } }),
     ]));
+    if (!COMP_FILE.has(cur) && !d.grp) put(h('p', { class:'hint', text:`Atalho: em vez de ajustar aqui, arrume ${d.fem ? 'uma' : 'um'} ${lb} no palco (cor, animação, sombra…), deixe selecionad${o_} e clique em "Copiar do elemento selecionado". Tudo o que ${d.fem ? 'ela' : 'ele'} tem vira o padrão.` }));
     refresh();
     if (!ov.contains(document.activeElement)) card.focus({ preventScroll:true });
   };
-  const SHOWN = new Set(['text', 'font', 'weight', 'size', 'color', 'hl', 'ls', 'lh', 'align', 'upper', 'italic', 'bg', 'radius', 'padX', 'padY', 'kind', 'c1', 'c2', 'mh', 'drawColor', 'in', 'out', 'idle', 'inDur']);
+  const SHOWN = new Set(['text', 'font', 'weight', 'size', 'color', 'hl', 'ls', 'lh', 'align', 'upper', 'italic', 'bg', 'radius', 'padX', 'padY', 'kind', 'c1', 'c2', 'mh', 'sizeA', 'sizeS', 'drawColor', 'in', 'out', 'idle', 'inDur']);
   const SHOWN_G = new Set(['mode', 'c1', 'c2', 'c3', 'c4', 'src', 'darken', 'angle', 'motion', 'grain', 'on', 'top', 'right', 'bottom', 'left',
     'format', 'duration', 'fps', 'slides', 'loop', 'fx', 'cam', 'intensity', 'speed', 'opacity']);
   const drawNav = () => {
