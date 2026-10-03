@@ -312,6 +312,19 @@ const slides = () => (S && S.slides > 1 ? Math.min(SLIDES_MAX, Math.round(S.slid
 function FW() { return W() * slides(); }
 const slideAt = px => clamp(Math.floor(px / W()), 0, slides() - 1); // slide de um ponto (px do quadro inteiro)
 const slideShift = (B, s) => (B && s ? { ...B, x0:B.x0 + s * W(), x1:B.x1 + s * W() } : B);
+/* duração por slide (pedido do usuário: carrossel com imagens e vídeos juntos). S.sdur[i] = segundos do slide i (ausente = a do vídeo,
+   S.duration, que é sempre a do slide mais longo); 0 = imagem estática (como Duração = 0 no arquivo todo, só naquele slide). A timeline
+   é uma só: o slide de 6 s sai com os 6 primeiros segundos. Quem é de um slide-imagem fica em repouso o tempo todo (`layerStill`) e o
+   resto do slide (fundo, câmera, transição) é desenhado parado por cima (`renderFrame`, `RT.stillPass`). Todos os slides em 0 = S.still. */
+const slideDur = i => S.still ? 0 : slides() > 1 && S.sdur && S.sdur[i] != null ? Math.min(+S.sdur[i] || 0, S.duration) : S.duration;
+const slideStill = i => slideDur(i) === 0;
+const stillSlides = () => { if (S.still || slides() < 2 || !S.sdur) return []; const o = []; for (let i = 0; i < slides(); i++) if (slideStill(i)) o.push(i); return o; };
+// slide de uma camada pela posição guardada (não passa pela adaptação ao formato: phase é usada dentro dela). Grupo: a média dos itens
+const slideOfL = L => slides() < 2 ? 0 : clamp(Math.floor(L.__sx ?? (+L.x || 0)), 0, slides() - 1);
+const layerStill = L => !!L && !S.still && slides() > 1 && !!S.sdur && L.type !== 'bg' && !NOBOX(L) && slideStill(slideOfL(L));
+const stillNow = L => S.still || RT.stillPass || layerStill(L);
+// fim de quem vai "até o fim" num slide: a duração dele (imagem: o vídeo todo, o tempo não conta)
+const slideEnd = i => slideDur(i) || S.duration;
 // margem do slide em que fica px; sem margem, o próprio slide
 const marginAt = (px, fmt) => marginBox(fmt, slideAt(px));
 const areaAt = (px, fmt = S.format) => marginAt(px, fmt) || slideShift({ x0:0, y0:0, x1:W(), y1:FORMATS[fmt].h }, slideAt(px));
@@ -1965,7 +1978,7 @@ function imgNow(src) { if (!src) return null; const i = RT.images.get(src); if (
 // imagem estática (S.still, Duração = 0): tudo na tela junto, em repouso. Duração e animações ficam guardadas para voltar ao vídeo
 const STILL_PH = { mode:'hold', p:1, inD:0, outD:0 };
 function phase(L, t) {
-  if (S.still) return STILL_PH;
+  if (stillNow(L)) return STILL_PH;
   const end = L.end ?? S.duration;
   if (t < L.start || t > end + 1e-6) return null;
   let inD = L.in === 'cut' ? 0 : L.inDur / (spdOf(L, 'in') || 1), outD = L.out === 'cut' ? 0 : L.outDur / (spdOf(L, 'out') || 1);
@@ -1979,6 +1992,7 @@ function phase(L, t) {
 // um sai enquanto o outro entra, e esse cruzamento de frações de segundo ligava todas as cenas numa só (uma cena apertada desalinhava as outras)
 function holdSpan(L) {
   if (S.still) return [0, 1];
+  if (layerStill(L)) return [0, S.duration]; // slide-imagem: tudo dele na tela junto
   const s = L.start || 0, end = L.end ?? S.duration, ph = phase(L, s);
   if (!ph) return [s, end];
   const a = s + ph.inD, b = end - ph.outD;
@@ -2008,7 +2022,8 @@ const gAnimOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.
 function gpseudo(gid) {
   const w = gwin(gid); if (!w) return null;
   const g = gmeta(gid) || {}, inK = (g.in || 'cut') !== 'cut', outK = (g.out || 'cut') !== 'cut';
-  return { ...g, start:w.start, end:w.end, in:inK ? g.in : 'cut', out:outK ? g.out : 'cut', idle:g.idle || 'none', inDur:inK ? g.inDur ?? .8 : 0, outDur:outK ? g.outDur ?? .5 : 0 };
+  const ms = gleaves(gid);
+  return { ...g, __sx:ms.reduce((n, l) => n + (+l.x || 0), 0) / ms.length, start:w.start, end:w.end, in:inK ? g.in : 'cut', out:outK ? g.out : 'cut', idle:g.idle || 'none', inDur:inK ? g.inDur ?? .8 : 0, outDur:outK ? g.outDur ?? .5 : 0 };
 }
 // frames de fora para dentro até gid (o último é o próprio gid)
 function gchain(gid) { const c = []; for (let g = gid, n = 0; g && n < 20; g = gpar(g), n++) c.unshift(g); return c; }
@@ -2028,7 +2043,7 @@ const groupName = gid => (gmeta(gid) || {}).name || `Grupo ${groupNum(gid)}`;
 function idleState(L, t0, ph, tx, hh) {
   const I = intOf(L, 'idle'), sp = spdOf(L, 'idle'), tl = t0 * sp;
   const st = {}, hold = ph.mode === 'hold', th = (t0 - ph.inD) * sp, k = .4 + I;
-  if (S.still) return st;
+  if (stillNow(L)) return st;
   switch (L.idle) {
     case 'float': st.dy = Math.sin(tl * TAU / 3.4) * (tx ? 7 : 9) * k; break;
     case 'breathe': st.sc = 1 + Math.sin(tl * TAU / 3) * (tx ? .015 : .025) * k; break;
@@ -3121,11 +3136,27 @@ function paintFill(ctx, L, t, w, hh) {
    Quadro
    ============================================================ */
 function renderFrame(ctx, t, rs, isExport) {
-  const R = { rs, export:!!isExport };
   if (S.still) t = 0;
   RT.frameNo = (RT.frameNo || 0) + 1; // a adaptação ao formato (placement) é refeita uma vez por quadro
+  drawFrame(ctx, t, rs, isExport, null);
+  // carrossel com slides-imagem: cada um é redesenhado parado por cima (t = 0, sem câmera, transição nem movimento), recortado nele.
+  // As caixas (_bounds) que valem no palco são as da passada normal (quem é do slide-imagem já estava em repouso nela)
+  const sti = !RT.only && !RT.skipStill ? stillSlides() : [];
+  if (sti.length) {
+    const keep = S.layers.map(l => l._bounds);
+    RT.stillPass = true;
+    try { drawFrame(ctx, 0, rs, isExport, sti); } finally { RT.stillPass = false; S.layers.forEach((l, i) => { l._bounds = keep[i]; }); }
+  }
+}
+function drawFrame(ctx, t, rs, isExport, clip) {
+  const R = { rs, export:!!isExport };
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.filter = 'none'; ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  if (clip) { // só estes slides (px do canvas)
+    const k = ctx.canvas.width / FW(); ctx.save(); ctx.beginPath();
+    for (const s of clip) ctx.rect(Math.round(s * W() * k), 0, Math.round(W() * k), ctx.canvas.height);
+    ctx.clip();
+  }
   // RT.only (PNG da seleção): só essas camadas, sobre fundo transparente
   if (RT.only) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); }
@@ -3151,7 +3182,8 @@ function renderFrame(ctx, t, rs, isExport) {
   drawItems(tc, els, null, { act:gActive, done:gDone }, els, t, R, cam, one, 0);
   if (buf) camComposite(ctx, buf, cam);
   // transições por cima de tudo
-  if (!S.still && !RT.only) for (const L of S.layers) if (L.visible && L.type === 'fx') drawFx(ctx, L, t, R);
+  if (!S.still && !RT.stillPass && !RT.only) for (const L of S.layers) if (L.visible && L.type === 'fx') drawFx(ctx, L, t, R);
+  if (clip) { ctx.restore(); ctx.setTransform(rs, 0, 0, rs, 0, 0); }
 }
 
 /* ============================================================
@@ -3276,7 +3308,7 @@ function fxBlinds(c, L, u) {
 }
 function camAt(t) {
   const c = { s:1, dx:0, dy:0, r:0, par:0, blur:0, whip:0, wblur:0 };
-  if (S.still) return c;
+  if (S.still || RT.stillPass) return c;
   for (const L of S.layers) {
     if (!L.visible || !NOBOX(L)) continue;
     const end = L.end ?? S.duration; if (t < L.start || t > end) continue;
@@ -3534,7 +3566,7 @@ function drawGroup(tc, gid, gp, els, t, R, cam, one, G, depth = 0) {
 /* ------------ movimento dentro da imagem (ao longo da barra inteira): muda zoom/ix/iy só enquanto desenha ------------ */
 const MOVES = { none:'Parada', in:'Aproximar', out:'Afastar', left:'Para a esquerda', right:'Para a direita', up:'Para cima', down:'Para baixo', scroll:'Rolar a tela' };
 function imageMotion(L, t) {
-  if (S.still) return null;
+  if (stillNow(L)) return null;
   const G = geomNow(L); if (!G || !G.img) return null;
   const iw = G.img.naturalWidth, ih = G.img.naturalHeight; if (!iw || !ih) return null;
   // parte do enquadramento do formato aberto; o resultado vai em L._pan (lido por panOf) só enquanto desenha
@@ -3621,7 +3653,7 @@ function drawMark(ctx, L, lay, ph, t, R) {
   if (!L.mark || L.mark === 'none' || !MARKS[L.mark]) return;
   const big = L.mark === 'circle' || L.mark === 'box' || L.mark === 'arrow', sp = spdOf(L, 'in') || 1;
   const t0 = L.start + ph.inD * .8, md = (big ? .8 : .55) / sp;
-  let pr = S.still ? 1 : Ease.cubicOut(clamp((t - t0) / md)), a = 1;
+  let pr = stillNow(L) ? 1 : Ease.cubicOut(clamp((t - t0) / md)), a = 1;
   if (ph.mode === 'out') { pr *= 1 - clamp(ph.p * 1.5); a = 1 - clamp(ph.p * 1.4 - .3); }
   if (pr <= 0 || a <= 0) return;
   const key = [L.id, L.mark, lay.blockW.toFixed(1), lay.blockH.toFixed(1), lay.size, lay.nLines].join('|');
@@ -3739,6 +3771,13 @@ function drawOverlays() {
   }
   ctx.restore();
   }
+  // carrossel: slide de vídeo mais curto que a timeline fica apagado depois do fim dele (o arquivo dele já terminou)
+  if (slides() > 1 && S.sdur && !S.still) for (let s = 0; s < slides(); s++) {
+    const d = slideDur(s); if (!d || T <= d + 1e-3) continue;
+    ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(s * W(), 0, W(), H());
+    ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.font = `600 ${Math.round(W() * .035)}px Inter, system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(`O slide ${s + 1} termina em ${fmtSec(d)}`, s * W() + W() / 2, H() / 2);
+  }
   // carrossel: divisa entre os slides (o que atravessa aparece cortado aqui no post)
   if (slides() > 1) {
     ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = uiA('frame', .75); ctx.setLineDash([]);
@@ -3748,7 +3787,9 @@ function drawOverlays() {
   if (slides() > 1) { // número de cada slide, acima do quadro (o atual em destaque: é onde entra o que você adicionar)
     const px = 1 / OS * dpr, cur = curSlide(); ctx.save();
     ctx.font = `600 ${11 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
-    for (let s = 0; s < slides(); s++) { ctx.fillStyle = s === cur ? uiC('sel') : 'rgba(255,255,255,.5)'; ctx.fillText(`Slide ${s + 1}`, s * W() + 2 * px, -6 * px); }
+    // com durações diferentes (ou imagens), cada um diz o que é: "Slide 2 · imagem", "Slide 1 · 6,0s"
+    const tag = s => !S.sdur || S.still ? '' : slideStill(s) ? ' · imagem' : ` · ${fmtSec(slideDur(s))}`;
+    for (let s = 0; s < slides(); s++) { ctx.fillStyle = s === cur ? uiC('sel') : 'rgba(255,255,255,.5)'; ctx.fillText(`Slide ${s + 1}${tag(s)}`, s * W() + 2 * px, -6 * px); }
     ctx.restore();
   }
   const ub = selUnion();
@@ -3894,6 +3935,7 @@ function tick(now) {
 }
 const fmtT = s => { s = Math.max(0, s); const m = Math.floor(s / 60), ss = Math.floor(s % 60), f = Math.floor((s % 1) * fps()); return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}<span>:${String(f).padStart(2, '0')}</span>`; };
 function updTime() {
+  updDur();
   $('#tc').innerHTML = `${fmtT(T)} <span>/ ${S.duration.toFixed(1)}s</span>`;
   $('#scrub').value = String(Math.round(T / S.duration * 1000));
   placeHead();
@@ -3973,7 +4015,7 @@ const gPivot = (gid, cached) => {
   return b ? boxC(b) : null;
 };
 function camOf(L, skip) {
-  const cam = camAt(T), g = gRots(L, skip); if (!L || (cam.s === 1 && !cam.dx && !cam.dy && !cam.r && !g.length)) return null;
+  const cam = layerStill(L) ? camAt(-1) : camAt(T), g = gRots(L, skip); // slide-imagem: desenhado sem câmera if (!L || (cam.s === 1 && !cam.dx && !cam.dy && !cam.r && !g.length)) return null;
   const els = S.layers.filter(l => l.visible && !NOBOX(l)), k = cam.par ? lerp(1, layerDepth(L, els.indexOf(L), els.length), cam.par) : 1;
   return { s:1 + (cam.s - 1) * k, dx:cam.dx * k, dy:cam.dy * k, r:cam.r, g, ga:g.reduce((n, e) => n + e.a, 0) };
 }
@@ -5399,18 +5441,20 @@ async function pickConfig(w, hh) {
 }
 let cancelExport = false;
 // sl = slides que saem nesta passada (carrossel: um vídeo por slide, recortado do quadro inteiro; sem carrossel, [0] = o quadro)
-async function encodeWebCodecs(canvas, ctx, w, hh, N, prog, mix, sl = [0]) {
+// Ns[k] = quadros do slide sl[k] e mixes[k] = a trilha dele (cada slide tem a sua duração; a timeline é uma só, então o mais curto só para antes)
+async function encodeWebCodecs(canvas, ctx, w, hh, Ns, prog, mixes, sl = [0]) {
   if (!window.Mp4Muxer) return null;
   const pick = await pickConfig(w, hh); if (!pick) return null;
-  // trilha: codifica antes (AAC, senão Opus); se falhar, o vídeo sai sem som em vez de não sair
-  const apick = mix ? await pickAudio(mix.sampleRate) : null;
-  let achunks = null;
-  if (apick) try { achunks = await encodeAudio(mix, apick); } catch (e) { console.warn('áudio falhou', e); achunks = null; }
+  // trilha: codifica antes (AAC, senão Opus), uma vez por duração; se falhar, o vídeo sai sem som em vez de não sair
+  const mix0 = mixes.find(Boolean), apick = mix0 ? await pickAudio(mix0.sampleRate) : null, aenc = new Map();
+  if (apick) for (const mx of mixes) if (mx && !aenc.has(mx)) { try { aenc.set(mx, await encodeAudio(mx, apick)); } catch (e) { console.warn('áudio falhou', e); aenc.set(mx, null); } }
+  let anySound = false;
   const cut = canvas.width > w; // o quadro tem mais de um slide
-  const outs = sl.map(s => {
+  const outs = sl.map((s, k) => {
+    const mix = mixes[k], achunks = (mix && aenc.get(mix)) || null; if (achunks) anySound = true;
     const opt = { target:new Mp4Muxer.ArrayBufferTarget(), video:{ codec:pick.mux, width:w, height:hh, frameRate:fps() }, fastStart:'in-memory', firstTimestampBehavior:'offset' };
     if (achunks) opt.audio = { codec:apick.mux, sampleRate:mix.sampleRate, numberOfChannels:2 };
-    const o = { s, muxer:new Mp4Muxer.Muxer(opt), err:null, cv:null };
+    const o = { s, N:Ns[k], muxer:new Mp4Muxer.Muxer(opt), err:null, cv:null };
     if (achunks) for (const [c, m] of achunks) o.muxer.addAudioChunk(c, m);
     if (cut) { o.cv = document.createElement('canvas'); o.cv.width = w; o.cv.height = hh; }
     o.enc = new VideoEncoder({ output:(chunk, meta) => o.muxer.addVideoChunk(chunk, meta), error:e => { o.err = e; } });
@@ -5419,12 +5463,14 @@ async function encodeWebCodecs(canvas, ctx, w, hh, N, prog, mix, sl = [0]) {
   });
   const closeAll = () => outs.forEach(o => { try { o.enc.close(); } catch (e) {} });
   const fail = () => { const o = outs.find(o => o.err); if (o) { closeAll(); throw o.err; } };
+  const N = Math.max(...Ns);
   for (let i = 0; i < N; i++) {
     if (cancelExport) { closeAll(); return 'cancel'; }
     const t = i / fps();
     await seekVideos(t);
     renderExportFrame(ctx, t);
     for (const o of outs) {
+      if (i >= o.N) continue; // este slide já terminou
       if (o.cv) o.cv.getContext('2d').drawImage(canvas, o.s * w, 0, w, hh, 0, 0, w, hh);
       const vf = new VideoFrame(o.cv || canvas, { timestamp:Math.round(i * 1e6 / fps()), duration:Math.round(1e6 / fps()) });
       o.enc.encode(vf, { keyFrame:i % (fps() * 2) === 0 }); vf.close();
@@ -5436,8 +5482,8 @@ async function encodeWebCodecs(canvas, ctx, w, hh, N, prog, mix, sl = [0]) {
   await Promise.all(outs.map(o => o.enc.flush())); fail();
   for (const o of outs) { o.muxer.finalize(); o.enc.close(); }
   const blobs = outs.map(o => new Blob([o.muxer.target.buffer], { type:'video/mp4' }));
-  return { blob:blobs[0], blobs, ext:'mp4', audio:!!achunks,
-    codec:(pick.cfg.codec.startsWith('avc1.64') ? 'H.264 High' : pick.cfg.codec.startsWith('avc') ? 'H.264' : 'VP9') + ` · ${(pick.cfg.bitrate / 1e6).toFixed(1)} Mbps` + (achunks ? ` · ${apick.mux === 'aac' ? 'AAC' : 'Opus'}` : mix ? ' · sem som (o navegador não codificou o áudio)' : '') };
+  return { blob:blobs[0], blobs, ext:'mp4', audio:anySound,
+    codec:(pick.cfg.codec.startsWith('avc1.64') ? 'H.264 High' : pick.cfg.codec.startsWith('avc') ? 'H.264' : 'VP9') + ` · ${(pick.cfg.bitrate / 1e6).toFixed(1)} Mbps` + (anySound ? ` · ${apick.mux === 'aac' ? 'AAC' : 'Opus'}` : mix0 ? ' · sem som (o navegador não codificou o áudio)' : '') };
 }
 async function encodeRecorder(canvas, ctx, prog) {
   if (!canvas.captureStream || !window.MediaRecorder) return null;
@@ -5453,30 +5499,57 @@ async function encodeRecorder(canvas, ctx, prog) {
   const ext = mime.includes('mp4') ? 'mp4' : 'webm';
   return { blob:new Blob(chunks, { type:mime.split(';')[0] }), ext, codec:ext === 'mp4' ? 'H.264 (tempo real)' : 'WebM (tempo real)' };
 }
-// um vídeo do jeito que S está agora (formato e variação já aplicados)
-async function renderVideo(prog) {
-  const w = W(), hh = H(), N = Math.round(S.duration * fps()), n = slides();
+// os vídeos do jeito que S está agora (formato e variação já aplicados). sl = slides de vídeo que saem (carrossel); cada um com a sua duração
+async function renderVideo(prog, sl = [0]) {
+  const w = W(), hh = H(), n = slides();
+  const Ns = sl.map(s => Math.max(1, Math.round(slideDur(s) * fps())));
   await document.fonts.ready; await videosReady();
   const canvas = document.createElement('canvas'); canvas.width = w * n; canvas.height = hh;
   const ctx = canvas.getContext('2d');
-  let mix = null;
-  if (hasAudio()) try { mix = await buildMix(48000); } catch (e) { console.warn('trilha falhou', e); }
-  let res = null;
-  try { res = await encodeWebCodecs(canvas, ctx, w, hh, N, prog, mix, [...Array(n).keys()]); } catch (e) { console.warn('WebCodecs falhou', e); res = null; }
-  if (res === 'cancel' || cancelExport) return 'cancel';
-  // carrossel: a placa pode recusar vários codificadores ao mesmo tempo; tenta um slide por vez (mais lento, mas sai)
-  if (!res && n > 1) {
-    const blobs = []; let r = null;
-    for (let s = 0; s < n; s++) {
-      try { r = await encodeWebCodecs(canvas, ctx, w, hh, N, p => prog((s + p) / n), mix, [s]); } catch (e) { console.warn('WebCodecs falhou', e); r = null; }
-      if (!r || r === 'cancel' || cancelExport) break;
-      blobs.push(r.blob);
+  // trilha: uma mistura por duração (o fade de saída cai no fim de cada slide)
+  const mixes = sl.map(() => null);
+  if (hasAudio()) {
+    const byD = new Map();
+    for (let k = 0; k < sl.length; k++) {
+      const d = slideDur(sl[k]);
+      if (!byD.has(d)) { let m = null; try { m = await buildMix(48000, d); } catch (e) { console.warn('trilha falhou', e); } byD.set(d, m); }
+      mixes[k] = byD.get(d);
     }
-    if (r === 'cancel' || cancelExport) return 'cancel';
-    return r && blobs.length === n ? { ...r, blob:blobs[0], blobs } : null; // gravar em tempo real só serve para um quadro
   }
+  let res = null;
+  RT.skipStill = true; // os slides-imagem não entram no vídeo: não precisa redesenhá-los parados a cada quadro
+  try {
+    try { res = await encodeWebCodecs(canvas, ctx, w, hh, Ns, prog, mixes, sl); } catch (e) { console.warn('WebCodecs falhou', e); res = null; }
+    if (res === 'cancel' || cancelExport) return 'cancel';
+    // carrossel: a placa pode recusar vários codificadores ao mesmo tempo; tenta um slide por vez (mais lento, mas sai)
+    if (!res && n > 1) {
+      const blobs = []; let r = null;
+      for (let k = 0; k < sl.length; k++) {
+        try { r = await encodeWebCodecs(canvas, ctx, w, hh, [Ns[k]], p => prog((k + p) / sl.length), [mixes[k]], [sl[k]]); } catch (e) { console.warn('WebCodecs falhou', e); r = null; }
+        if (!r || r === 'cancel' || cancelExport) break;
+        blobs.push(r.blob);
+      }
+      if (r === 'cancel' || cancelExport) return 'cancel';
+      return r && blobs.length === sl.length ? { ...r, blob:blobs[0], blobs } : null; // gravar em tempo real só serve para um quadro
+    }
+  } finally { RT.skipStill = false; }
   if (!res) { $('#mMeta').textContent += ' · gravando em tempo real, sem som'; try { res = await encodeRecorder(canvas, ctx, prog); } catch (e) { res = null; } }
   return res;
+}
+// as imagens (PNG) dos slides sl, em repouso, do jeito que S está agora. Devolve [[blob, slide], ...] (null se falhar)
+async function renderStills(sl) {
+  await document.fonts.ready; await videosReady(); await seekVideos(0);
+  const n = slides(), c = document.createElement('canvas'); c.width = FW(); c.height = H();
+  renderFrame(c.getContext('2d'), 0, 1, true);
+  const one = n > 1 ? document.createElement('canvas') : c, out = [];
+  if (n > 1) { one.width = W(); one.height = H(); }
+  for (const s of sl) {
+    if (n > 1) { const x = one.getContext('2d'); x.clearRect(0, 0, one.width, one.height); x.drawImage(c, s * W(), 0, W(), H(), 0, 0, W(), H()); }
+    const blob = await new Promise(r => one.toBlob(r, 'image/png'));
+    if (!blob) return null;
+    out.push([blob, s]);
+  }
+  return out;
 }
 const fileSafe = s => String(s || '').replace(/[\\/:*?"<>|]+/g, '-').trim().slice(0, 40) || 'versao';
 // vários vídeos: numa pasta escolhida (Chrome/Edge) ou um download para cada
@@ -5484,11 +5557,11 @@ async function saveOut(dir, blob, fname) {
   if (dir) { try { const fh = await dir.getFileHandle(fname, { create:true }), wr = await fh.createWritable(); await wr.write(blob); await wr.close(); return; } catch (e) { console.warn(e); } }
   await saveFile(blob, fname); await sleep(400);
 }
-// fmts = formatos; vars = [null (o arquivo como está), ...linhas de variação]
-async function runExport(fmts, vars) {
+// fmts = formatos; vars = [null (o arquivo como está), ...linhas de variação]; pk = { vid, img } = slides que saem em vídeo (MP4) e em imagem (PNG)
+async function runExport(fmts, vars, pk) {
   const jobs = []; for (const v of vars) for (const f of fmts) jobs.push({ f, v });
-  if (!jobs.length) return;
-  const many = jobs.length > 1 || slides() > 1; // carrossel: um arquivo por slide
+  if (!jobs.length || !(pk.vid.length + pk.img.length)) return;
+  const n = slides(), nv = jobs.length * pk.vid.length, ni = jobs.length * pk.img.length, many = nv + ni > 1;
   let dir = null;
   if (many && window.showDirectoryPicker) {
     try { dir = await window.showDirectoryPicker({ id:'mola-export', mode:'readwrite' }); }
@@ -5496,31 +5569,44 @@ async function runExport(fmts, vars) {
   }
   if (saveT) await flushSave();
   pause(); RT.exporting = true; cancelExport = false;
-  const fmt0 = S.format, m = $('#modal');
+  const fmt0 = S.format, m = $('#modal'), quiet = !nv; // só imagens: sai direto, sem a janela de progresso
   if (!FORMATS[S.base] && hasContent()) S.base = fmt0; // os outros formatos se reorganizam a partir do aberto
-  m.hidden = false; $('#mTitle').textContent = many ? `Exportando ${jobs.length * slides()} vídeos` : 'Exportando vídeo';
-  $('#mVideo').hidden = true; $('#mSave').hidden = true; $('#mBar').style.width = '0%'; $('#mClose').textContent = 'Cancelar';
+  const what = [nv ? `${nv} vídeo${nv > 1 ? 's' : ''}` : '', ni ? `${ni} imagem${ni > 1 ? 'ns' : ''}` : ''].filter(Boolean).join(' e ');
+  if (!quiet) {
+    m.hidden = false; $('#mTitle').textContent = many ? `Exportando ${what}` : 'Exportando vídeo';
+    $('#mVideo').hidden = true; $('#mSave').hidden = true; $('#mBar').style.width = '0%'; $('#mClose').textContent = 'Cancelar';
+  }
   const prog = p => { $('#mBar').style.width = (clamp(p) * 100).toFixed(1) + '%'; };
-  const done = []; let fail = false, last = null;
+  const num = s => n > 1 ? `-${String(s + 1).padStart(2, '0')}` : ''; // carrossel: nome-4x5-01.mp4, nome-4x5-02.png… (o número do slide)
+  const ds = [...new Set(pk.vid.map(slideDur))].sort((a, b) => a - b), durTxt = ds.length > 1 ? `${ds[0]}s a ${ds[ds.length - 1]}s` : `${ds[0]}s`;
+  const done = []; let fail = false, failImg = false, last = null;
   try {
     for (let j = 0; j < jobs.length && !cancelExport; j++) {
       const { f, v } = jobs[j]; S.format = f; RT.layout.clear();
-      $('#mMeta').textContent = `${many ? `${j + 1} de ${jobs.length} · ` : ''}${v ? v.name + ' · ' : ''}${slides() > 1 ? `${slides()} slides de ` : ''}${W()}×${H()} · ${fps()} fps · ${S.duration}s${(MBLUR[S.mblur] || MBLUR.off).n > 1 ? ' · desfoque de movimento' : ''}`;
-      const res = await withVariant(v, () => renderVideo(p => prog((j + p) / jobs.length)));
+      const nm0 = outName(), nm = v ? nm0.replace(/-(\d+x\d+)$/, `-${fileSafe(v.name)}-$1`) : nm0;
+      if (pk.img.length) {
+        const imgs = await withVariant(v, () => renderStills(pk.img));
+        if (!imgs) { failImg = true; break; }
+        for (const [b, s] of imgs) { const fn = `${nm}${num(s)}.png`; await saveOut(many ? dir : null, b, fn); done.push(fn); }
+      }
+      if (!pk.vid.length) continue;
+      $('#mMeta').textContent = `${jobs.length > 1 ? `${j + 1} de ${jobs.length} · ` : ''}${v ? v.name + ' · ' : ''}${n > 1 ? `${pk.vid.length} slide${pk.vid.length > 1 ? 's' : ''} de ` : ''}${W()}×${H()} · ${fps()} fps · ${durTxt}${(MBLUR[S.mblur] || MBLUR.off).n > 1 ? ' · desfoque de movimento' : ''}`;
+      const res = await withVariant(v, () => renderVideo(p => prog((j + p) / jobs.length), pk.vid));
       if (res === 'cancel' || cancelExport) break;
       if (!res) { fail = true; break; }
-      const nm = outName(), fname = `${v ? nm.replace(/-(\d+x\d+)$/, `-${fileSafe(v.name)}-$1`) : nm}.${res.ext}`;
-      last = { ...res, fname, w:W(), hh:H() };
-      // carrossel: nome-4x5-01.mp4, nome-4x5-02.mp4… (na ordem dos slides)
-      const parts = res.blobs && res.blobs.length > 1 ? res.blobs.map((b, s) => [b, fname.replace(/(\.\w+)$/, `-${String(s + 1).padStart(2, '0')}$1`)]) : [[res.blob, fname]];
+      const parts = (res.blobs && res.blobs.length > 1 ? res.blobs : [res.blob]).map((b, k) => [b, `${nm}${num(pk.vid[k])}.${res.ext}`]);
+      last = { ...res, blob:parts[0][0], fname:parts[0][1], w:W(), hh:H() };
       if (many) for (const [b, fn] of parts) { await saveOut(dir, b, fn); done.push(fn); }
     }
   } finally { S.format = fmt0; RT.layout.clear(); RT.exporting = false; needs = true; fitStage(); }
   $('#mClose').textContent = 'Fechar';
-  if (cancelExport) { m.hidden = true; if (done.length) toast(`${done.length} vídeo${done.length > 1 ? 's' : ''} salvo${done.length > 1 ? 's' : ''} antes de cancelar`); return; }
-  if (fail || !last) { $('#mTitle').textContent = 'Este navegador não exporta vídeo'; $('#mMeta').textContent = 'Use o Chrome ou o Edge atualizados.'; return; }
+  const plural = k => `${k} arquivo${k > 1 ? 's' : ''}`;
+  if (cancelExport) { m.hidden = true; if (done.length) toast(`${plural(done.length)} salvo${done.length > 1 ? 's' : ''} antes de cancelar`); return; }
+  if (failImg) { m.hidden = true; toast('Não consegui gerar a imagem'); return; }
+  if (fail || (nv && !last)) { $('#mTitle').textContent = 'Este navegador não exporta vídeo'; $('#mMeta').textContent = `Use o Chrome ou o Edge atualizados.${done.length ? ` ${plural(done.length)} já tinha${done.length > 1 ? 'm' : ''} saído.` : ''}`; return; }
+  if (quiet) { if (many) toast(dir ? `${what} salva${ni > 1 ? 's' : ''} na pasta "${dir.name}"` : `${what} baixada${ni > 1 ? 's' : ''}`); return; }
   prog(1);
-  if (many) { $('#mTitle').textContent = `${done.length} vídeos prontos`; $('#mMeta').textContent = dir ? `Salvos na pasta "${dir.name}".` : 'Cada vídeo foi baixado separado.'; return; }
+  if (many) { $('#mTitle').textContent = `${what} pront${nv ? 'os' : 'as'}`; $('#mMeta').textContent = dir ? `Salvos na pasta "${dir.name}".` : 'Cada arquivo foi baixado separado.'; return; }
   if (lastExport?.url) URL.revokeObjectURL(lastExport.url);
   lastExport = { ...last, url:URL.createObjectURL(last.blob) };
   $('#mTitle').textContent = 'Vídeo pronto';
@@ -5528,45 +5614,65 @@ async function runExport(fmts, vars) {
   const vid = $('#mVideo'); vid.src = lastExport.url; vid.hidden = false;
   $('#mSave').hidden = false; $('#mSave').textContent = `Salvar ${last.ext.toUpperCase()}`;
 }
-// Exportar: escolhe formatos, variações e desfoque de movimento (lembra a última escolha do arquivo)
+// Exportar: escolhe formatos, variações, slides e desfoque de movimento (lembra a última escolha do arquivo).
+// Carrossel (pedido do usuário: imagens e vídeos no mesmo carrossel): cada slide sai como é, vídeo em MP4 e imagem (Duração 0) em PNG;
+// dá para escolher os slides, ou só os vídeos ou só as imagens de uma vez. Imagem estática (S.still): tudo em PNG
 function exportVideo() {
   if (RT.exporting || document.querySelector('.xsheet')) return;
   pause();
-  if (S.still) { exportStill(); return; }
-  const ex = S.export || {}, rows = varRows();
+  const ex = S.export || {}, rows = varRows(), n = slides();
   const fm = new Set((ex.fmts || [S.format]).filter(f => FORMATS[f])); if (!fm.size) fm.add(S.format);
   let all = !!ex.vars && rows.length > 0, mb = MBLUR[S.mblur] ? S.mblur : 'off';
+  const isImg = i => slideStill(i), ids = [...Array(n).keys()];
+  const vidIds = ids.filter(i => !isImg(i)), imgIds = ids.filter(isImg), anyVid = vidIds.length > 0;
+  const ss = new Set(n > 1 && Array.isArray(ex.sl) ? ex.sl.filter(i => i < n) : ids); if (!ss.size) ids.forEach(i => ss.add(i));
+  const pk = () => ({ vid:vidIds.filter(i => ss.has(i)), img:imgIds.filter(i => ss.has(i)) });
   const close = () => ov.remove();
-  const count = () => fm.size * (all ? rows.length + 1 : 1) * slides(); // carrossel: um vídeo por slide
   const summary = h('p', { class:'hint xsum' });
   const go = h('button', { class:'btn primary', onclick:() => {
-    S.export = { fmts:[...fm], vars:all }; S.mblur = mb; autosave(); close();
-    runExport(Object.keys(FORMATS).filter(f => fm.has(f)), all ? [null, ...rows] : [null]);
+    const p = pk(); if (!p.vid.length && !p.img.length) return;
+    S.export = { ...S.export, fmts:[...fm], vars:all, sl:n > 1 ? [...ss].sort((a, b) => a - b) : undefined }; if (anyVid) S.mblur = mb; autosave(); close();
+    runExport(Object.keys(FORMATS).filter(f => fm.has(f)), all ? [null, ...rows] : [null], p);
   } });
   const upd = () => {
-    const n = count();
-    summary.textContent = `${n} vídeo${n > 1 ? 's' : ''}${slides() > 1 ? ` (carrossel: um por slide, ${slides()} slides)` : ''}, ${hasAudio() ? 'com som' : 'sem som'}.${n > 1 ? (window.showDirectoryPicker ? ' Você escolhe a pasta onde salvar.' : ' Cada um baixa separado.') : ''}`;
-    go.textContent = n > 1 ? `Exportar ${n} vídeos` : 'Exportar MP4';
+    const k = fm.size * (all ? rows.length + 1 : 1), p = pk(), nv = k * p.vid.length, ni = k * p.img.length, many = nv + ni > 1;
+    const parts = [nv ? `${nv} vídeo${nv > 1 ? 's' : ''} MP4 ${hasAudio() ? 'com som' : 'sem som'}` : '', ni ? `${ni} imagem${ni > 1 ? 'ns' : ''} PNG` : ''].filter(Boolean);
+    summary.textContent = !parts.length ? 'Escolha pelo menos um slide.' : `${parts.join(' e ')}${n > 1 && many ? ' (um arquivo por slide)' : ''}.${many ? (window.showDirectoryPicker ? ' Você escolhe a pasta onde salvar.' : ' Cada um baixa separado.') : ''}`;
+    go.disabled = !parts.length;
+    go.textContent = nv && ni ? `Exportar ${nv + ni} arquivos` : nv ? (nv > 1 ? `Exportar ${nv} vídeos` : 'Exportar MP4') : ni > 1 ? `Exportar ${ni} imagens` : 'Exportar PNG';
   };
-  const chips = (opts, isOn, onPick) => {
+  const chips = (opts, isOn, onPick, after) => {
     const w = h('div', { class:'chips' });
-    const draw = () => { w.innerHTML = ''; opts.forEach(([k, t]) => w.append(h('button', { class:'chip', 'aria-pressed':String(isOn(k)), onclick:() => { onPick(k); draw(); upd(); } }, [h('span', { text:t })]))); };
-    draw(); return w;
+    const draw = () => { w.innerHTML = ''; opts.forEach(([k, t]) => w.append(h('button', { class:'chip', 'aria-pressed':String(isOn(k)), onclick:() => { onPick(k); draw(); if (after) after(); upd(); } }, [h('span', { text:t })]))); };
+    draw(); w.draw = draw; return w;
   };
+  // slides: um chip por slide (o tipo e a duração no nome) e, com os dois tipos, os atalhos "Só os vídeos" / "Só as imagens"
+  let slideSec = [];
+  if (n > 1) {
+    const same = list => list.length === ss.size && list.every(i => ss.has(i));
+    const quick = chips([['all', `Todos (${n})`], ['vid', `Só os vídeos (${vidIds.length})`], ['img', `Só as imagens (${imgIds.length})`]],
+      k => same(k === 'all' ? ids : k === 'vid' ? vidIds : imgIds), k => { ss.clear(); (k === 'all' ? ids : k === 'vid' ? vidIds : imgIds).forEach(i => ss.add(i)); }, () => each.draw());
+    const each = chips(ids.map(i => [i, `${i + 1} · ${isImg(i) ? 'Imagem' : `Vídeo ${fmtSec(slideDur(i))}`}`]), i => ss.has(i),
+      i => { if (ss.has(i)) { if (ss.size > 1) ss.delete(i); } else ss.add(i); }, () => quick.draw());
+    slideSec = [h('h3', { text:'Slides' }), vidIds.length && imgIds.length ? quick : null, each,
+      h('p', { class:'hint', text:'Vídeo sai em MP4 e imagem em PNG. Para um slide virar imagem, escolha o slide e ponha a Duração em 0, no topo.' })];
+  }
   const card = h('div', { class:'files-card xcard', role:'dialog', 'aria-modal':'true', 'aria-label':'Exportar' }, [
-    h('div', { class:'files-head' }, [h('h2', { text:'Exportar' }), h('div', { class:'spacer' }), h('button', { class:'btn small ghost', text:'Fechar', onclick:close })]),
+    h('div', { class:'files-head' }, [h('h2', { text:anyVid ? 'Exportar' : 'Exportar imagem' }), h('div', { class:'spacer' }), h('button', { class:'btn small ghost', text:'Fechar', onclick:close })]),
+    ...slideSec,
     h('h3', { text:'Formatos' }),
     chips(Object.entries(FORMATS).map(([k, f]) => [k, f.label]), k => fm.has(k), k => { if (fm.has(k)) { if (fm.size > 1) fm.delete(k); } else fm.add(k); }),
-    h('p', { class:'hint', text:`Cada formato se reorganiza a partir do ${fmtLabel(baseFmt())} (o principal): os blocos ficam juntos, o que encosta na margem continua nela e a foto muda de recorte para ocupar o espaço. O que você ajustou num formato fica só nele.` }),
+    h('p', { class:'hint', text:anyVid ? `Cada formato se reorganiza a partir do ${fmtLabel(baseFmt())} (o principal): os blocos ficam juntos, o que encosta na margem continua nela e a foto muda de recorte para ocupar o espaço. O que você ajustou num formato fica só nele.`
+      : `Cada formato se reorganiza a partir do ${fmtLabel(baseFmt())} (o principal). O que você ajustou num formato fica só nele.` }),
     h('h3', { text:'Variações de texto' }),
     rows.length ? chips([['one', 'Só a atual'], ['all', `Todas (${rows.length + 1})`]], k => (k === 'all') === all, k => { all = k === 'all'; })
       : h('p', { class:'hint', text:'Nenhuma variação ainda. Crie em "Variações", no topo, para exportar várias versões de uma vez.' }),
-    h('h3', { text:'Desfoque de movimento' }),
-    chips(Object.entries(MBLUR).map(([k, v]) => [k, v.label]), k => k === mb, k => { mb = k; }),
-    h('p', { class:'hint', text:'Dá rastro de câmera de cinema às molas, deslizes e zooms. A exportação fica mais lenta.' }),
+    ...(anyVid ? [h('h3', { text:'Desfoque de movimento' }),
+      chips(Object.entries(MBLUR).map(([k, v]) => [k, v.label]), k => k === mb, k => { mb = k; }),
+      h('p', { class:'hint', text:'Dá rastro de câmera de cinema às molas, deslizes e zooms. A exportação fica mais lenta.' })] : []),
     summary,
     h('div', { class:'row', style:'justify-content:flex-end' }, [h('button', { class:'btn', text:'Cancelar', onclick:close }), go]),
-  ]);
+  ].filter(Boolean));
   const ov = h('div', { class:'files xsheet', onpointerdown:e => { if (e.target === ov) close(); }, onkeydown:e => { e.stopPropagation(); if (e.key === 'Escape') close(); } }, [card]);
   document.body.append(ov); upd(); go.focus();
 }
@@ -5626,80 +5732,6 @@ async function saveFramePng(mode) {
 }
 $('#pngBtn').onclick = () => saveFramePng();
 $('#svgBtn').onclick = () => exportSvg();
-// imagem estática: Exportar abre a escolha de formatos e variações e sai um PNG por formato, variação e slide
-function exportStill() {
-  const ex = S.export || {}, rows = varRows();
-  const fm = new Set((ex.fmts || [S.format]).filter(f => FORMATS[f])); if (!fm.size) fm.add(S.format);
-  let all = !!ex.vars && rows.length > 0;
-  const close = () => ov.remove();
-  const count = () => fm.size * (all ? rows.length + 1 : 1) * slides();
-  const summary = h('p', { class:'hint xsum' });
-  const go = h('button', { class:'btn primary', onclick:() => {
-    S.export = { ...S.export, fmts:[...fm], vars:all }; autosave(); close();
-    runStill(Object.keys(FORMATS).filter(f => fm.has(f)), all ? [null, ...rows] : [null]);
-  } });
-  const upd = () => {
-    const n = count();
-    summary.textContent = `${n} imagem${n > 1 ? 'ns' : ''} PNG${slides() > 1 ? ` (carrossel: uma por slide, ${slides()} slides)` : ''}.${n > 1 ? (window.showDirectoryPicker ? ' Você escolhe a pasta onde salvar.' : ' Cada uma baixa separada.') : ''}`;
-    go.textContent = n > 1 ? `Exportar ${n} imagens` : 'Exportar PNG';
-  };
-  const chips = (opts, isOn, onPick) => {
-    const w = h('div', { class:'chips' });
-    const draw = () => { w.innerHTML = ''; opts.forEach(([k, t]) => w.append(h('button', { class:'chip', 'aria-pressed':String(isOn(k)), onclick:() => { onPick(k); draw(); upd(); } }, [h('span', { text:t })]))); };
-    draw(); return w;
-  };
-  const card = h('div', { class:'files-card xcard', role:'dialog', 'aria-modal':'true', 'aria-label':'Exportar imagem' }, [
-    h('div', { class:'files-head' }, [h('h2', { text:'Exportar imagem' }), h('div', { class:'spacer' }), h('button', { class:'btn small ghost', text:'Fechar', onclick:close })]),
-    h('h3', { text:'Formatos' }),
-    chips(Object.entries(FORMATS).map(([k, f]) => [k, f.label]), k => fm.has(k), k => { if (fm.has(k)) { if (fm.size > 1) fm.delete(k); } else fm.add(k); }),
-    h('p', { class:'hint', text:`Cada formato se reorganiza a partir do ${fmtLabel(baseFmt())} (o principal). O que você ajustou num formato fica só nele.` }),
-    h('h3', { text:'Variações de texto' }),
-    rows.length ? chips([['one', 'Só a atual'], ['all', `Todas (${rows.length + 1})`]], k => (k === 'all') === all, k => { all = k === 'all'; })
-      : h('p', { class:'hint', text:'Nenhuma variação ainda. Crie em "Variações", no topo, para exportar várias versões de uma vez.' }),
-    summary,
-    h('div', { class:'row', style:'justify-content:flex-end' }, [h('button', { class:'btn', text:'Cancelar', onclick:close }), go]),
-  ]);
-  const ov = h('div', { class:'files xsheet', onpointerdown:e => { if (e.target === ov) close(); }, onkeydown:e => { e.stopPropagation(); if (e.key === 'Escape') close(); } }, [card]);
-  document.body.append(ov); upd(); go.focus();
-}
-async function runStill(fmts, vars) {
-  const jobs = []; for (const v of vars) for (const f of fmts) jobs.push({ f, v });
-  if (!jobs.length) return;
-  const n = slides(), many = jobs.length > 1 || n > 1;
-  let dir = null;
-  if (many && window.showDirectoryPicker) {
-    try { dir = await window.showDirectoryPicker({ id:'mola-export', mode:'readwrite' }); }
-    catch (e) { if (e && e.name === 'AbortError') return; dir = null; }
-  }
-  if (saveT) await flushSave();
-  pause(); RT.exporting = true;
-  const fmt0 = S.format;
-  if (!FORMATS[S.base] && hasContent()) S.base = fmt0; // os outros formatos se reorganizam a partir do aberto
-  let done = 0, fail = false;
-  try {
-    await document.fonts.ready; await videosReady();
-    for (const { f, v } of jobs) {
-      S.format = f; RT.layout.clear();
-      await withVariant(v, async () => {
-        await seekVideos(0);
-        const c = document.createElement('canvas'); c.width = FW(); c.height = H();
-        renderFrame(c.getContext('2d'), 0, 1, true);
-        const nm0 = outName(), nm = v ? nm0.replace(/-(\d+x\d+)$/, `-${fileSafe(v.name)}-$1`) : nm0;
-        const one = n > 1 ? document.createElement('canvas') : c;
-        if (n > 1) { one.width = W(); one.height = H(); }
-        for (let s = 0; s < n; s++) {
-          if (n > 1) { const x = one.getContext('2d'); x.clearRect(0, 0, one.width, one.height); x.drawImage(c, s * W(), 0, W(), H(), 0, 0, W(), H()); }
-          const blob = await new Promise(r => one.toBlob(r, 'image/png'));
-          if (!blob) { fail = true; return; }
-          await saveOut(many ? dir : null, blob, `${nm}${n > 1 ? '-' + String(s + 1).padStart(2, '0') : ''}.png`); done++;
-        }
-      });
-      if (fail) break;
-    }
-  } finally { S.format = fmt0; RT.layout.clear(); RT.exporting = false; needs = true; fitStage(); }
-  if (fail) { toast('Não consegui gerar a imagem'); return; }
-  if (many) toast(dir ? `${done} imagens salvas na pasta "${dir.name}"` : `${done} imagens baixadas`);
-}
 $('#mClose').onclick = () => { if (RT.exporting) { cancelExport = true; return; } $('#modal').hidden = true; const v = $('#mVideo'); v.pause(); };
 $('#mSave').onclick = () => lastExport && saveFile(lastExport.blob, lastExport.fname);
 
@@ -6008,8 +6040,8 @@ function playSfx(ctx, out, noise, e) {
   }
 }
 const hasAudio = () => !!(S.audio && S.audio.id) || (!!S.sfx && S.sfx !== 'off');
-async function buildMix(sr = 48000) {
-  const d = S.duration, off = new OfflineAudioContext(2, Math.ceil(d * sr), sr), A = S.audio;
+async function buildMix(sr = 48000, d = S.duration) {
+  const off = new OfflineAudioContext(2, Math.ceil(d * sr), sr), A = S.audio;
   if (A && A.id) {
     const buf = await musicBuffer(A.id);
     if (buf) {
@@ -6809,11 +6841,12 @@ function renderFormats() {
   const bf = baseFmt(), any = hasContent();
   for (const [k, f] of Object.entries(FORMATS)) box.append(h('button', { 'aria-pressed':String(S.format === k), class:any && k === bf ? 'base' : null, text:f.label, onclick:() => setFormat(k), ondblclick:() => makeBase(k),
     title:!any ? null : k === bf ? 'Formato principal: os outros se reorganizam a partir dele' : `Reorganizado a partir do ${fmtLabel(bf)}. O que você mover aqui fica só neste formato. Clique duplo: tornar principal` }));
-  $('#dur').value = S.still ? 0 : S.duration; $('#slides').value = slides();
+  updDur(true); $('#slides').value = slides();
   // imagem estática: some tudo que é de vídeo (CSS em .app.still)
   $('#app').classList.toggle('still', !!S.still);
-  $('#export').textContent = S.still ? 'Exportar PNG' : 'Exportar MP4';
-  $('#export').title = S.still ? 'Salvar a imagem em PNG (Ctrl+Shift+E)' : 'Exportar o vídeo (Ctrl+Shift+E)';
+  const mixd = !S.still && stillSlides().length > 0; // carrossel com imagens e vídeos
+  $('#export').textContent = S.still ? 'Exportar PNG' : mixd ? 'Exportar' : 'Exportar MP4';
+  $('#export').title = S.still ? 'Salvar a imagem em PNG (Ctrl+Shift+E)' : mixd ? 'Exportar os slides: vídeo em MP4, imagem em PNG (Ctrl+Shift+E)' : 'Exportar o vídeo (Ctrl+Shift+E)';
   const fs = $('#fps'); if (!fs.options.length) FPS_OPTS.forEach(f => fs.append(h('option', { value:f, text:f }))); fs.value = fps();
   { const m = marginSides(); $('#mOn').checked = m.on; [['mT', 'top'], ['mR', 'right'], ['mB', 'bottom'], ['mL', 'left']].forEach(([id, k]) => { $('#' + id).value = m[k]; $('#' + id).disabled = !m.on; });
     $('#mSum').textContent = m.on ? `${m.top} · ${m.right} · ${m.bottom} · ${m.left}` : 'desligada'; }
@@ -7334,6 +7367,8 @@ function renderTimeline() {
   endH.addEventListener('pointerdown', tlDuration);
   scale.append(endH);
   for (const b of beatTimes()) scale.append(h('u', { class:'tl-beat', style:`left:${(b / d * 100).toFixed(3)}%` })); // batidas da música
+  // carrossel: onde termina cada slide mais curto que a timeline (o arquivo dele para ali)
+  if (S.sdur && !S.still) for (let s = 0; s < slides(); s++) { const e = slideDur(s); if (e > 0 && e < d - .01) scale.append(h('s', { class:'tl-send', style:`left:${(e / d * 100).toFixed(3)}%`, title:`Fim do slide ${s + 1} (${fmtSec(e)})`, text:`S${s + 1}` })); }
   ruler.append(scale); tl.append(ruler);
   if (S.audio) tl.append(audioRow());
   const els = S.layers.filter(L => L.type !== 'bg').reverse();
@@ -7366,6 +7401,7 @@ function renderTimeline() {
     const bar = h('div', { class:'tl-bar', style:`--c:${TYPE_COLOR[typeKey(L)]}`, title:`${L.name}: entra em ${L.start.toFixed(1)}s, sai em ${(L.end ?? d).toFixed(1)}s. Arraste para cima ou para baixo para mudar a ordem. Clique duplo leva a agulha até ele. I e O marcam entrada e saída na agulha` }, [
       h('div', { class:'seg in' }), h('div', { class:'seg out' }), h('em', { text:tlLabel(L) }), h('div', { class:'h l' }), h('div', { class:'h r' })]);
     placeBar(bar, L);
+    if (layerStill(L)) { bar.classList.add('still'); bar.title = `${L.name} está num slide-imagem: aparece parado o tempo todo e o tempo da barra não conta (fica guardado para se o slide voltar a ser vídeo)`; }
     const lane = h('div', { class:'tl-lane' }, [bar]);
     // a faixa inteira decide: perto da borda (dentro ou fora da barra) redimensiona, no meio move, no vazio leva a agulha
     lane.addEventListener('pointerdown', e => {
@@ -8320,7 +8356,7 @@ function renderProps() {
 
   const tabs = h('div', { class:'tabs', role:'tablist' }, [['anim', 'Animação'], ['style', 'Conteúdo e estilo']].map(([k, t]) =>
     h('button', { role:'tab', 'aria-selected':String(propTab === k), text:t, onclick:() => { propTab = k; renderProps(); } })));
-  if (S.still) propTab = 'style'; // imagem estática: sem animação
+  if (S.still || layerStill(gid ? gpseudo(gid) : L)) propTab = 'style'; // imagem estática (o arquivo ou o slide): sem animação
   else head.append(tabs);
   // como no Figma: o nome e as abas ficam sempre no topo; alinhar, tamanho da seleção e layout automático são do conteúdo e estilo
   if (propTab !== 'anim') box.append(...[alignBar(), pathfinderSec(), pickedLayers().length > 1 ? scaleBar() : null, flowSec()].filter(Boolean));
@@ -8346,7 +8382,7 @@ function renderProps() {
     box.append(h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), idleGrid(L), ...rhythm('idle', .2, 4, () => seekKeep(L))]));
     box.append(...animExtras(L)); // marca à mão (texto), movimento dentro da imagem
     box.append((() => { const slot = h('div'); const ref = () => { slot.innerHTML = ''; const f = slideDirF(L, 'out'); if (f) slot.append(f); }; ref();
-      return h('section', { class:'sec' }, [h('h3', {}, ['Saída', h('span', { class:'h3r' }, [h('small', { text:(L.end ?? S.duration) >= S.duration - .01 ? 'no fim do vídeo' : `em ${(L.end).toFixed(1)}s` }),
+      return h('section', { class:'sec' }, [h('h3', {}, ['Saída', h('span', { class:'h3r' }, [h('small', { text:(L.end ?? S.duration) >= slideEnd(slideOfL(L)) - .01 ? (slides() > 1 && S.sdur ? 'no fim do slide' : 'no fim do vídeo') : `em ${(L.end).toFixed(1)}s` }),
         seeBtn('Ver a saída (toca só este trecho)', () => previewOut(L))])]), presetGrid(L, 'out', outKeys, map, ref), slot,
         ...rhythm('out', .4, 6, () => seekKeep(L, true))]); })());
     box.append(h('section', { class:'sec' }, [
@@ -8711,7 +8747,46 @@ function setDuration(v) {
   v = clamp(v, 2, 60); const old = S.duration; if (v === old) return;
   S.duration = v;
   S.layers.forEach(L => { if (L.end == null || L.end >= old - .01 || L.end > v) L.end = v; if (L.start > v - .3) L.start = Math.max(0, v - .3); });
-  T = Math.min(T, v); $('#dur').value = v; changed({ props:true, layers:true });
+  // carrossel: os slides que iam até o fim acompanham, os mais curtos ficam (imagem continua imagem)
+  if (S.sdur) S.sdur = S.sdur.map(d => d == null || d === 0 ? d : d >= old - .01 || d > v ? v : d);
+  T = Math.min(T, v); updDur(true); changed({ props:true, layers:true });
+}
+// campo Duração: no carrossel é a do slide atual (o do elemento escolhido, senão o último clicado)
+function updDur(force) {
+  const el = $('#dur'), car = slides() > 1, si = curSlide();
+  const key = [car, si, S.still, S.duration, S.sdur ? S.sdur.join(',') : ''].join('|');
+  if (!force && (RT.durKey === key || document.activeElement === el)) return;
+  RT.durKey = key;
+  el.value = car ? slideDur(si) : S.still ? 0 : S.duration;
+  $('#durL').textContent = car ? `Duração do slide ${si + 1}` : 'Duração';
+  el.closest('label').title = car ? `Cada slide tem a sua duração. 0 = este slide é uma imagem (sai em PNG); os outros continuam como estão`
+    : '0 = imagem estática: sem animação, sem timeline, exporta PNG';
+}
+// carrossel: duração de um slide (0 = imagem). A timeline vai até o slide mais longo; quem ia até o fim do slide acompanha,
+// os elementos dos outros slides ficam onde estão. Todos em 0 = o arquivo vira imagem estática (S.still)
+function setSlideDur(i, v) {
+  const n = slides(); v = v > 0 ? clamp(v, 2, 60) : 0;
+  const was = slideDur(i); if (v === was) return;
+  pushUndo(); pause();
+  const D0 = S.duration, still0 = !!S.still, d = (S.sdur || []).slice(0, SLIDES_MAX);
+  for (let k = 0; k < n; k++) d[k] = slideDur(k);
+  d[i] = v;
+  const vids = d.slice(0, n).filter(x => x > 0), D = vids.length ? Math.max(...vids) : D0;
+  for (const L of S.layers) {
+    if (L.type !== 'bg' && !NOBOX(L) && v > 0 && slideOfL(L) === i) {
+      if (L.end == null || L.end >= (was || D0) - .01 || L.end > v) L.end = v;
+      if (L.start > v - .3) L.start = Math.max(0, v - .3);
+    } else if (L.type === 'bg' || NOBOX(L)) { if (L.end == null || L.end >= D0 - .01 || L.end > D) L.end = D; if (L.start > D - .3) L.start = Math.max(0, D - .3); }
+    else { if (L.end == null || L.end > D) L.end = Math.min(L.end ?? D0, D); if (L.start > D - .3) L.start = Math.max(0, D - .3); }
+  }
+  S.duration = D;
+  if (!vids.length) S.still = true; else delete S.still;
+  if (vids.length === n && vids.every(x => x === D)) delete S.sdur; else S.sdur = d; // todos iguais: volta a ser uma duração só
+  T = Math.min(T, D);
+  if (!!S.still !== still0) { if (S.still && propTab === 'anim') propTab = 'style'; RT.layout.clear(); renderAdds(); }
+  RT.layout.clear(); renderFormats(); updDur(true); changed({ props:true, layers:true });
+  toast(S.still ? 'Todos os slides são imagem: o arquivo virou imagem estática. Digite uma duração num slide para ele voltar a ser vídeo'
+    : v === 0 ? `Slide ${i + 1} agora é imagem: tudo nele aparece junto e parado e ele sai em PNG` : `Slide ${i + 1}: ${fmtSec(v)}${D !== D0 ? ` · a timeline vai até ${fmtSec(D)}` : ''}`, 4500, UNDO_ACT);
 }
 function setMargin() {
   const n = id => clamp(parseFloat($('#' + id).value) || 0, 0, 800);
@@ -8729,13 +8804,14 @@ $('#fps').addEventListener('change', e => { pushUndo(); S.fps = +e.target.value;
 }
 $('#dur').addEventListener('change', e => {
   const v = parseFloat(String(e.target.value).replace(',', '.'));
+  if (slides() > 1) { if (v >= 0) setSlideDur(curSlide(), v); updDur(true); return; }
   if (v === 0) setStill(true);
   else if (v > 0) {
     pushUndo();
     if (S.still) { delete S.still; RT.layout.clear(); renderFormats(); renderAdds(); toast('Vídeo de novo: as animações voltaram'); }
     setDuration(v); changed({ props:true, layers:true });
   }
-  e.target.value = S.still ? 0 : S.duration;
+  updDur(true);
 });
 // Duração 0 = imagem estática: tudo aparece junto e parado, sem timeline, play nem animação. Nada se perde:
 // duração, tempos e animações das camadas ficam guardados e voltam ao digitar uma duração
@@ -8752,6 +8828,12 @@ function setSlides(v) {
   const n = clamp(Math.round(+v || 1), 1, SLIDES_MAX), was = slides();
   if (n === was) { renderFormats(); return; }
   pushUndo();
+  // de volta a um quadro só: a duração (ou imagem) passa a ser a do slide 1
+  if (n === 1 && S.sdur) {
+    const d0 = slideDur(0); delete S.sdur;
+    if (d0 === 0) { S.still = true; if (propTab === 'anim') propTab = 'style'; renderAdds(); }
+    else if (d0 < S.duration) { S.duration = d0; S.layers.forEach(L => { if (L.end == null || L.end > d0) L.end = d0; if (L.start > d0 - .3) L.start = Math.max(0, d0 - .3); }); T = Math.min(T, d0); }
+  }
   if (n > 1) S.slides = n; else delete S.slides;
   RT.slide = Math.min(RT.slide || 0, n - 1); RT.layout.clear();
   renderFormats(); zoomFit(); changed({ props:true });
@@ -8924,7 +9006,7 @@ function nextStart() {
 }
 // altura: a padrão do tipo, descendo se já houver algo ali ao mesmo tempo (no carrossel, só conta quem está no mesmo slide)
 function freeY(y, st, si = 0) {
-  const busy = S.layers.filter(l => l.type !== 'bg' && l.visible && (S.still || (l.start <= st + .1 && (l.end ?? S.duration) > st)) && (slides() < 2 || slideAt(l.x * W()) === si));
+  const busy = S.layers.filter(l => l.type !== 'bg' && l.visible && (S.still || slideStill(si) || (l.start <= st + .1 && (l.end ?? S.duration) > st)) && (slides() < 2 || slideAt(l.x * W()) === si));
   const free = v => !busy.some(l => Math.abs(l.y - v) < .07);
   for (let k = 0; k <= 8; k++) for (const v of [y + k * .05, y - k * .05]) if (v >= .08 && v <= .9 && free(v)) return v;
   return y;
@@ -8935,14 +9017,22 @@ function curSlide() {
   const L = selL(); if (L && L.type !== 'bg' && !NOBOX(L)) return slideAt(posOf(L).x * W());
   return clamp(RT.slide || 0, 0, slides() - 1);
 }
+// tempo de quem entra solto no slide si: imagem (o arquivo ou o slide) = o tempo todo (continua na tela se voltar ao vídeo);
+// vídeo = do momento de sempre até o fim do slide (no carrossel, cada slide tem a sua duração)
+function slideWin(si) {
+  if (S.still || slideStill(si)) return { start:0, end:S.duration, still:true };
+  const e = slides() > 1 ? slideEnd(si) : S.duration;
+  return { start:Math.min(nextStart(), Math.max(0, e - .5)), end:e };
+}
+const slideOfX = x => clamp(Math.floor(+x || 0), 0, slides() - 1);
 function addLayer(L, opts = {}) {
   pushUndo();
   // frame selecionado: entra nele, no mesmo tempo que ele (solto num ponto do palco continua onde caiu)
-  const fr = opts.x == null ? insertTarget() : null, win = fr && gwin(fr);
-  const st = opts.start ?? (win ? win.start : S.still ? 0 : nextStart()); // imagem estática: o tempo todo (continua na tela se voltar ao vídeo)
-  L.start = st; L.end = win ? win.end : S.duration;
+  const fr = opts.x == null ? insertTarget() : null, win = fr && gwin(fr), si = fr ? 0 : opts.x != null ? slideOfX(opts.x) : curSlide();
+  const sw = win || slideWin(si), st = opts.start ?? sw.start;
+  L.start = st; L.end = sw.end;
   if (opts.x != null) { L.x = opts.x; L.y = opts.y; setPos(L, opts.x, opts.y); }
-  else { const si = fr ? 0 : curSlide(); if (si) L.x += si; L.y = freeY(L.y, st, si); } // solto num ponto: fica nele também fora do principal
+  else { if (si) L.x += si; L.y = freeY(L.y, st, si); } // solto num ponto: fica nele também fora do principal
   S.layers.push(L);
   if (fr) { intoFrame(fr, [L]); toast(`Entrou em "${groupName(fr)}"`); }
   select(L.id, !!fr); propTab = 'style'; renderProps(); changed({ layers:true }); seekLayer(L); RT.userSeek = false;
@@ -9027,12 +9117,12 @@ async function addSvgLayers(units, name, pos) {
   }
   if (items.length < 2) return false;
   pushUndo();
-  const fr = pos ? null : insertTarget(), win = fr && gwin(fr), st = win ? win.start : S.still ? 0 : nextStart(), end = win ? win.end : S.duration;
+  const fr = pos ? null : insertTarget(), win = fr && gwin(fr), sw = win || slideWin(pos ? slideOfX(pos.x) : curSlide()), st = sw.start, end = sw.end;
   const x0 = Math.min(...items.map(i => i.lg.bx)), x1 = Math.max(...items.map(i => i.lg.bx + i.lg.bw));
   const y0 = Math.min(...items.map(i => i.lg.by)), y1 = Math.max(...items.map(i => i.lg.by + i.lg.bh));
   const k = .4 / Math.max(x1 - x0, 1e-6); // o conjunto ocupa .4 da largura, como um SVG só
   const bf = baseFmt(), si = pos || fr ? 0 : curSlide(), cx = pos ? pos.x : .5 + si, cy = pos ? pos.y : freeY(.42, st, si);
-  const step = S.still ? 0 : clamp((end - .5 - st) / items.length, 0, .12);
+  const step = sw.still ? 0 : clamp((end - .5 - st) / items.length, 0, .12);
   const Ls = items.map(({ svg, lg }, i) => {
     const L = mkLogo('logoSmall', { name:svg.name, svg, size:+(lg.bw * k).toFixed(5), in:'fade', inDur:BP.fade.dur, idle:'none' });
     L.start = +(st + i * step).toFixed(3); L.end = end;

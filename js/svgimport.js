@@ -491,9 +491,9 @@ async function addSvgNative(norm, name, pos) {
   }
   pushUndo();
   const fr = pos ? null : insertTarget(), win = fr && gwin(fr);
-  const st = win ? win.start : S.still ? 0 : nextStart(), end = win ? win.end : S.duration;
+  const sw = win || slideWin(pos ? slideOfX(pos.x) : curSlide()), st = sw.start, end = sw.end; // carrossel: até o fim do slide (imagem: o tempo todo)
   const si = pos || fr ? 0 : curSlide(), cx = pos ? pos.x : .5 + si, cy = pos ? pos.y : freeY(.42, st, si);
-  const step = S.still ? 0 : clamp(Math.min((end - .5 - st) / made.length, 1.2 / made.length), 0, .12);
+  const step = sw.still ? 0 : clamp(Math.min((end - .5 - st) / made.length, 1.2 / made.length), 0, .12);
   const Ls = made.map(({ L, cx:dx, cy:dy }, i) => {
     L.start = +(st + i * step).toFixed(3); L.end = end;
     L.x = +(cx + dx / F.w).toFixed(5); L.y = +(cy + dy / F.h).toFixed(5);
