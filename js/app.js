@@ -29,14 +29,18 @@ function h(tag, attrs = {}, kids = []) {
   if (tag === 'input' && attrs.type === 'range') rangeFill(e);
   return e;
 }
-// Slider com zero no meio (min < 0 < max): o preenchimento sai do zero para o lado em que a bolinha está (como no Figma),
-// em vez de ficar preso na esquerda. `.bi` + `--p` (bolinha) e `--z` (zero), 0..1; o CSS desenha. Os outros sliders seguem como eram.
+// Slider com zero no meio (min < 0 < max): o mesmo preenchimento dos outros, mas sai do zero para o lado em que a bolinha está (como no Figma),
+// em vez de ficar preso na esquerda. `.bi` + `--ol`/`--or` (px que o preenchimento da bolinha estica para a esquerda/direita); o CSS desenha.
+// A largura vem do próprio slider, então um ResizeObserver refaz a conta quando ele entra na tela ou muda de tamanho.
 function rangeFill(inp) {
   const min = parseFloat(inp.min), max = parseFloat(inp.max), bi = min < 0 && max > 0;
   inp.classList.toggle('bi', bi);
   if (!bi) return;
-  inp.style.setProperty('--p', ((parseFloat(inp.value) - min) / (max - min)).toFixed(4));
-  inp.style.setProperty('--z', (-min / (max - min)).toFixed(4));
+  if (!inp._ro && window.ResizeObserver) { inp._ro = new ResizeObserver(() => rangeFill(inp)); inp._ro.observe(inp); }
+  const w = inp.clientWidth - 12 - 6, p = (parseFloat(inp.value) - min) / (max - min), z = -min / (max - min); // padding de 6 px de cada lado; bolinha de 6 px
+  const ext = Math.max(0, Math.abs(p - z) * w - 3); // até o centro do zero
+  inp.style.setProperty('--ol', (p > z ? ext : 0).toFixed(1) + 'px');
+  inp.style.setProperty('--or', (p < z ? ext : 0).toFixed(1) + 'px');
 }
 // `inp.value = x` em código também atualiza o preenchimento (não dispara `input`)
 (() => {
