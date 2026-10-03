@@ -755,3 +755,9 @@ button.chip-cat{gap:8px}
   .top{gap:8px;padding-inline:12px}
   .logo-word{font-size:0;gap:0}
 }
+
+.modal.ask{z-index:70}
+.modal.ask .modal-card{width:min(420px,100%)}
+.ask-msg{margin:0;color:var(--muted);font-size:12px}
+.btn.danger{background:var(--danger);border-color:var(--danger);color:var(--btn-ink)}
+.ctx button .ctx-sub{display:block;color:var(--faint);font-size:10.5px;margin-top:1px}

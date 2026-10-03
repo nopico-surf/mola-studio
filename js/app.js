@@ -5159,7 +5159,7 @@ async function renameFile(id, name) {
 }
 async function deleteFile(id) {
   const list = (await DB.get('files')) || [], i = list.findIndex(f => f.id === id); if (i < 0) return;
-  if (!confirm(`Apagar "${list[i].name}"? Não dá para desfazer.`)) return;
+  if (!(await askConfirm(`Apagar "${list[i].name}"?`, "O arquivo some de vez. Não dá para desfazer.", "Apagar arquivo", true))) return;
   list.splice(i, 1); await DB.set('files', list); await DB.del('file:' + id);
   if (id === FILES.id) { FILES.id = null; const nx = list.find(f => (f.project || null) === FILES.project) || list[0]; if (nx) await openFile(nx.id); else await newFile(FILES.project); }
   renderFiles();
@@ -5198,7 +5198,7 @@ async function projRename(id, name) {
 async function projDelete(id) {
   const ps = await projAll(), p = ps.find(x => x.id === id); if (!p) return;
   const list = (await DB.get('files')) || [], mine = list.filter(f => f.project === id);
-  if (!confirm(`Apagar o projeto "${p.name}"?` + (mine.length ? ` ${mine.length === 1 ? 'O arquivo dele vai' : `Os ${mine.length} arquivos dele vão`} para Rascunhos.` : ''))) return;
+  if (!(await askConfirm(`Apagar o projeto "${p.name}"?`, (mine.length ? `${mine.length === 1 ? 'O arquivo dele vai' : `Os ${mine.length} arquivos dele vão`} para Rascunhos. ` : '') + 'Nenhum arquivo é apagado.', 'Apagar projeto', true))) return;
   mine.forEach(f => { delete f.project; });
   await DB.set('files', list); await DB.set('projects', ps.filter(x => x.id !== id));
   if (FILES.project === id) FILES.project = null;
@@ -7236,7 +7236,7 @@ function pasteLayers(p) {
   toast((out.length > 1 ? `${out.length} elementos colados` : `"${out[0].name}" colado`) + (fr ? ` em "${groupName(fr)}"` : ''));
 }
 const typingIn = t => { const tag = (t && t.tagName || '').toLowerCase(); return tag === 'input' && !['range', 'checkbox', 'color', 'button'].includes(t.type) || tag === 'textarea' || tag === 'select' || !!(t && t.isContentEditable); };
-const overlayOpen = () => !$('#files').hidden || !$('#modal').hidden || !$('#keys').hidden || !!CUTWIN || !!COMPWIN;
+const overlayOpen = () => !!document.querySelector('.modal.ask') || !$('#files').hidden || !$('#modal').hidden || !$('#keys').hidden || !!CUTWIN || !!COMPWIN;
 ['copy', 'cut'].forEach(kind => document.addEventListener(kind, e => {
   if (typingIn(e.target) || overlayOpen() || String(getSelection() || '').length) return; // texto selecionado copia o texto
   const L = selL(), p = clipPayload(); if (!p) return;

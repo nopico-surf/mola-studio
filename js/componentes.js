@@ -275,12 +275,9 @@ function openComps(id = 'title') {
     put(h('div', { class:'comp-acts' }, [
       h('button', { class:'btn small', text:'Usar o estilo do selecionado', disabled:!fit || null, title:fit ? `Copia o estilo de "${fit.name}" para este padrão` : `Selecione um elemento do tipo ${TYPE_LABEL[d.type].toLowerCase()} no palco`,
         onclick:() => { compFromLayer(fit, cur); draw(); refresh(); } }),
-      h('button', { class:'btn small', text:same.length ? `Aplicar nos ${same.length} deste arquivo` : 'Aplicar neste arquivo', disabled:!same.length || null,
-        title:'Passa o padrão para os elementos deste tipo que já estão no arquivo (o texto, a posição e o tempo ficam). Ctrl+Z desfaz',
-        onclick:() => { pushUndo(); compApply(same, cur); changed({ props:true, layers:true }); toast(`Padrão aplicado em ${same.length} elemento${same.length > 1 ? 's' : ''}`, 5000, UNDO_ACT); } }),
-      h('button', { class:'btn small', text:'Aplicar no projeto', disabled:!FILES.project || null,
-        title:FILES.project ? 'Passa o padrão para os elementos deste tipo em todos os arquivos do projeto (texto, posição e tempo ficam)' : 'Este arquivo não está num projeto',
-        onclick:() => compApplyProject(cur) }),
+      h('button', { class:'btn small', 'aria-haspopup':'menu', html:`Aplicar nos ${(d.label).toLowerCase()}s que já existem <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5L6 8l3.5-3.5"/></svg>`,
+        title:'O padrão vale sozinho para o que for inserido. Aqui você passa ele também para os que já estão no projeto ou no arquivo',
+        onclick:e => compApplyMenu(e.currentTarget, cur, () => { draw(); }) }),
       h('button', { class:'btn small ghost', text:'Voltar ao de fábrica', disabled:!compCustom(cur) || null,
         onclick:() => { pushUndo(); delete compsOf()[cur]; autosave(); draw(); refresh(); } }),
     ]));
@@ -315,4 +312,45 @@ async function compApplyProject(id) {
     await DB.set('file:' + f.id, JSON.stringify(st));
   }
   toast(n ? `Padrão aplicado em ${n} elemento${n > 1 ? 's' : ''}, em ${files} arquivo${files > 1 ? 's' : ''} do projeto` : 'Nenhum elemento desse tipo no projeto');
+}
+
+// confirmação no estilo do editor (Promise<boolean>)
+function askConfirm(title, msg, ok = 'Confirmar', danger = false) {
+  return new Promise(res => {
+    const end = v => { ov.remove(); document.removeEventListener('keydown', key, true); res(v); };
+    const key = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); end(false); } else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); end(true); } };
+    const okB = h('button', { class:'btn small ' + (danger ? 'danger' : 'primary'), text:ok, onclick:() => end(true) });
+    const ov = h('div', { class:'modal ask', onpointerdown:e => { if (e.target === ov) end(false); } }, [h('div', { class:'modal-card', role:'alertdialog', 'aria-modal':'true' }, [
+      h('h2', { text:title }), h('p', { class:'ask-msg', text:msg }),
+      h('div', { class:'row', style:'justify-content:flex-end' }, [h('button', { class:'btn small ghost', text:'Cancelar', onclick:() => end(false) }), okB])])]);
+    document.body.append(ov); document.addEventListener('keydown', key, true); okB.focus();
+  });
+}
+// quantos elementos desse componente existem no projeto (fora o arquivo aberto, que conta pelo S)
+async function compCountProject(id) {
+  const list = ((await DB.get('files')) || []).filter(f => f.project === FILES.project && f.id !== FILES.id);
+  let n = S.layers.filter(l => compKindOf(l) === id).length, files = n ? 1 : 0;
+  for (const f of list) { try { const st = JSON.parse(await DB.get('file:' + f.id)); const k = (st.layers || []).filter(l => compKindOf(l) === id).length; if (k) { n += k; files++; } } catch (e) {} }
+  return { n, files };
+}
+// um menu só: primeiro o projeto, depois só este arquivo; sempre pede confirmação dizendo quantos mudam
+function compApplyMenu(anchor, id, after) {
+  closeMenu();
+  const d = COMP_DEF[id], nm = d.label.toLowerCase(), here = S.layers.filter(l => compKindOf(l) === id);
+  const item = (text, sub, fn, off) => h('button', { disabled:off || null, onclick:() => { closeMenu(); fn(); } }, [h('span', {}, [text, h('small', { class:'ctx-sub', text:sub })])]);
+  const m = h('div', { class:'ctx', role:'menu' }, [
+    item('Em todo o projeto', FILES.project ? `Todos os arquivos de "${PROJ_NAMES.get(FILES.project)}"` : 'Este arquivo não está num projeto', async () => {
+      const c = await compCountProject(id);
+      if (!c.n) { toast(`Nenhum ${nm} no projeto`); return; }
+      if (await askConfirm(`Mudar ${c.n} ${nm}${c.n > 1 ? 's' : ''} do projeto?`, `O estilo e a animação de ${c.n} ${nm}${c.n > 1 ? 's' : ''}, em ${c.files} arquivo${c.files > 1 ? 's' : ''}, passam a seguir o padrão. Texto, posição e tempo ficam. Nos outros arquivos não dá para desfazer.`, 'Aplicar no projeto')) { await compApplyProject(id); after && after(); }
+    }, !FILES.project),
+    item('Só neste arquivo', here.length ? `${here.length} ${nm}${here.length > 1 ? 's' : ''} aqui` : `Nenhum ${nm} neste arquivo`, async () => {
+      if (!(await askConfirm(`Mudar ${here.length} ${nm}${here.length > 1 ? 's' : ''} deste arquivo?`, 'O estilo e a animação passam a seguir o padrão. Texto, posição e tempo ficam. Ctrl+Z desfaz.', 'Aplicar no arquivo'))) return;
+      pushUndo(); compApply(here, id); changed({ props:true, layers:true }); toast(`Padrão aplicado em ${here.length} ${nm}${here.length > 1 ? 's' : ''}`, 5000, UNDO_ACT); after && after();
+    }, !here.length),
+  ]);
+  document.body.append(m);
+  const r = anchor.getBoundingClientRect(), mr = m.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(r.left, innerWidth - mr.width - 8)) + 'px';
+  m.style.top = (r.bottom + 4 + mr.height > innerHeight ? Math.max(8, r.top - mr.height - 4) : r.bottom + 4) + 'px';
 }
