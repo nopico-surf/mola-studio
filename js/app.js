@@ -4370,43 +4370,11 @@ function tick(now) {
   }
   syncMedia(); // vídeos e trilha acompanham a agulha
   if (!needs && needsOv && !RT.exporting && !viewCovered()) needs = true; // rolou ou arrastou para fora do recorte desenhado
-  if (!needs && RT.q < 1 && !playing && !RT.exporting && performance.now() - RT.lastDraw > SHARP_MS) { needs = true; RT.sharp = true; } // parou de mexer: refaz nítido
   if (needs && !RT.exporting) {
-    const t0 = performance.now(), q = stageQ(t0), rs = RS * q;
-    setView(viewFull(), rs); if (q === 1) RT.fullPx = cvr.width * cvr.height;
-    measureGhosts(); renderFrame(pctx, T, rs, false); drawOverlays(); updTime(); updStageHint(); needs = false; needsOv = false;
-    stageCost(t0, q);
+    setView(viewFull()); measureGhosts(); renderFrame(pctx, T, RS, false); drawOverlays(); updTime(); updStageHint(); needs = false; needsOv = false;
   }
   else if (needsOv && !RT.exporting) { drawOverlays(); needsOv = false; }
   requestAnimationFrame(tick);
-}
-/* Resolução adaptativa (pedido do usuário: com zoom, mexer pesava, e ele usa muito desfoque): enquanto algo se mexe (quadros seguidos:
-   tocar, arrastar, barra do painel, agulha) e o quadro está caro, o palco é desenhado em resolução menor (QLV); parou de mexer
-   (SHARP_MS sem quadro novo), refaz nítido. Uma mudança só (um clique) sai sempre nítida. Só com a tela de desenho grande
-   (Q_MINPX: zoom, tela de alta densidade): sem zoom nada muda. Custo = o maior entre o tempo do desenho e o intervalo entre dois
-   quadros seguidos (com placa de vídeo o desenho é feito depois, e aparece no intervalo). A exportação nunca passa por aqui */
-const QLV = [1, .8, .64, .5, .4], Q_BUDGET = 30, SHARP_MS = 220, Q_MINPX = 1.6e6;
-RT.q = 1; RT.qi = 0; RT.qMem = 0; RT.lastDraw = -1e9; RT.lastCost = 0;
-// em movimento = este quadro vem logo depois do anterior (a folga cresce com o custo do quadro: quadro caro, intervalo grande)
-const stageMoving = now => playing || now - RT.lastDraw < 150 + RT.lastCost;
-function stageQ(now) {
-  const sharp = RT.sharp; RT.sharp = false;
-  if (sharp || !stageMoving(now) || (RT.fullPx || 0) < Q_MINPX) { if (RT.qi) RT.qMem = RT.qi; RT.qi = 0; RT.qc = 0; return 1; }
-  if (!RT.qi && RT.qMem) RT.qi = RT.qMem; // nova sequência: começa onde a última parou
-  return QLV[RT.qi];
-}
-function stageCost(t0, q) {
-  const now = performance.now(), js = now - t0, gap = now - RT.lastDraw, moving = stageMoving(t0);
-  RT.lastDraw = now; RT.lastCost = js; RT.q = q;
-  if (!moving || (RT.fullPx || 0) < Q_MINPX) return;
-  const c = gap < js + 150 ? Math.max(js, gap) : js;
-  RT.qc = RT.qc ? RT.qc * .5 + c * .5 : c;
-  // nível em que o quadro cabe no orçamento (custo ~ pixels: proporcional a q²); sobe de novo quando sobra folga
-  const est = j => RT.qc * (QLV[j] / q) ** 2;
-  let j = QLV.indexOf(q); if (j < 0) j = RT.qi;
-  if (est(j) > Q_BUDGET * 1.25) while (j < QLV.length - 1 && est(j) > Q_BUDGET) j++;
-  else while (j > 0 && est(j - 1) < Q_BUDGET * .8) j--;
-  if (j !== RT.qi) { RT.qc = est(j); RT.qi = j; }
 }
 const fmtT = s => { s = Math.max(0, s); const m = Math.floor(s / 60), ss = Math.floor(s % 60), f = Math.floor((s % 1) * fps()); return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}<span>:${String(f).padStart(2, '0')}</span>`; };
 // roda a cada quadro desenhado: primeiro as leituras de layout (agulha), depois as escritas, e só escreve o que mudou
