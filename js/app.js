@@ -1170,15 +1170,28 @@ function addStylesheet(url) {
     setTimeout(() => res(false), 8000);
   });
 }
-async function loadGoogleFont(family) {
-  family = family.trim(); if (!family) return false;
-  if (RT.fontsOk.has(family)) return true;
+/* Acúmulo (pedido do usuário: "quanto mais tempo uso o arquivo, pior fica"): todo desfazer/refazer chama ensureFonts. A fonte enviada
+   era lida de novo e entrava mais uma vez no navegador (uma FontFace a mais por fonte a cada desfazer, nunca tirada; cada uma ainda
+   refazia o layout de todos os textos) e a do Google que não carregou era tentada de novo, até 17 folhas de estilo. Agora: a mesma
+   fonte enviada entra uma vez só (FILE_FONTS, pela família + o arquivo), o mesmo carregamento em andamento é reaproveitado
+   (FONT_JOBS) e a do Google que falhou só é tentada de novo depois de FONT_RETRY ms ou quando o usuário pede (force) */
+const FONT_JOBS = new Map(), FONT_BAD_AT = new Map(), FILE_FONTS = new Map(), FONT_RETRY = 60000;
+function loadGoogleFont(family, force) {
+  family = family.trim(); if (!family) return Promise.resolve(false);
+  if (RT.fontsOk.has(family)) return Promise.resolve(true);
+  if (FONT_JOBS.has(family)) return FONT_JOBS.get(family);
+  if (!force && performance.now() - (FONT_BAD_AT.get(family) ?? -Infinity) < FONT_RETRY) return Promise.resolve(false);
+  const job = loadGoogleFont0(family).finally(() => FONT_JOBS.delete(family));
+  FONT_JOBS.set(family, job); return job;
+}
+async function loadGoogleFont0(family) {
   const fam = family.replace(/ +/g, '+');
   const tries = ['100..900','200..900','100..800','200..800','300..900','300..800','400..900','400..800','300..700','400..700'].map(r => `${fam}:ital,wght@0,${r};1,${r}`)
     .concat(['100..900','200..800','300..700','400..900'].map(r => `${fam}:wght@${r}`), [`${fam}:ital,wght@0,400;0,700;1,400`, `${fam}:wght@400;700`, fam]);
   let ok = false;
   for (const q of tries) { ok = await addStylesheet(`https://fonts.googleapis.com/css2?family=${q}&display=swap`); if (ok) break; }
-  if (!ok) { RT.fontsBad.add(family); return false; }
+  if (!ok) { RT.fontsBad.add(family); FONT_BAD_AT.set(family, performance.now()); return false; }
+  FONT_BAD_AT.delete(family);
   await Promise.all([300,400,500,600,700,800,900].flatMap(w => [document.fonts.load(`${w} 40px "${family}"`), document.fonts.load(`italic ${w} 40px "${family}"`)]).map(p => p.catch(() => {})));
   RT.fontsOk.add(family); RT.fontsBad.delete(family); RT.layout.clear(); needs = true;
   return true;
@@ -1199,12 +1212,17 @@ function weightsOf(family) {
   const mx = fontMaxWeight(family);
   return mx ? WEIGHTS.filter(([v]) => v <= mx) : WEIGHTS;
 }
-async function loadFileFont(f) {
-  try {
-    const buf = await (await fetch(f.data)).arrayBuffer();
-    const ff = new FontFace(f.family, buf); await ff.load(); document.fonts.add(ff);
-    RT.fontsOk.add(f.family); RT.layout.clear(); needs = true; return true;
-  } catch (e) { RT.fontsBad.add(f.family); return false; }
+function loadFileFont(f) {
+  const d = String(f.data || ''), key = `${f.family}|${d.length}|${d.slice(-96)}`;
+  if (FILE_FONTS.has(key)) return FILE_FONTS.get(key); // já entrou (ou está entrando): não soma outra cópia
+  const job = (async () => {
+    try {
+      const buf = await (await fetch(f.data)).arrayBuffer();
+      const ff = new FontFace(f.family, buf); await ff.load(); document.fonts.add(ff);
+      RT.fontsOk.add(f.family); RT.fontsBad.delete(f.family); RT.layout.clear(); needs = true; return true;
+    } catch (e) { RT.fontsBad.add(f.family); return false; }
+  })();
+  FILE_FONTS.set(key, job); return job;
 }
 async function ensureFonts() {
   await Promise.all(S.brand.loaded.map(f => f.src === 'file' ? loadFileFont(f) : loadGoogleFont(f.family)));
@@ -2152,6 +2170,13 @@ function applyXf(ctx, st, pv = 0, r0 = 0) {
 }
 // só o desfoque vai no ctx.filter: brightness() e filtro junto com sombra são lentos demais no Chrome.
 // O brilho (bright) entra pela cor na letra (brightCol) e pela soma da imagem com ela mesma nos blocos (brighten)
+/* Desfoque no canvas custa pelo tamanho da tela de destino, não do que é desenhado (medido: no palco com zoom, 10× mais caro; o
+   usuário usa muito desfoque). O desfoque não passa de 3σ além do desenho, então recortar nessa área dá o mesmo resultado.
+   blurClip recorta o retângulo x, y, w, h (espaço atual de ctx) aberto em 3 × b px da tela (b = desfoque em px da tela) */
+function blurClip(ctx, x, y, w, h, b) {
+  const M = ctx.getTransform(), s = Math.min(Math.hypot(M.a, M.b), Math.hypot(M.c, M.d)) || 1, m = (b * 3 + 3) / s;
+  ctx.beginPath(); ctx.rect(x - m, y - m, w + 2 * m, h + 2 * m); ctx.clip();
+}
 function fxFilter(st, rs) { return st.blur > .15 ? `blur(${(st.blur * rs).toFixed(2)}px)` : ''; }
 function brightCol(c, b) {
   if (!(b > 1.005)) return c;
@@ -2260,6 +2285,8 @@ function drawState(ctx, st, w, h, R, draw, o = {}) {
   applyXf(ctx, st, o.piv || 0, o.rot || 0);
   ctx.globalAlpha *= a;
   const f = fxFilter(st, R.rs); if (f) ctx.filter = f;
+  // desfoque: só em volta do elemento (folga do tamanho dele, para traço, marca e brilho); o grupo animado desenha a tela dele inteira
+  if (f && o.blurClip !== false) { const mm = Math.max(w, h) + 60; blurClip(ctx, -w / 2 - mm, -h / 2 - mm, w + mm * 2, h + mm * 2, st.blur * R.rs); }
   ctx.save();
   clipFx(ctx, st, w, h);
   if (st.line != null) lineReveal(ctx, st.line, w, h, o.color);
@@ -2428,7 +2455,7 @@ function rasterFx(ctx, st, w, h, pad, R, draw) {
   if (buf) { const q = 1 / (k * bk); ctx.drawImage(out, 0, 0, ow, oh, -ow / 2 * q, -oh / 2 * q, ow * q, oh * q); }
   if (st.glow > .01 && !st.fx) { // luz que vaza da própria cor: cópias desfocadas somadas por cima
     const r = (Math.min(bw, bh) * .05 + 5) * k;
-    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    ctx.save(); blurClip(ctx, X0, Y0, cw * u, ch * u, r * 3); ctx.globalCompositeOperation = 'lighter';
     ctx.filter = `blur(${r.toFixed(1)}px)`; ctx.globalAlpha = a0 * Math.min(1, st.glow * .5); whole();
     ctx.filter = `blur(${(r * 3).toFixed(1)}px)`; ctx.globalAlpha = a0 * Math.min(1, st.glow * .35); whole();
     ctx.restore();
@@ -2803,7 +2830,7 @@ function adjImg(L, img) {
    desenhada de uma cópia reduzida pela metade quantas vezes couber sem ficar menor do que aparece na tela (zoom do palco, escala da
    animação). Na exportação a foto sai do tamanho original (só o espelho vira cópia). Até IMG_KEEP cópias por foto e IMG_MAX px no
    total (sai a usada há mais tempo). Vídeo continua com o espelho no desenho (cada quadro é novo). */
-const IMGC = new WeakMap(), IMG_KEEP = 6, IMG_MAX = 8e7;
+const IMGC = new WeakMap(), IMG_KEEP = 4, IMG_MAX = 3e7;
 let IMG_PX = 0;
 const IMG_ALL = new Set(); // { img, k, c } de todas as fotos, para o teto de memória
 function imgFor(ctx, img, dw, dh, fx, fy, exact) {
@@ -3535,10 +3562,19 @@ function drawShadowed(tc, src, L, sh, rs) {
     const tint = frameBuf(src, 2, padOf(src)), x = tint.getContext('2d'), ext = frameBuf(src, 3, padOf(src)), y = ext.getContext('2d');
     x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-over'; x.clearRect(0, 0, tint.width, tint.height); x.drawImage(src, 0, 0);
     x.globalCompositeOperation = 'source-in'; x.fillStyle = L.shColor || '#000000'; x.fillRect(0, 0, tint.width, tint.height); x.globalCompositeOperation = 'source-over';
-    y.setTransform(1, 0, 0, 1, 0, 0); y.clearRect(0, 0, ext.width, ext.height);
     const n = 28, step = Math.max(.75, 3.4 * k);
-    for (let i = n; i >= 1; i--) y.drawImage(tint, i * step, i * step);
-    tc.globalAlpha = sh.a; tc.drawImage(ext, 0, 0); tc.globalAlpha = 1;
+    // as 28 cópias deslocadas, montadas dobrando (U(2m) = U(m) + U(m) deslocada m passos; U(m+1) = U(m) deslocada 1 passo + a
+    // silhueta): cada deslocamento entra uma vez só e a mesma cor por cima de si mesma não depende da ordem, então é o mesmo
+    // desenho com 13 cópias em vez de 28 (com zoom a tela é grande e cada cópia pesa)
+    const alt = frameBuf(src, 'ls', padOf(src)), z = alt.getContext('2d');
+    let cur = ext, cx = y, oth = alt, ox = z;
+    const clr = g => { g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.filter = 'none'; g.globalCompositeOperation = 'source-over'; g.clearRect(0, 0, g.canvas.width, g.canvas.height); };
+    clr(cx); cx.drawImage(tint, step, step); let m = 1;
+    for (const bit of n.toString(2).slice(1)) {
+      clr(ox); ox.drawImage(cur, 0, 0); ox.drawImage(cur, m * step, m * step); m *= 2; [cur, cx, oth, ox] = [oth, ox, cur, cx];
+      if (bit === '1') { clr(ox); ox.drawImage(cur, step, step); ox.drawImage(tint, step, step); m++; [cur, cx, oth, ox] = [oth, ox, cur, cx]; }
+    }
+    tc.globalAlpha = sh.a; tc.drawImage(cur, 0, 0); tc.globalAlpha = 1;
   } else {
     tc.shadowColor = shadowColor(L, sh); tc.shadowBlur = (sh.blur || 0) * k; tc.shadowOffsetX = (sh.x || 0) * k; tc.shadowOffsetY = (sh.y || 0) * k;
   }
@@ -3565,7 +3601,9 @@ function backBlur(tc, src, b, lb = 0) {
   c.filter = 'none'; c.globalCompositeOperation = 'source-over';
   // com desfoque da camada, a borda do vidro também borra: o fundo desfocado se dissolve no quadro em vez de cortar em linha seca
   if (lb > .2 && padOf(m)) clampEdges(m);
-  tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1; tc.filter = lb > .2 ? `blur(${lb.toFixed(2)}px)` : 'none'; tc.globalCompositeOperation = 'source-over';
+  tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1;
+  if (lb > .2) blurClip(tc, -o.x, -o.y, m.width, m.height, lb);
+  tc.filter = lb > .2 ? `blur(${lb.toFixed(2)}px)` : 'none'; tc.globalCompositeOperation = 'source-over';
   tc.drawImage(m, -o.x, -o.y); tc.restore();
 }
 // estica a última linha/coluna do quadro pela margem da tela: o desfoque continua a camada além da borda do quadro
@@ -3611,6 +3649,7 @@ function composeOnto(tc, src, L, sh, bm, rs) {
   const w = out.width, hh = out.height, F = frameCenter(out), k = L.type === 'bg' && lb > .2 ? 1 + lb * 3 / Math.min(F.w, F.h) : 1; // o fundo borrado não mostra borda
   const o = bufAt(tc.canvas, out);
   tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1;
+  if (lb > .2 && k === 1) blurClip(tc, o.x, o.y, w, hh, lb); // fundo (k > 1) cobre o quadro: recorte não ajuda
   tc.globalCompositeOperation = bm || 'source-over'; tc.filter = lb > .2 ? `blur(${lb.toFixed(2)}px)` : 'none';
   tc.drawImage(out, o.x + F.cx * (1 - k), o.y + F.cy * (1 - k), w * k, hh * k);
   tc.restore();
@@ -3644,7 +3683,7 @@ function reachOf(L, t) {
   const b = q.b, sh = L.shadow && L.shadow !== 'none' ? SHADOWS[L.shadow] : null;
   let pad = 240 + (L.lblur || 0) * 3 + (strokeOn(L) ? skW(L) * 2 : 0) + q.size * 1.6 + (L.move && L.move !== 'none' ? Math.max(b.w, b.h) * .5 : 0);
   if (sh) pad += sh.long ? 160 : ((sh.blur || 0) + Math.max(Math.abs(sh.x || 0), Math.abs(sh.y || 0))) * 1.6;
-  return { b, cx:b.x + b.w / 2, cy:b.y + b.h / 2, r:Math.hypot(b.w, b.h) / 2 * 1.6 + pad };
+  return { b, size:q.size, cx:b.x + b.w / 2, cy:b.y + b.h / 2, r:Math.hypot(b.w, b.h) / 2 * 1.6 + pad };
 }
 // o alcance em px da tela de tc (com a câmera da camada)
 function reachPx(tc, L, t, cam, depth) {
@@ -3655,16 +3694,42 @@ function reachPx(tc, L, t, cam, depth) {
 }
 function offView(tc, L, t, cam, depth) {
   if (RT.measure) return false;
-  const p = reachPx(tc, L, t, cam, depth); if (!p) return false;
+  const p = reachPx(tc, L, t, cam, depth); if (!p || ![p.x0, p.y0, p.x1, p.y1].every(Number.isFinite)) return false; // na dúvida, desenha
   const c = tc.canvas;
   if (p.x1 >= 0 && p.y1 >= 0 && p.x0 <= c.width && p.y0 <= c.height) return false;
   L._bounds = p.q.b; return true;
 }
-// tela da sombra/mesclagem/desfoque só do tamanho do alcance (px do quadro inteiro, o espaço de _vo), quando bem menor que a de
-// sempre; em degraus de 64 px, para mover o elemento não criar tela nova. Dentro do quadro: a margem (pad) leva o que passa da borda
+/* o que a camada desenha parada (unidades do quadro), mais justo que o alcance (um círculo folgado, bom para decidir se desenha):
+   a tela da sombra/mesclagem/desfoque é deste tamanho e a margem dela (fxPad) leva a sombra e o desfoque. Com zoom, a tela do
+   tamanho do alcance chegava a 30× o texto, e sombra, desfoque e mesclagem custam pelo tamanho da tela. Folgas: traço, letra que
+   passa da linha, marca à mão (a seta sai 1,4 corpo para o lado), movimento contínuo (quicar ~70 px, brilho neon ~40% do lado
+   menor, 3D e interferência ~25%), moldura de aparelho e movimento dentro da imagem; giro (forma girada, girar, balançar,
+   tremer, 3D) usa a diagonal */
+function contentRect(L, q) {
+  const b = q.b, mx = Math.max(b.w, b.h), idle = stillNow(L) ? 'none' : L.idle || 'none';
+  const turn = !!L.rot || ['spin', 'sway', 'wiggle', 'float3d'].includes(idle), w = turn ? Math.hypot(b.w, b.h) : b.w, hh = turn ? w : b.h;
+  let m = 48 + mx * .12 + (strokeOn(L) ? skW(L) * 2 : 0) + q.size * .6;
+  if (L.type === 'text' && L.mark && L.mark !== 'none') m += q.size * 1.6;
+  if (['float', 'float3d', 'wiggle', 'bounce'].includes(idle)) m += 80;
+  if (idle === 'glow') m += Math.min(b.w, b.h) * .4 + 40;
+  if (idle === 'pulse' || idle === 'breathe') m += mx * .06;
+  if (idle === 'float3d' || idle === 'glitch') m += mx * .25;
+  if (L.type === 'image' && L.device && L.device !== 'none') m += b.w * .1;
+  if (L.move && L.move !== 'none') m += mx * .5;
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  return { x0:cx - w / 2 - m, y0:cy - hh / 2 - m, x1:cx + w / 2 + m, y1:cy + hh / 2 + m };
+}
+// tela da sombra/mesclagem/desfoque só do tamanho do que a camada desenha (px do quadro inteiro, o espaço de _vo), quando bem
+// menor que a de sempre; em degraus de 64 px, para mover o elemento não criar tela nova. Dentro do quadro: a margem (pad) leva o que passa da borda
 function fxGeo(tc, L, t, cam, depth) {
   if (RT.measure) return null;
-  const p = reachPx(tc, L, t, cam, depth); if (!p) return null;
+  const q = reachOf(L, t); if (!q) return null;
+  const r = contentRect(L, q);
+  tc.save(); applyCam(tc, cam, L, depth); const M = tc.getTransform(); tc.restore();
+  const xs = [], ys = [];
+  for (const [x, y] of [[r.x0, r.y0], [r.x1, r.y0], [r.x0, r.y1], [r.x1, r.y1]]) { xs.push(M.a * x + M.c * y + M.e); ys.push(M.b * x + M.d * y + M.f); }
+  const p = { x0:Math.min(...xs), y0:Math.min(...ys), x1:Math.max(...xs), y1:Math.max(...ys) };
+  if (![p.x0, p.y0, p.x1, p.y1].every(Number.isFinite)) return null; // conta sem sentido: a tela de sempre
   const c = tc.canvas, pd = padOf(c), v = c._vo, fw = v ? v.fw : c.width - 2 * pd, fh = v ? v.fh : c.height - 2 * pd;
   const ox = voX(c) - pd, oy = voY(c) - pd, Q = 64;
   const x0 = Math.max(0, ox, Math.floor(p.x0 + ox)), y0 = Math.max(0, oy, Math.floor(p.y0 + oy));
@@ -3784,7 +3849,7 @@ function drawGroup(tc, gid, gp, els, t, R, cam, one, G, depth = 0) {
     if (s.cdy) c.translate(0, s.cdy);
     blit(c, -cx, -cy);
   };
-  const o = { piv:P && P.pivot ? (P.pivot === 'top' ? -hh / 2 : hh / 2) : 0, pad:80, color:S.brand.colors[2], rot:gRad(gid) };
+  const o = { piv:P && P.pivot ? (P.pivot === 'top' ? -hh / 2 : hh / 2) : 0, pad:80, color:S.brand.colors[2], rot:gRad(gid), blurClip:false };
   dst.save(); dst.translate(cx, cy);
   if (P && P.trail && ph.mode !== 'hold') for (let j = P.trail.n; j >= 1; j--) {
     const q = ph.p - j * P.trail.lag; if (q <= 0) continue;
@@ -3969,19 +4034,19 @@ function viewFull() {
 }
 // faixa (px do canvas) perto dos lados do recorte em que "borrar atrás" sai errado: o alcance do desfoque mais a ampliação
 // em volta do centro do quadro (no pior caso, na borda do quadro)
-function viewGuard(fw, fh) {
+function viewGuard(fw, fh, rs = RS) {
   let b = 0;
   for (const L of S.layers) if (L.visible && L.type !== 'bg' && L.bblur > 0 && phase(L, T)) b = Math.max(b, L.bblur);
   const gs = S.groups || {}; for (const g in gs) if (gs[g] && gs[g].bblur > 0) b = Math.max(b, gs[g].bblur);
   if (!b) return 0;
-  b *= RS; const k = 1 + b * 3 / Math.min(fw, fh);
+  b *= rs; const k = 1 + b * 3 / Math.min(fw, fh);
   return Math.ceil(b * 3 + (1 - 1 / k) * Math.max(fw, fh) / 2) + 8;
 }
-function setView(full) {
-  const fw = Math.max(1, Math.round(FW() * RS)), fh = Math.max(1, Math.round(H() * RS)), v = full ? null : stageVis();
+function setView(full, rs = RS) {
+  const fw = Math.max(1, Math.round(FW() * rs)), fh = Math.max(1, Math.round(H() * rs)), v = full ? null : stageVis();
   let V = null;
   if (v) {
-    const q = fw / v.r.width, g = viewGuard(fw, fh); // q = px do canvas por px da tela
+    const q = fw / v.r.width, g = viewGuard(fw, fh, rs); // q = px do canvas por px da tela
     const mx = Math.max(VIEW_MIN, v.vw * VIEW_M) * q + g, my = Math.max(VIEW_MIN, v.vh * VIEW_M) * q + g;
     const w = Math.min(fw, Math.ceil(v.vw * q + 2 * mx)), hh = Math.min(fh, Math.ceil(v.vh * q + 2 * my));
     if (w * hh < fw * fh * .7) { // quase o quadro todo: não compensa recortar
@@ -4276,9 +4341,43 @@ function tick(now) {
   }
   syncMedia(); // vídeos e trilha acompanham a agulha
   if (!needs && needsOv && !RT.exporting && !viewCovered()) needs = true; // rolou ou arrastou para fora do recorte desenhado
-  if (needs && !RT.exporting) { setView(viewFull()); measureGhosts(); renderFrame(pctx, T, RS, false); drawOverlays(); updTime(); updStageHint(); needs = false; needsOv = false; }
+  if (!needs && RT.q < 1 && !playing && !RT.exporting && performance.now() - RT.lastDraw > SHARP_MS) { needs = true; RT.sharp = true; } // parou de mexer: refaz nítido
+  if (needs && !RT.exporting) {
+    const t0 = performance.now(), q = stageQ(t0), rs = RS * q;
+    setView(viewFull(), rs); if (q === 1) RT.fullPx = cvr.width * cvr.height;
+    measureGhosts(); renderFrame(pctx, T, rs, false); drawOverlays(); updTime(); updStageHint(); needs = false; needsOv = false;
+    stageCost(t0, q);
+  }
   else if (needsOv && !RT.exporting) { drawOverlays(); needsOv = false; }
   requestAnimationFrame(tick);
+}
+/* Resolução adaptativa (pedido do usuário: com zoom, mexer pesava, e ele usa muito desfoque): enquanto algo se mexe (quadros seguidos:
+   tocar, arrastar, barra do painel, agulha) e o quadro está caro, o palco é desenhado em resolução menor (QLV); parou de mexer
+   (SHARP_MS sem quadro novo), refaz nítido. Uma mudança só (um clique) sai sempre nítida. Só com a tela de desenho grande
+   (Q_MINPX: zoom, tela de alta densidade): sem zoom nada muda. Custo = o maior entre o tempo do desenho e o intervalo entre dois
+   quadros seguidos (com placa de vídeo o desenho é feito depois, e aparece no intervalo). A exportação nunca passa por aqui */
+const QLV = [1, .8, .64, .5, .4], Q_BUDGET = 30, SHARP_MS = 220, Q_MINPX = 1.6e6;
+RT.q = 1; RT.qi = 0; RT.qMem = 0; RT.lastDraw = -1e9; RT.lastCost = 0;
+// em movimento = este quadro vem logo depois do anterior (a folga cresce com o custo do quadro: quadro caro, intervalo grande)
+const stageMoving = now => playing || now - RT.lastDraw < 150 + RT.lastCost;
+function stageQ(now) {
+  const sharp = RT.sharp; RT.sharp = false;
+  if (sharp || !stageMoving(now) || (RT.fullPx || 0) < Q_MINPX) { if (RT.qi) RT.qMem = RT.qi; RT.qi = 0; RT.qc = 0; return 1; }
+  if (!RT.qi && RT.qMem) RT.qi = RT.qMem; // nova sequência: começa onde a última parou
+  return QLV[RT.qi];
+}
+function stageCost(t0, q) {
+  const now = performance.now(), js = now - t0, gap = now - RT.lastDraw, moving = stageMoving(t0);
+  RT.lastDraw = now; RT.lastCost = js; RT.q = q;
+  if (!moving || (RT.fullPx || 0) < Q_MINPX) return;
+  const c = gap < js + 150 ? Math.max(js, gap) : js;
+  RT.qc = RT.qc ? RT.qc * .5 + c * .5 : c;
+  // nível em que o quadro cabe no orçamento (custo ~ pixels: proporcional a q²); sobe de novo quando sobra folga
+  const est = j => RT.qc * (QLV[j] / q) ** 2;
+  let j = QLV.indexOf(q); if (j < 0) j = RT.qi;
+  if (est(j) > Q_BUDGET * 1.25) while (j < QLV.length - 1 && est(j) > Q_BUDGET) j++;
+  else while (j > 0 && est(j - 1) < Q_BUDGET * .8) j--;
+  if (j !== RT.qi) { RT.qc = est(j); RT.qi = j; }
 }
 const fmtT = s => { s = Math.max(0, s); const m = Math.floor(s / 60), ss = Math.floor(s % 60), f = Math.floor((s % 1) * fps()); return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}<span>:${String(f).padStart(2, '0')}</span>`; };
 // roda a cada quadro desenhado: primeiro as leituras de layout (agulha), depois as escritas, e só escreve o que mudou
@@ -5637,6 +5736,9 @@ async function openState(st, id, name, project = FILES.project) {
   DB.set('currentId', id);
   undoStack.length = 0; redoStack.length = 0; redoBase = null; syncHist();
   S = st; RT.layout.clear(); RT.slide = 0; RT.slidePicks = null;
+  // fotos de outros arquivos saem da memória (cada arquivo aberto deixava as dele decodificadas até fechar a aba); quem precisar carrega de novo
+  { const keep = new Set(); for (const L of S.layers) for (const k of [L.src, L.vsrc, L.cut && L.cut.orig, L.cut && L.cut.mask]) if (k) keep.add(k);
+    for (const k of [...RT.images.keys()]) if (!keep.has(k)) RT.images.delete(k); }
   RT.selected = S.layers.find(l => l.type === 'logo')?.id || S.layers.find(l => l.type !== 'bg')?.id || S.layers[0]?.id;
   renderAll(); fitStage();
   await refreshLogo(); ensureFonts();
@@ -7601,10 +7703,15 @@ function groupCell(gid, where, depth = 0) {
 /* Desempenho (carrossel): a lista e a timeline eram refeitas inteiras a cada clique (com 10 slides, ~60 ms por seleção).
    layersSig = tudo que as duas mostram, menos a seleção; se não mudou desde a última montagem, só acende/apaga as linhas
    (syncSel). Renomeando (campo aberto na lista ou na timeline), refaz sempre: é a montagem nova que tira o campo */
+// os botões da lista guardam a própria camada (olho, cadeado, subir, menu): desfazer/refazer e abrir arquivo recriam as camadas com
+// o mesmo conteúdo, então a assinatura leva também quem é cada objeto (objId); sem isso a lista não era refeita e os botões mexiam
+// em camadas que já não existiam (o olho e o cadeado paravam de funcionar depois de um desfazer)
+const OBJ_N = new WeakMap(); let objN = 0;
+const objId = o => { let n = OBJ_N.get(o); if (!n) OBJ_N.set(o, n = ++objN); return n; };
 function layersSig() {
   const A = S.audio, tl = $('#tl');
-  return JSON.stringify([S.layers.map(L => { const ph = phase(L, L.start);
-    return [L.id, L.name, L.type, typeKey(L), L.start, L.end, ph && ph.inD, ph && ph.outD, tlLabel(L), L.visible, !!L.locked, L.grp || 0, layerStill(L)]; }),
+  return JSON.stringify([objId(S), objId(S.layers), S.groups ? objId(S.groups) : 0, S.layers.map(L => { const ph = phase(L, L.start);
+    return [objId(L), L.id, L.name, L.type, typeKey(L), L.start, L.end, ph && ph.inD, ph && ph.outD, tlLabel(L), L.visible, !!L.locked, L.grp || 0, layerStill(L)]; }),
     S.groups || 0, S.duration, !!S.still, slides(), S.sdur || 0, S.snames || 0, !!(tl && tl.hidden),
     A ? JSON.stringify(A, (k, v) => (Array.isArray(v) && v.length > 64) || (typeof v === 'string' && v.length > 256) ? v.length : v) : 0]);
 }
@@ -9831,7 +9938,7 @@ async function addGoogle() {
   const name = $('#gfont').value.trim(); if (!name) return;
   if (S.brand.loaded.some(f => f.family.toLowerCase() === name.toLowerCase())) { toast('Essa fonte já está na lista'); return; }
   $('#gfontAdd').disabled = true; $('#gfontAdd').textContent = 'Carregando…';
-  const ok = await loadGoogleFont(name);
+  const ok = await loadGoogleFont(name, true); // pedido do usuário: tenta mesmo se falhou há pouco
   $('#gfontAdd').disabled = false; $('#gfontAdd').textContent = 'Adicionar';
   if (!ok) { toast('Não achei essa fonte no Google Fonts. Confira o nome exato.', 3200); return; }
   pushUndo(); S.brand.loaded.push({ family:name, src:'google' }); $('#gfont').value = '';
