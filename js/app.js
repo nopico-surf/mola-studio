@@ -682,19 +682,20 @@ function flowSolve(F, its, M, fz, bx) {
     o = o.map((i, j) => { if (!fitIn(i)) return i; const s = cs[j] * (isPic(i) ? sp : so);
       return s < .9999 ? { ...i, s, w:i.w * s, h:i.h * s } : i; }); // w0/h0 (âncora) já vêm do fsz, que é gravado encolhido
   }
-  const a0 = fz && (!F.auto || fz.all) ? fz : { lo:Math.min(...o.map(i => i[A] - i[Z0] / 2)), hi:Math.max(...o.map(i => i[A] + i[Z0] / 2)) };
-  const x0 = fz || { cl:Math.min(...o.map(i => i[B] - i[C0] / 2)), ch:Math.max(...o.map(i => i[B] + i[C0] / 2)) };
+  const AA = v ? 'ay' : 'ax', BB = v ? 'ax' : 'ay'; // centro da âncora (frame de dentro: o lado que ele deixa parado); item: a posição
+  const a0 = fz && (!F.auto || fz.all) ? fz : { lo:Math.min(...o.map(i => (i[AA] ?? i[A]) - i[Z0] / 2)), hi:Math.max(...o.map(i => (i[AA] ?? i[A]) + i[Z0] / 2)) };
+  const x0 = fz || { cl:Math.min(...o.map(i => (i[BB] ?? i[B]) - i[C0] / 2)), ch:Math.max(...o.map(i => (i[BB] ?? i[B]) + i[C0] / 2)) };
   const sum = o.reduce((n, i) => n + i[Z], 0), kk = o.reduce((n, i) => n + i.k, 0) / o.length;
   // frame com tamanho fixo: a caixa sai do conteúdo (como estava na última conta) + a folga, pelo alinhamento; o conteúdo se alinha dentro dela
   const off = (m, free) => m === 'end' ? free : m === 'center' ? free / 2 : 0, Lm = v ? F.h : F.w, Lc = v ? F.w : F.h;
   let a = a0, x = x0;
   if (bx) { a = v ? { lo:bx.y0, hi:bx.y1 } : { lo:bx.x0, hi:bx.x1 }; x = v ? { cl:bx.x0, ch:bx.x1 } : { cl:bx.y0, ch:bx.y1 }; }
   else {
-    if (Lm) { const l = Math.max(Lm * kk, sum + (F.auto ? 0 : (F.gap ?? 24) * kk * (o.length - 1))), lo = a0.lo - off(F.auto ? 'center' : F.pin || 'start', l - (a0.hi - a0.lo)); a = { lo, hi:lo + l }; }
+    if (Lm) { const l = Math.max(Lm * kk, sum + (F.auto ? 0 : (F.gap ?? 24) * kk * (o.length - 1))), lo = a0.lo - off(F.auto ? 'start' : F.pin || 'start', l - (a0.hi - a0.lo)); a = { lo, hi:lo + l }; }
     if (Lc) { const l = Math.max(Lc * kk, ...o.map(i => i[C])), cl = x0.cl - off(F.align || 'center', l - (x0.ch - x0.cl)); x = { cl, ch:cl + l }; }
   }
   let gap = (F.gap ?? 24) * kk, pos;
-  if (F.auto && o.length > 1) { gap = (a.hi - a.lo - sum) / (o.length - 1); if (gap < 0) { gap = 0; pos = (a.lo + a.hi - sum) / 2; } else pos = a.lo; }
+  if (F.auto && o.length > 1) { gap = (a.hi - a.lo - sum) / (o.length - 1); if (gap < 0) gap = 0; pos = a.lo; } // não cabe: o primeiro fica, o resto desce (a margem ainda empurra a fila inteira)
   else { const tot = sum + gap * (o.length - 1); pos = F.pin === 'end' ? a.hi - tot : F.pin === 'center' ? (a.lo + a.hi - tot) / 2 : a.lo; }
   const rects = o.map(i => {
     const c = F.align === 'start' ? x.cl + i[C] / 2 : F.align === 'end' ? x.ch - i[C] / 2 : (x.cl + x.ch) / 2, m = pos + i[Z] / 2;
@@ -705,7 +706,7 @@ function flowSolve(F, its, M, fz, bx) {
   const rs = M ? rects.filter(r => !freeType(r.L)) : [];
   let sx = 0, sy = 0;
   if (rs.length) {
-    const sh = (a0, a1, m0, m1) => a1 - a0 > m1 - m0 ? 0 : a0 < m0 ? m0 - a0 : a1 > m1 ? m1 - a1 : 0;
+    const sh = (a0, a1, m0, m1) => a1 - a0 > m1 - m0 ? Math.max(0, m0 - a0) : a0 < m0 ? m0 - a0 : a1 > m1 ? m1 - a1 : 0; // não cabe: o começo fica dentro (o título não sai pela margem de cima)
     sx = sh(Math.min(...rs.map(r => r.cx - r.w / 2)), Math.max(...rs.map(r => r.cx + r.w / 2)), M.x0, M.x1);
     sy = sh(Math.min(...rs.map(r => r.cy - r.h / 2)), Math.max(...rs.map(r => r.cy + r.h / 2)), M.y0, M.y1);
     for (const r of rects) { r.cx += sx; r.cy += sy; }
@@ -737,7 +738,14 @@ function flowLayout(base, D) {
   const block = (kid, lv) => {
     const a = [...lv.values()], x0 = Math.min(...a.map(q => q.cx - q.w / 2)), x1 = Math.max(...a.map(q => q.cx + q.w / 2)), y0 = Math.min(...a.map(q => q.cy - q.h / 2)), y1 = Math.max(...a.map(q => q.cy + q.h / 2));
     const k = a.reduce((n, q) => n + q.k, 0) / a.length, w = x1 - x0, hh = y1 - y0, gm = gmeta(kid) || {}, f = (fmt !== baseFmt() && gm.fszF && gm.fszF[fmt]) || gm.fsz;
-    return { L:{ id:'g:' + kid, type:'group', kid }, k, cx:(x0 + x1) / 2, cy:(y0 + y1) / 2, w, h:hh, w0:f ? f[0] * k : w, h0:f ? f[1] * k : hh, raw:[w / k, hh / k], i:Math.min(...a.map(q => q.i)), lv };
+    const w0 = f ? f[0] * k : w, h0 = f ? f[1] * k : hh, F = flowOf(kid);
+    // âncora = onde o frame de dentro estava (tamanho guardado), presa no lado que ele mesmo deixa parado (pin; Auto = o começo; no
+    // outro eixo, o alinhamento). Com o centro de agora + o tamanho guardado, um card colado no fim empurrava o pai pela metade e o
+    // título do frame de fora subia (saía da margem)
+    const anc = (lo, hi, s0, m) => m === 'end' ? hi - s0 / 2 : m === 'center' ? (lo + hi) / 2 : lo + s0 / 2;
+    const vk = !F || F.dir !== 'h', pm = F ? (F.auto ? 'start' : F.pin || 'start') : 'center', am = F ? F.align || 'center' : 'center';
+    const ax = anc(x0, x1, w0, vk ? am : pm), ay = anc(y0, y1, h0, vk ? pm : am);
+    return { L:{ id:'g:' + kid, type:'group', kid }, k, cx:(x0 + x1) / 2, cy:(y0 + y1) / 2, ax, ay, w, h:hh, w0, h0, raw:[w / k, hh / k], i:Math.min(...a.map(q => q.i)), lv };
   };
   // resolve um frame: devolve as folhas (id → item com cx, cy já no lugar), as dele e as dos frames de dentro
   const solve = gid => {
@@ -6990,16 +6998,28 @@ function move(i, d) {
   const j = i + d; if (j < 1 || j >= S.layers.length) return;
   pushUndo(); [S.layers[i], S.layers[j]] = [S.layers[j], S.layers[i]]; changed({ layers:true });
 }
+// cópia (duplicar, colar): cada grupo ganha um id novo com a meta copiada (meta(g)); o frame de cima que também veio inteiro (covered)
+// vira o pai da cópia, senão o card colado se desmontava (o frame de dentro ia parar solto no frame de fora). keep = o pai que não veio
+// continua o mesmo (duplicar fica no mesmo frame); sem keep, sai solto (colar: intoFrame decide onde entra)
+function groupMapper(meta, covered, keep) {
+  const gm = {};
+  const map = g => {
+    if (gm[g]) return gm[g];
+    const n = gm[g] = 'g' + Math.random().toString(36).slice(2, 7), m = meta(g); if (!m) return n;
+    const c = (S.groups ||= {})[n] = JSON.parse(JSON.stringify(m)), pg = m.parent;
+    if (pg && pg !== g && meta(pg) && covered(pg)) c.parent = map(pg); else if (!(keep && pg)) delete c.parent;
+    return n;
+  };
+  return map;
+}
 function duplicateLayer(L) {
-  const src = isPicked(L.id) && L.type !== 'bg' ? pickedLayers() : [L], gm = {};
+  const src = isPicked(L.id) && L.type !== 'bg' ? pickedLayers() : [L];
+  const gmap = groupMapper(gmeta, g => gleaves(g).every(l => src.includes(l)), true); // o frame de fora que não veio inteiro continua o mesmo
   pushUndo(); let last = null;
   for (const o of src) {
     const c = JSON.parse(JSON.stringify(o)); c.id = uid(); c.name = o.name + ' (cópia)'; c.y = Math.min(1, o.y + .06);
     for (const f in c.fpos || {}) c.fpos[f].y = Math.min(1, c.fpos[f].y + .06); // ajustes de outros formatos descem junto
-    if (o.grp) {
-      if (!gm[o.grp]) { gm[o.grp] = 'g' + Math.random().toString(36).slice(2, 7); const gmt = gmeta(o.grp); if (gmt) (S.groups ||= {})[gm[o.grp]] = JSON.parse(JSON.stringify(gmt)); }
-      c.grp = gm[o.grp];
-    }
+    if (o.grp) c.grp = gmap(o.grp);
     S.layers.splice(S.layers.indexOf(o) + 1, 0, c); last = c;
   }
   select(last.id); changed({ layers:true });
@@ -7019,7 +7039,7 @@ const CLIP_TAG = 'mola-camadas:';
 function clipPayload() {
   const ls = pickedLayers(); if (!ls.length) return null;
   const fams = new Set(ls.map(l => l.font).filter(Boolean)), groups = {};
-  ls.forEach(l => { if (l.grp && S.groups && S.groups[l.grp]) groups[l.grp] = S.groups[l.grp]; });
+  ls.forEach(l => { if (l.grp && S.groups) gchain(l.grp).forEach(g => { if (S.groups[g] && (g === l.grp || gleaves(g).every(o => ls.includes(o)))) groups[g] = S.groups[g]; }); }); // + os frames de fora copiados inteiros
   return { v:1, dur:S.duration, layers:ls.map(l => { const c = JSON.parse(JSON.stringify(l)); delete c._bounds; return c; }), fonts:S.brand.loaded.filter(f => fams.has(f.family)), groups };
 }
 /* ------------ inserir dentro do frame selecionado (como no Figma) ------------
@@ -7073,15 +7093,13 @@ function pasteLayers(p) {
     S.brand.loaded.push(f); fontsAdded = true;
     (f.src === 'file' ? loadFileFont(f) : loadGoogleFont(f.family)).then(() => renderBrand());
   }
-  const gm = {}, out = [], ids = new Set(src.map(o => o.id));
+  const out = [], ids = new Set(src.map(o => o.id));
+  const gmap = groupMapper(g => p.groups && p.groups[g], g => !(S.groups && S.groups[g]) || gleaves(g).every(l => ids.has(l.id)));
   for (const o of src) {
     const c = JSON.parse(JSON.stringify(o)); c.id = uid();
     // item copiado de dentro de um grupo (sem o grupo inteiro) chega solto, como no Figma
     if (c.grp && S.groups && S.groups[c.grp] && !gleaves(c.grp).every(l => ids.has(l.id))) delete c.grp;
-    if (c.grp) {
-      if (!gm[c.grp]) { gm[c.grp] = 'g' + Math.random().toString(36).slice(2, 7); if (p.groups && p.groups[c.grp]) { (S.groups ||= {})[gm[c.grp]] = { ...p.groups[c.grp] }; delete S.groups[gm[c.grp]].parent; } }
-      c.grp = gm[c.grp];
-    }
+    if (c.grp) c.grp = gmap(c.grp);
     // o que ia até o fim do vídeo de origem vai até o fim deste; o resto fica dentro da duração
     const toEnd = c.end == null || (p.dur && c.end >= p.dur - .01);
     c.start = clamp(+c.start || 0, 0, Math.max(0, S.duration - .3));
