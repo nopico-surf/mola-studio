@@ -5054,8 +5054,10 @@ const DB = {
   async set(k, v) { try { const db = await this.open(); await new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); return true; } catch (e) { return false; } },
 };
 /* ------------ arquivos: tudo salva sozinho, como no Figma ------------
-   'files' = índice [{ id, name, createdAt, updatedAt, thumb }], 'file:<id>' = projeto (JSON), 'currentId' = arquivo aberto */
-const FILES = { id:null, name:'Sem título' };
+   'files' = índice [{ id, name, createdAt, updatedAt, thumb, project? }], 'file:<id>' = projeto (JSON), 'currentId' = arquivo aberto.
+   Projetos = pastas de arquivos: 'projects' = [{ id, name, createdAt }]; arquivo sem `project` fica em Rascunhos.
+   Não há tela de entrada (pedido do usuário): abre direto no último arquivo; o projeto aparece na barra de cima (#projBtn) e na janela Arquivos. */
+const FILES = { id:null, name:'Sem título', project:null };
 let saveT = null, saving = false;
 function setSaveState(txt) { const el = $('#saveState'); if (el) el.textContent = txt; }
 function autosave() { clearTimeout(saveT); setSaveState('Salvando…'); saveT = setTimeout(flushSave, 700); }
@@ -5073,7 +5075,7 @@ async function flushSave() {
   const id = FILES.id, ok = await DB.set('file:' + id, JSON.stringify(S));
   const list = (await DB.get('files')) || [];
   let rec = list.find(f => f.id === id);
-  if (!rec) { rec = { id, name:FILES.name, createdAt:Date.now() }; list.unshift(rec); }
+  if (!rec) { rec = { id, name:FILES.name, createdAt:Date.now() }; if (FILES.project) rec.project = FILES.project; list.unshift(rec); }
   rec.name = FILES.name; rec.updatedAt = Date.now(); rec.thumb = fileThumb() || rec.thumb;
   const ok2 = await DB.set('files', list);
   saving = false;
@@ -5092,12 +5094,12 @@ function changed(opts = {}) {
 function newFileId() { return 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 function showFileName() { const el = $('#fileName'); if (el && document.activeElement !== el) el.value = FILES.name; document.title = `${FILES.name} · Mola Studio`; }
 // abre um estado como arquivo (novo ou existente)
-async function openState(st, id, name) {
+async function openState(st, id, name, project = FILES.project) {
   if (saveT) await flushSave();
   if (!st || !st.layers || !st.brand) { toast('Arquivo de projeto inválido'); return false; }
   await internImages(st); // foto em dataURL (arquivo antigo ou .json importado) vai para fora do JSON
   fixTornGroups(st);
-  FILES.id = id; FILES.name = name; showFileName();
+  FILES.id = id; FILES.name = name; FILES.project = project || null; showFileName(); showProject();
   DB.set('currentId', id);
   undoStack.length = 0; redoStack.length = 0; redoBase = null; syncHist();
   S = st; RT.layout.clear(); RT.slide = 0;
@@ -5112,16 +5114,23 @@ async function openFile(id) {
   const list = (await DB.get('files')) || [], rec = list.find(f => f.id === id);
   let st = null; try { st = JSON.parse(await DB.get('file:' + id)); } catch (e) {}
   if (!rec || !st) { toast('Não consegui abrir esse arquivo'); return; }
-  if (await openState(st, id, rec.name)) { closeFiles(); }
+  if (await openState(st, id, rec.name, rec.project)) { closeFiles(); }
 }
-// arquivo novo mantém a marca (logo, cores e fontes) do arquivo aberto
-async function newFile() {
-  const brand = S && S.brand ? JSON.parse(JSON.stringify(S.brand)) : null;
-  newProject(); if (brand) S.brand = brand;
+// arquivo novo mantém a marca (logo, cores, fontes e componentes): a do arquivo editado por último no projeto de destino,
+// senão a do arquivo aberto. project: id, null = Rascunhos, undefined = o que a janela Arquivos mostra (ou o do arquivo aberto)
+async function newFile(project) {
+  if (project === undefined) project = !$('#files').hidden && FVIEW !== '*' ? FVIEW || null : FILES.project;
   const list = (await DB.get('files')) || [];
+  let brand = S && S.brand ? JSON.parse(JSON.stringify(S.brand)) : null;
+  if (project && project !== FILES.project) {
+    const last = list.filter(f => f.project === project).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+    if (last) try { const st = JSON.parse(await DB.get('file:' + last.id)); if (st && st.brand) brand = st.brand; } catch (e) {}
+  }
+  if (saveT) await flushSave();
+  newProject(); if (brand) S.brand = brand;
   let n = 1; while (list.some(f => f.name === (n === 1 ? 'Sem título' : `Sem título ${n}`))) n++;
-  await openState(S, newFileId(), n === 1 ? 'Sem título' : `Sem título ${n}`);
-  await flushSave(); closeFiles(); toast('Arquivo novo criado');
+  await openState(S, newFileId(), n === 1 ? 'Sem título' : `Sem título ${n}`, project);
+  await flushSave(); closeFiles(); toast('Arquivo novo criado' + (project ? ` em "${(await projGet(project) || {}).name || 'projeto'}"` : ''));
 }
 async function duplicateFile(id) {
   if (id === FILES.id && saveT) await flushSave();
@@ -5150,7 +5159,7 @@ async function deleteFile(id) {
   const list = (await DB.get('files')) || [], i = list.findIndex(f => f.id === id); if (i < 0) return;
   if (!confirm(`Apagar "${list[i].name}"? Não dá para desfazer.`)) return;
   list.splice(i, 1); await DB.set('files', list); await DB.del('file:' + id);
-  if (id === FILES.id) { FILES.id = null; if (list[0]) await openFile(list[0].id); else await newFile(); }
+  if (id === FILES.id) { FILES.id = null; const nx = list.find(f => (f.project || null) === FILES.project) || list[0]; if (nx) await openFile(nx.id); else await newFile(FILES.project); }
   renderFiles();
 }
 const ago = ts => {
@@ -5160,11 +5169,120 @@ const ago = ts => {
   if (s < 86400) return `há ${Math.floor(s / 3600)} h`;
   return new Date(ts).toLocaleString('pt-BR', { dateStyle:'short', timeStyle:'short' });
 };
+/* ------------ projetos ------------ */
+let FVIEW = '*'; // o que a janela Arquivos mostra: '*' = todos, '' = Rascunhos, senão o id do projeto
+async function projAll() { return (await DB.get('projects')) || []; }
+async function projGet(id) { return (await projAll()).find(p => p.id === id); }
+function showProject() {
+  const b = $('#projBtn'); if (!b) return;
+  b.firstChild.textContent = FILES.project ? (PROJ_NAMES.get(FILES.project) || 'Projeto') : 'Rascunhos';
+  b.title = FILES.project ? 'Projeto deste arquivo. Clique para ver os arquivos do projeto ou mover' : 'Este arquivo não está em nenhum projeto. Clique para mover para um';
+}
+const PROJ_NAMES = new Map(); // id → nome (para a barra de cima, sem esperar o banco)
+async function projSync() { const ps = await projAll(); PROJ_NAMES.clear(); ps.forEach(p => PROJ_NAMES.set(p.id, p.name)); showProject(); return ps; }
+async function projCreate(name) {
+  const ps = await projAll();
+  if (!name) { let n = 1; while (ps.some(p => p.name === (n === 1 ? 'Novo projeto' : `Novo projeto ${n}`))) n++; name = n === 1 ? 'Novo projeto' : `Novo projeto ${n}`; }
+  const p = { id:'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name, createdAt:Date.now() };
+  ps.push(p); await DB.set('projects', ps); await projSync();
+  return p;
+}
+async function projRename(id, name) {
+  name = name.trim(); if (!name) return;
+  const ps = await projAll(), p = ps.find(x => x.id === id); if (!p) return;
+  p.name = name; await DB.set('projects', ps); await projSync();
+}
+// apagar o projeto não apaga arquivos: eles voltam para Rascunhos
+async function projDelete(id) {
+  const ps = await projAll(), p = ps.find(x => x.id === id); if (!p) return;
+  const list = (await DB.get('files')) || [], mine = list.filter(f => f.project === id);
+  if (!confirm(`Apagar o projeto "${p.name}"?` + (mine.length ? ` ${mine.length === 1 ? 'O arquivo dele vai' : `Os ${mine.length} arquivos dele vão`} para Rascunhos.` : ''))) return;
+  mine.forEach(f => { delete f.project; });
+  await DB.set('files', list); await DB.set('projects', ps.filter(x => x.id !== id));
+  if (FILES.project === id) FILES.project = null;
+  if (FVIEW === id) FVIEW = '*';
+  await projSync(); renderFiles();
+}
+async function moveFile(id, project) {
+  if (saveT && id === FILES.id) await flushSave();
+  const list = (await DB.get('files')) || [], rec = list.find(f => f.id === id); if (!rec) return;
+  if ((rec.project || null) === (project || null)) return;
+  if (project) rec.project = project; else delete rec.project;
+  await DB.set('files', list);
+  if (id === FILES.id) { FILES.project = project || null; showProject(); }
+  toast(`"${rec.name}" foi para ${project ? `"${PROJ_NAMES.get(project)}"` : 'Rascunhos'}`);
+  if (!$('#files').hidden) renderFiles();
+}
+// menu "mover para": Rascunhos e cada projeto (✓ = onde está), e um projeto novo
+function moveMenu(anchor, fileId, cur) {
+  closeMenu();
+  const item = (text, fn, o = {}) => h('button', { disabled:o.off || null, onclick:() => { closeMenu(); fn(); } }, [h('span', { text }), o.mark ? h('kbd', { text:'✓' }) : null]);
+  const ps = [...PROJ_NAMES].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  const m = h('div', { class:'ctx', role:'menu' }, [
+    h('div', { class:'ctx-lbl', text:'Mover para' }),
+    item('Rascunhos', () => moveFile(fileId, null), { mark:!cur, off:!cur }),
+    ...ps.map(p => item(p.name, () => moveFile(fileId, p.id), { mark:cur === p.id, off:cur === p.id })),
+    h('hr'),
+    item('Novo projeto com este arquivo', async () => { const p = await projCreate(); await moveFile(fileId, p.id); FVIEW = p.id; await openFiles(p.id); renameProjInline(p.id); }),
+  ]);
+  document.body.append(m);
+  const r = anchor.getBoundingClientRect(), mr = m.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(r.left, innerWidth - mr.width - 8)) + 'px';
+  m.style.top = (r.bottom + 4 + mr.height > innerHeight ? Math.max(8, r.top - mr.height - 4) : r.bottom + 4) + 'px';
+}
+// botão do projeto na barra de cima: ver os arquivos dele, mover este arquivo, criar um projeto
+function projMenu() {
+  const b = $('#projBtn');
+  if (document.querySelector('.ctx.projmenu')) { closeMenu(); return; }
+  moveMenu(b, FILES.id, FILES.project);
+  const m = document.querySelector('.ctx'); m.classList.add('projmenu');
+  m.prepend(h('button', { onclick:() => { closeMenu(); openFiles(FILES.project || ''); } }, [h('span', { text:FILES.project ? 'Ver arquivos do projeto' : 'Ver rascunhos' })]),
+    h('button', { onclick:() => { closeMenu(); newFile(FILES.project); } }, [h('span', { text:'Novo arquivo aqui' })]), h('hr'));
+}
+function renameProjInline(id) {
+  const el = document.querySelector(`.fproj[data-id="${id}"] .fp-nm`); if (!el) return;
+  const old = el.textContent, inp = h('input', { type:'text', value:old, 'aria-label':'Nome do projeto', class:'nm-edit' });
+  let done = false;
+  const end = ok => { if (done) return; done = true; if (ok && inp.value.trim() && inp.value.trim() !== old) projRename(id, inp.value).then(renderFiles); else renderFiles(); };
+  inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') end(true); if (e.key === 'Escape') end(false); });
+  inp.addEventListener('blur', () => end(true)); ['click', 'pointerdown', 'dblclick'].forEach(n => inp.addEventListener(n, e => e.stopPropagation()));
+  el.replaceWith(inp); inp.focus(); inp.select();
+}
+let dragFileId = null;
+function renderSide(list, ps) {
+  const side = $('#fside'); side.innerHTML = '';
+  const count = pid => list.filter(f => pid === '*' ? true : pid === '' ? !f.project : f.project === pid).length;
+  const row = (pid, name, o = {}) => {
+    const el = h('div', { class:'fproj' + (o.top ? ' top' : ''), role:'button', tabindex:'0', 'data-id':pid, 'aria-current':String(FVIEW === pid),
+      title:o.top ? null : 'Clique duas vezes para renomear. Arraste um arquivo para cá para mover',
+      onclick:() => { FVIEW = pid; renderFiles(); }, onkeydown:e => { if (e.key === 'Enter' && e.target === el) el.click(); } }, [
+      h('span', { class:'fp-ic', html:o.icon || ICON_FOLDER }), h('span', { class:'fp-nm', text:name }), h('small', { text:String(count(pid)) }),
+      o.top ? null : h('button', { class:'icon-btn fp-del', title:'Apagar projeto (os arquivos vão para Rascunhos)', 'aria-label':`Apagar projeto ${name}`, html:ICONS.trash,
+        onclick:e => { e.stopPropagation(); projDelete(pid); } })]);
+    if (!o.top) el.addEventListener('dblclick', () => renameProjInline(pid));
+    if (pid !== '*') {
+      el.addEventListener('dragover', e => { if (!dragFileId) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; el.classList.add('drop-in'); });
+      el.addEventListener('dragleave', () => el.classList.remove('drop-in'));
+      el.addEventListener('drop', e => { e.preventDefault(); el.classList.remove('drop-in'); if (dragFileId) moveFile(dragFileId, pid || null); dragFileId = null; });
+    }
+    return el;
+  };
+  side.append(row('*', 'Todos os arquivos', { top:true, icon:ICON_FILES }), row('', 'Rascunhos', { top:true, icon:ICON_DRAFT }),
+    h('div', { class:'fside-h', text:'Projetos' }));
+  ps.slice().sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')).forEach(p => side.append(row(p.id, p.name)));
+  side.append(h('button', { class:'btn small ghost fp-new', text:'+ Novo projeto', onclick:async () => { const p = await projCreate(); FVIEW = p.id; await renderFiles(); renameProjInline(p.id); } }));
+}
 async function renderFiles() {
-  const list = ((await DB.get('files')) || []).slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const all = ((await DB.get('files')) || []).slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)), ps = await projSync();
+  if (FVIEW && FVIEW !== '*' && !ps.some(p => p.id === FVIEW)) FVIEW = '*';
+  renderSide(all, ps);
   const q = ($('#fileSearch').value || '').trim().toLowerCase();
+  const list = all.filter(f => q || FVIEW === '*' ? true : FVIEW === '' ? !f.project : f.project === FVIEW); // a busca procura em todos
+  $('#filesTitle').textContent = q ? 'Busca' : FVIEW === '*' ? 'Todos os arquivos' : FVIEW === '' ? 'Rascunhos' : PROJ_NAMES.get(FVIEW);
+  const dest = FVIEW === '*' ? FILES.project : FVIEW || null;
   const grid = $('#fgrid'); grid.innerHTML = '';
-  grid.append(h('button', { class:'fcard new', onclick:newFile }, [h('div', { class:'fthumb' }, [h('span', { text:'+' })]), h('b', { text:'Novo arquivo' }), h('small', { text:'Com a marca atual' })]));
+  grid.append(h('button', { class:'fcard new', onclick:() => newFile(dest) }, [h('div', { class:'fthumb' }, [h('span', { text:'+' })]), h('b', { text:'Novo arquivo' }),
+    h('small', { text:dest ? `Em "${PROJ_NAMES.get(dest)}"` : 'Em Rascunhos' })]));
   for (const f of list) {
     if (q && !f.name.toLowerCase().includes(q)) continue;
     const nm = h('b', { text:f.name, title:'Clique duas vezes para renomear' });
@@ -5176,21 +5294,30 @@ async function renderFiles() {
       inp.addEventListener('blur', () => done(true)); inp.addEventListener('click', ev => ev.stopPropagation());
       nm.replaceWith(inp); inp.focus(); inp.select();
     });
-    const card = h('div', { class:'fcard' + (f.id === FILES.id ? ' cur' : ''), role:'button', tabindex:'0', title:`Abrir ${f.name}`,
+    const where = FVIEW === '*' || q ? (f.project ? PROJ_NAMES.get(f.project) : 'Rascunhos') + ' · ' : '';
+    const card = h('div', { class:'fcard' + (f.id === FILES.id ? ' cur' : ''), role:'button', tabindex:'0', draggable:'true', title:`Abrir ${f.name}`,
       onclick:() => f.id === FILES.id ? closeFiles() : openFile(f.id),
       onkeydown:e => { if (e.key === 'Enter' && e.target === card) card.click(); } }, [
-      h('div', { class:'fthumb' }, [f.thumb ? h('img', { src:f.thumb, alt:'' }) : null, f.id === FILES.id ? h('em', { text:'Aberto' }) : null]),
+      h('div', { class:'fthumb' }, [f.thumb ? h('img', { src:f.thumb, alt:'', draggable:'false' }) : null, f.id === FILES.id ? h('em', { text:'Aberto' }) : null]),
       nm,
-      h('small', { text:`Editado ${ago(f.updatedAt || f.createdAt)}` }),
+      h('small', { text:`${where}Editado ${ago(f.updatedAt || f.createdAt)}` }),
       h('div', { class:'facts' }, [
+        h('button', { class:'icon-btn', title:'Mover para um projeto', 'aria-label':`Mover ${f.name}`, html:ICON_FOLDER, onclick:e => { e.stopPropagation(); moveMenu(e.currentTarget, f.id, f.project || null); } }),
         h('button', { class:'icon-btn', title:'Duplicar', 'aria-label':`Duplicar ${f.name}`, html:ICONS.copy, onclick:e => { e.stopPropagation(); duplicateFile(f.id); } }),
         h('button', { class:'icon-btn', title:'Apagar', 'aria-label':`Apagar ${f.name}`, html:ICONS.trash, onclick:e => { e.stopPropagation(); deleteFile(f.id); } }),
       ]),
     ]);
+    card.addEventListener('dragstart', e => { dragFileId = f.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', f.name); card.classList.add('dragging'); });
+    card.addEventListener('dragend', () => { dragFileId = null; card.classList.remove('dragging'); document.querySelectorAll('.fproj.drop-in').forEach(n => n.classList.remove('drop-in')); });
     grid.append(card);
   }
+  if (!list.length && !q) grid.append(h('p', { class:'hint fempty', text:FVIEW === '' ? 'Nenhum rascunho. Arquivos sem projeto aparecem aqui.' : 'Projeto vazio. Crie um arquivo aqui ou arraste um arquivo para o nome do projeto, à esquerda.' }));
 }
-async function openFiles() { if (saveT) await flushSave(); $('#files').hidden = false; $('#fileSearch').value = ''; await renderFiles(); $('#fileSearch').focus(); }
+async function openFiles(view) {
+  if (saveT) await flushSave();
+  FVIEW = typeof view === 'string' ? view : FILES.project || '*';
+  $('#files').hidden = false; $('#fileSearch').value = ''; await renderFiles(); $('#fileSearch').focus();
+}
 function closeFiles() { $('#files').hidden = true; }
 // projetos de versões antigas ('current' e a lista 'projects') viram arquivos
 async function migrateFiles() {
@@ -6702,7 +6829,7 @@ function brandLib() {
 function renderPalette() {
   const B = S.brand, box = $('#brandColors'); box.innerHTML = '';
   const groups = brandGroups(B);
-  const redo = () => { renderPalette(); renderProps(); autosave(); };
+  const redo = () => { renderPalette(); renderProps(); renderComps(); autosave(); };
   const nameIn = (val, ph, onSet, cls) => {
     const i = h('input', { type:'text', class:cls, value:val, placeholder:ph, spellcheck:'false', maxlength:24, 'aria-label':ph });
     i.addEventListener('focus', () => { pushUndo(); i.select(); });
@@ -6738,7 +6865,7 @@ function renderPalette() {
   };
   const reorder = (arrs, from, to) => arrs.forEach(a => { const [x] = a.splice(from, 1); a.splice(to, 0, x); });
   const chip = (c, label, onInput, onDel, nameEl, gripEl) => {
-    const sw = colorButton(c, `Cor ${label}`, { cls:'sw', onStart:pushUndo, onInput:x => { onInput(x); needs = true; autosave(); } });
+    const sw = colorButton(c, `Cor ${label}`, { cls:'sw', onStart:pushUndo, onInput:x => { onInput(x); needs = true; autosave(); renderComps(); } });
     return h('div', { class:'swcol' }, [gripEl, h('div', { class:'swwrap' }, [sw, onDel ? h('button', { class:'sw-del', title:'Remover cor', 'aria-label':'Remover cor', text:'×', onclick:() => { pushUndo(); onDel(); redo(); } }) : null]), nameEl]);
   };
   const group = (title, titleEl, chips, onAdd, onDelGroup) => h('div', { class:'pgroup' }, [
@@ -6778,6 +6905,7 @@ function renderBrand() {
       RT.layout.clear(); changed({ props:true });
     };
   });
+  renderComps();
   const fl = $('#fontList'); fl.innerHTML = '';
   B.loaded.forEach(f => fl.append(h('span', { class:'ftag' + (RT.fontsBad.has(f.family) ? ' err' : ''), text:f.family + (f.src === 'file' ? ' · arquivo' : ''), title:RT.fontsBad.has(f.family) ? 'Não carregou' : '' })));
 }
@@ -7098,7 +7226,7 @@ function pasteLayers(p) {
   toast((out.length > 1 ? `${out.length} elementos colados` : `"${out[0].name}" colado`) + (fr ? ` em "${groupName(fr)}"` : ''));
 }
 const typingIn = t => { const tag = (t && t.tagName || '').toLowerCase(); return tag === 'input' && !['range', 'checkbox', 'color', 'button'].includes(t.type) || tag === 'textarea' || tag === 'select' || !!(t && t.isContentEditable); };
-const overlayOpen = () => !$('#files').hidden || !$('#modal').hidden || !$('#keys').hidden || !!CUTWIN;
+const overlayOpen = () => !$('#files').hidden || !$('#modal').hidden || !$('#keys').hidden || !!CUTWIN || !!COMPWIN;
 ['copy', 'cut'].forEach(kind => document.addEventListener(kind, e => {
   if (typingIn(e.target) || overlayOpen() || String(getSelection() || '').length) return; // texto selecionado copia o texto
   const L = selL(), p = clipPayload(); if (!p) return;
@@ -7126,6 +7254,9 @@ function openMenu(ev, L) {
     item('Copiar', () => document.execCommand('copy'), { off:isBg, kbd:'Ctrl+C' }),
     item('Duplicar', () => duplicateLayer(L), { off:isBg, kbd:'Ctrl+D' }),
     item('Salvar em Meus elementos', saveElement, { off:isBg }),
+    ...(compKindOf(L) ? [
+      item(`Usar como padrão de ${COMP_DEF[compKindOf(L)].label}`, () => compFromLayer(L)),
+      item(`Voltar ao padrão de ${COMP_DEF[compKindOf(L)].label}`, () => { const id = compKindOf(L), ls = pickedLayers().filter(o => compKindOf(o) === id); pushUndo(); compApply(ls, id); changed({ props:true }); toast('Padrão aplicado', 5000, UNDO_ACT); }, { off:!!L.locked })] : []),
     item('Agrupar', groupSel, { off:isBg || pickedLayers().length < 2, kbd:'Ctrl+G' }),
     item('Desagrupar', ungroupSel, { off:!L.grp, kbd:'Ctrl+Shift+G' }),
     item(L.locked ? 'Desbloquear' : 'Bloquear', toggleLock, { off:isBg, kbd:'Ctrl+Shift+L' }),
@@ -8457,8 +8588,9 @@ function renderAll() { renderFormats(); renderAdds(); renderBrand(); renderLayer
    (FOLD_SHUT). Fechado, o cabeçalho mostra o valor atual (preset escolhido, data-sum ou FOLD_SUM). */
 const FOLD = (() => { try { const o = JSON.parse(localStorage.getItem('mola-fold')); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } })();
 const FOLD_SHUT = new Set(['props:Enquanto está na tela', 'props:Marca à mão', 'props:Movimento dentro da imagem', 'props:Saída', 'props:Tempo',
-  'props:Ajustes', 'left:Marca', 'left:Trilha', 'left:Arquivo']);
+  'props:Ajustes', 'left:Marca', 'left:Componentes', 'left:Trilha', 'left:Arquivo']);
 const FOLD_SUM = {
+  'left:Componentes': () => { const n = S ? Object.keys(COMP_DEF).filter(compCustom).length : 0; return n ? `${n} editado${n > 1 ? 's' : ''}` : 'de fábrica'; },
   'left:Trilha': () => S && S.audio ? S.audio.name : 'sem música',
   'left:Camadas': () => S ? String(S.layers.filter(l => l.type !== 'bg').length) : '',
 };
@@ -8752,19 +8884,23 @@ function showKeys(on) {
 }
 $('#keysBtn').onclick = () => showKeys(true);
 /* ------------ adicionar elementos prontos ------------ */
+const ICON_FOLDER = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M1.8 4.2c0-.8.6-1.4 1.4-1.4h3l1.5 1.6h5.1c.8 0 1.4.6 1.4 1.4v6.4c0 .8-.6 1.4-1.4 1.4H3.2c-.8 0-1.4-.6-1.4-1.4z"/></svg>';
+const ICON_FILES = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>';
+const ICON_DRAFT = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M4 1.8h5.5L12.5 5v9.2H4z"/><path d="M9.3 1.8V5h3.2"/></svg>';
+const ICON_PEN = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M10.5 2.5l3 3L6 13H3v-3z"/></svg>';
 const ADD_KINDS = [
-  { id:'title', label:'Título', gl:'<b style="font:600 20px serif">Aa</b>', mk:(B, F) => mkText('title', { name:'Título', text:'Seu título aqui', font:F[0], weight:500, size:104, lh:1.02, y:.42, in:'lineMask' }) },
-  { id:'sub', label:'Subtítulo', gl:'<span style="font-size:13px">Aa</span>', mk:(B, F) => mkText('sub', { name:'Subtítulo', text:'Uma frase curta de apoio', font:F[1], weight:500, size:40, opacity:.82, y:.56, in:'blurChar' }) },
-  { id:'kicker', label:'Chamada', gl:'<span style="font:700 9px var(--f-mono);letter-spacing:.2em">NOVO</span>', mk:(B, F) => mkText('kicker', { name:'Chamada', text:'NOVIDADE', font:F[1], weight:700, size:34, ls:.4, color:B.colors[2], y:.3, in:'track' }) },
-  { id:'big', label:'Número', gl:'<b style="font-size:17px">%</b>', mk:(B, F) => mkText('big', { name:'Número grande', text:'-30%', font:F[2], weight:800, size:240, lh:1, y:.38, in:'counter', idle:'float' }) },
-  { id:'hl', label:'Destaque', gl:'<span style="background:var(--muted);color:var(--bg);padding:1px 4px;border-radius:2px;font-size:11px;font-weight:700">ab</span>', mk:(B, F) => mkText('offer', { name:'Destaque', text:'frete grátis hoje', font:F[1], weight:700, size:56, color:B.colors[0], hl:B.colors[2], y:.6, in:'highlight' }) },
-  { id:'impact', label:'Impacto', gl:'<b style="font-size:15px;font-weight:900">AA</b>', mk:(B, F) => mkText('k1', { name:'Frase de impacto', text:'Sem pressa.', font:F[2], weight:800, size:132, upper:true, lh:1, y:.5, in:'stamp' }) },
-  { id:'image', label:'Imagem', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="18" height="14" rx="2"/><path d="M1 12l5-5 4 4 3-3 6 6"/><circle cx="14" cy="5" r="1.5"/></svg>', mk:() => mkImage({ y:.42, idle:'float' }) },
-  { id:'logo', label:'Logo', gl:'<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="7.5"/><path d="M5 11c2-5 6-5 8 0"/></svg>', mk:() => { const pen = RT.logo && RT.logo.pen; const alone = !S.layers.some(l => l.type !== 'bg'); return mkLogo(alone ? 'logo' : 'logoSmall', { y:alone ? .42 : .12, size:alone ? .36 : .14, in:pen ? 'handwrite' : 'spring', inDur:pen ? BP.handwrite.dur : BP.spring.dur, idle:'shine' }); } },
+  { id:'title', label:'Título', gl:'<b style="font:600 20px serif">Aa</b>', mk:() => mkComp('title') },
+  { id:'sub', label:'Subtítulo', gl:'<span style="font-size:13px">Aa</span>', mk:() => mkComp('sub') },
+  { id:'kicker', label:'Chamada', gl:'<span style="font:700 9px var(--f-mono);letter-spacing:.2em">NOVO</span>', mk:() => mkComp('kicker') },
+  { id:'big', label:'Número', gl:'<b style="font-size:17px">%</b>', mk:() => mkComp('big') },
+  { id:'hl', label:'Destaque', gl:'<span style="background:var(--muted);color:var(--bg);padding:1px 4px;border-radius:2px;font-size:11px;font-weight:700">ab</span>', mk:() => mkComp('hl') },
+  { id:'impact', label:'Impacto', gl:'<b style="font-size:15px;font-weight:900">AA</b>', mk:() => mkComp('impact') },
+  { id:'image', label:'Imagem', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="18" height="14" rx="2"/><path d="M1 12l5-5 4 4 3-3 6 6"/><circle cx="14" cy="5" r="1.5"/></svg>', mk:() => mkComp('image') },
+  { id:'logo', label:'Logo', gl:'<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="7.5"/><path d="M5 11c2-5 6-5 8 0"/></svg>', mk:() => mkComp('logo') },
   { id:'svg', label:'SVG', gl:'<b style="font:700 10px var(--f-mono)">&lt;/&gt;</b>', mk:null },
-  { id:'shape', label:'Forma', gl:'<svg width="20" height="18" viewBox="0 0 20 18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="6" width="10" height="10" rx="2"/><circle cx="13" cy="6" r="5"/></svg>', mk:() => mkShape({ y:.5 }) },
+  { id:'shape', label:'Forma', gl:'<svg width="20" height="18" viewBox="0 0 20 18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="6" width="10" height="10" rx="2"/><circle cx="13" cy="6" r="5"/></svg>', mk:() => mkComp('shape') },
   { id:'pen', label:'Caneta', gl:'<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M9 1.5l5 7-5 8-5-8z"/><circle cx="9" cy="9" r="1.3"/><path d="M9 1.5v6.2"/></svg>', add:() => penToolStart() },
-  { id:'cta', label:'Botão', gl:'<span style="border:1.5px solid currentColor;border-radius:9px;padding:1px 7px;font-size:10px;font-weight:700">ir</span>', mk:() => mkCta({ y:.74, in:'pop', idle:'pulse' }) },
+  { id:'cta', label:'Botão', gl:'<span style="border:1.5px solid currentColor;border-radius:9px;padding:1px 7px;font-size:10px;font-weight:700">ir</span>', mk:() => mkComp('cta') },
 ];
 // momento: onde você deixou a agulha (se a moveu de propósito), senão logo depois do último elemento
 function nextStart() {
@@ -8808,7 +8944,10 @@ function renderAdds() {
     if (k.id === 'image') { $('#imgFile').click(); return; }
     if (k.id === 'svg') { $('#svgFile').click(); return; }
     addLayer(k.mk(S.brand, S.brand.fonts));
-  } }, [h('span', { class:'gl', html:k.gl }), h('span', { text:k.label })]));
+  }, oncontextmenu:COMP_DEF[k.id] ? e => { e.preventDefault(); openComps(k.id); } : null }, [h('span', { class:'gl', html:k.gl }), h('span', { text:k.label }),
+    // componente: o lápis abre o padrão (como ele entra)
+    COMP_DEF[k.id] ? h('span', { class:'x ed', role:'button', tabindex:'0', title:`Editar o padrão de ${k.label}`, 'aria-label':`Editar o padrão de ${k.label}`, html:ICON_PEN,
+      onclick:e => { e.stopPropagation(); openComps(k.id); }, onkeydown:e => { if (e.key === 'Enter') { e.stopPropagation(); e.preventDefault(); openComps(k.id); } } }) : null]));
   }
   // meus elementos: salvos pelo botão direito ("Salvar em Meus elementos"), valem para qualquer arquivo
   if (!MY_ELS.length) return;
@@ -8914,7 +9053,7 @@ async function addImageFile(f, pos) {
   if (isSvgFile(f)) { addSvgText(await readAs(f, 'readAsText'), f.name && f.name.replace(/\.[^.]+$/, ''), pos); return; }
   if (!isImg(f)) return;
   const src = await imageSrc(f); await getImage(src);
-  addLayer(mkImage({ y:.42, idle:'float', src, name:f.name ? f.name.replace(/\.[^.]+$/, '') : 'Imagem' }), pos || {});
+  addLayer(Object.assign(mkComp('image'), { src, name:f.name ? f.name.replace(/\.[^.]+$/, '') : 'Imagem' }), pos || {}); // parte do padrão do componente Imagem
   toast('Imagem adicionada');
 }
 $('#imgFile').addEventListener('change', e => { addImageFile(e.target.files[0]); e.target.value = ''; });
@@ -9047,10 +9186,11 @@ $('#fontFile').addEventListener('change', async e => {
 });
 
 // arquivos
-$('#filesBtn').onclick = openFiles;
-$('#filesOpen').onclick = openFiles;
+$('#filesBtn').onclick = () => openFiles();
+$('#filesOpen').onclick = () => openFiles();
+$('#projBtn').onclick = projMenu;
 $('#filesClose').onclick = closeFiles;
-$('#fileNew').onclick = newFile;
+$('#fileNew').onclick = () => newFile();
 $('#files').addEventListener('pointerdown', e => { if (e.target.id === 'files') closeFiles(); });
 $('#files').addEventListener('keydown', e => { if (e.key === 'Escape') closeFiles(); });
 $('#fileSearch').addEventListener('input', renderFiles);
@@ -9458,11 +9598,11 @@ $('#varBtn').onclick = openVars;
   let saved = null;
   if (id) try { saved = JSON.parse(await DB.get('file:' + id)); } catch (e) {}
   const fresh = !(saved && saved.layers && saved.brand);
-  if (!fresh) { S = saved; FILES.id = id; FILES.name = list.find(f => f.id === id).name; }
+  if (!fresh) { S = saved; FILES.id = id; FILES.name = list.find(f => f.id === id).name; FILES.project = list.find(f => f.id === id).project || null; }
   else { newProject(); FILES.id = newFileId(); FILES.name = 'Sem título'; }
   const interned = !fresh && await internImages(S);
   const torn = !fresh && fixTornGroups(S);
-  DB.set('currentId', FILES.id); showFileName(); setSaveState('Salvo');
+  DB.set('currentId', FILES.id); showFileName(); projSync(); setSaveState('Salvo');
   RT.selected = S.layers.find(l => l.type === 'logo')?.id || S.layers[1]?.id || S.layers[0]?.id;
   renderAll(); updPlay(); fitStage();
   requestAnimationFrame(tick);

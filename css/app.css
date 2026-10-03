@@ -364,12 +364,13 @@ details.adv[open] summary::before{transform:rotate(45deg)}
 details.adv > div{display:flex;flex-direction:column;gap:10px;margin-top:10px}
 
 /* arquivos */
-.filebox{display:flex;align-items:center;gap:4px;min-width:0}
+.filebox{display:flex;align-items:center;gap:4px;min-width:0;flex-shrink:1;overflow:hidden} /* janela estreita: encolhe o nome e o projeto em vez de passar por baixo do formato */
+.filebox > *{flex:none}
 .filebox .slash{color:var(--faint)}
-.top #fileName{width:180px;background:transparent;border-color:transparent;font-weight:600;padding:4px 6px}
+.top #fileName{width:180px;flex:0 1 180px;min-width:72px;background:transparent;border-color:transparent;font-weight:600;padding:4px 6px}
 .top #fileName:hover{border-color:var(--line-2)}
 .top #fileName:focus{background:var(--bg);border-color:var(--accent)}
-.savest{font-size:11px;color:var(--faint);white-space:nowrap;min-width:64px}
+.savest{font-size:11px;color:var(--faint);white-space:nowrap;min-width:0;flex-shrink:1!important;overflow:hidden;text-overflow:ellipsis}
 .files{position:fixed;inset:0;background:rgba(0,0,0,.72);display:grid;grid-template:minmax(0,1fr) / minmax(0,1fr);place-items:center;z-index:30;padding:16px}
 .files-card{background:var(--panel);border:1px solid var(--line-2);border-radius:14px;width:min(980px,100%);height:min(720px,100%);max-height:100%;min-height:0;display:flex;flex-direction:column;gap:14px;padding:20px}
 .files-head{display:flex;align-items:center;gap:10px}
@@ -564,9 +565,11 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .add.my{position:relative;cursor:pointer}
 .add.my img.gl{width:auto;max-width:100%;height:24px;object-fit:contain}
 .add.my>span:last-of-type{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.add.my .x{position:absolute;top:1px;right:2px;width:16px;height:16px;border:0;border-radius:4px;background:transparent;color:var(--muted);font-size:13px;line-height:1;display:none;place-items:center;padding:0}
-.add.my:hover .x,.add.my:focus-within .x{display:grid}
-.add.my .x:hover{background:var(--raised-2);color:var(--fg)}
+.add{position:relative}
+.add .x{position:absolute;top:1px;right:2px;width:16px;height:16px;border:0;border-radius:4px;background:transparent;color:var(--muted);font-size:13px;line-height:1;display:none;place-items:center;padding:0}
+.add:hover .x,.add:focus-within .x{display:grid}
+.add .x:hover{background:var(--raised-2);color:var(--fg)}
+.add .x.ed{top:2px;right:2px}
 #audioBox{display:flex;flex-direction:column;gap:8px}
 #audioBox .hint{margin:0}
 .aud{display:flex;align-items:center;gap:6px;min-width:0}
@@ -693,3 +696,61 @@ button.chip-cat{gap:8px}
 .pfrow{display:flex;flex-wrap:wrap;gap:6px}
 .pfrow .btn{display:inline-flex;align-items:center;gap:5px}
 .pfrow .btn svg{width:14px;height:14px;flex:none}
+
+/* componentes: padrão de cada elemento de Adicionar (lista na coluna da esquerda + janela) */
+.comp-list{display:flex;flex-direction:column;gap:2px}
+.comp-it{display:grid;grid-template-columns:12px auto minmax(0,1fr) 6px;align-items:center;gap:8px;height:var(--ctl);padding:0 8px;border:1px solid transparent;border-radius:var(--r);background:transparent;color:var(--fg);font-size:11px;text-align:left}
+.comp-it:hover{background:var(--raised)}
+.comp-it b{font-weight:600}
+.comp-it small{color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+.comp-sw{width:12px;height:12px;border-radius:3px;background:linear-gradient(var(--c),var(--c)),var(--checker);border:1px solid var(--line-2)}
+.comp-it i,.comp-nv i{width:6px;height:6px;border-radius:50%;background:var(--muted);flex:none}
+.comp-card{width:min(900px,100%)}
+.comp-wrap{flex:1;min-height:0;display:grid;grid-template-columns:160px minmax(0,1fr);gap:16px}
+.comp-nav{display:flex;flex-direction:column;gap:2px;overflow:auto;min-height:0}
+.comp-nv{display:flex;justify-content:space-between;align-items:center;gap:8px;height:var(--ctl);flex:none;padding:0 10px;border:1px solid transparent;border-radius:var(--r);background:transparent;color:var(--muted);font-size:12px;text-align:left}
+.comp-nv:hover{background:var(--raised);color:var(--fg)}
+.comp-nv[aria-selected="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--fg)}
+.comp-main{min-height:0;overflow:auto;display:flex;flex-direction:column;gap:12px;padding-right:6px;scrollbar-gutter:stable}
+.comp-pvbox{position:relative;flex:none}
+.comp-pv{display:block;width:100%;height:auto;aspect-ratio:640/300;border-radius:9px;border:1px solid var(--line-2)}
+.comp-play{position:absolute;right:8px;bottom:8px}
+.comp-body{display:flex;flex-direction:column;gap:6px}
+.comp-body h3{margin:6px 0 0;font-size:12px;font-weight:600;color:var(--fg);display:flex;align-items:center;gap:8px}
+.comp-body h3.sub{font-size:11px;color:var(--muted);margin-top:10px}
+.comp-body h3 small{font-size:11px;font-weight:500;color:var(--faint)}
+.comp-colors{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+.comp-colors .cpick{width:var(--ctl)}
+.comp-colors .cpick[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.comp-or{color:var(--faint);font-size:11px;padding:0 2px}
+.comp-tag{color:var(--muted);font-size:11px;margin-left:4px}
+.comp-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+
+/* projetos: pastas de arquivos (barra de cima + janela Arquivos) */
+.filebox .projbtn{max-width:160px;min-width:56px;flex-shrink:1;gap:4px;color:var(--muted)}
+.projbtn span{overflow:hidden;text-overflow:ellipsis}
+.projbtn:hover{color:var(--fg)}
+.fbody{flex:1;min-height:0;display:grid;grid-template-columns:200px minmax(0,1fr);gap:16px}
+.fbody .fgrid{min-height:0}
+.fside{display:flex;flex-direction:column;gap:2px;overflow:auto;min-height:0;padding-right:4px}
+.fside-h{font-size:11px;font-weight:600;color:var(--faint);padding:12px 8px 4px}
+.fproj{display:grid;grid-template-columns:16px minmax(0,1fr) auto auto;align-items:center;gap:8px;height:var(--ctl);flex:none;padding:0 4px 0 8px;border:1px solid transparent;border-radius:var(--r);color:var(--muted);font-size:12px;cursor:pointer}
+.fproj:hover{background:var(--raised);color:var(--fg)}
+.fproj[aria-current="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--fg)}
+.fproj.drop-in{border-color:var(--accent);border-style:dashed;background:var(--accent-soft)}
+.fp-ic{display:grid;place-items:center;color:var(--faint)}
+.fp-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fproj small{color:var(--faint);font:11px var(--f-mono)}
+.fproj input{height:24px;font-size:12px;padding:0 6px;min-width:0}
+.fp-del{opacity:0;width:22px;height:22px}
+.fproj.top .fp-del{display:none}
+.fproj:hover .fp-del,.fproj:focus-within .fp-del{opacity:1}
+.btn.small.fp-new{margin-top:6px;justify-content:center}
+.fcard.dragging{opacity:.5}
+.fempty{grid-column:1/-1;padding:24px 4px}
+.ctx-lbl{font-size:11px;color:var(--faint);padding:6px 8px 4px}
+/* barra de cima em janela estreita: menos respiro e só o símbolo do logo, para o arquivo e o projeto continuarem legíveis */
+@media (max-width:1720px){
+  .top{gap:8px;padding-inline:12px}
+  .logo-word{font-size:0;gap:0}
+}
