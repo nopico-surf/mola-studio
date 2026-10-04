@@ -6464,6 +6464,7 @@ function vidTrim(o, v, mode) {
 // diferença pequena se acerta na velocidade, e fora da tela o vídeo já espera parado no começo do trecho.
 const vidRate = (el, r) => { if (Math.abs(el.playbackRate - r) > .01) el.playbackRate = r; };
 function syncVideos() {
+  if (!RT.exporting) { let any = false; for (const v of VIDS.values()) { if (v.dec) any = true; v.noDec = v.decOk = false; } if (any || VDEM.size) vdecCloseAll(); }
   for (const [id, v] of VIDS) {
     const L = S.layers.find(l => l.id === id);
     if (!L || !vidOn(L) || L.video !== v.media) { v.el.pause(); v.el.removeAttribute('src'); v.el.load(); VIDS.delete(id); continue; }
@@ -6501,7 +6502,7 @@ function syncVideos() {
 const vidSeek = el => new Promise(res => { const fin = () => { clearTimeout(k); el.removeEventListener('seeked', fin); res(); }; el.addEventListener('seeked', fin); const k = setTimeout(fin, 20000); });
 // quadro que o vídeo mostra agora, com o carimbo de tempo dele (null sem WebCodecs): é o que se copia e o que se confere
 const vidFrame = el => { try { return window.VideoFrame ? new VideoFrame(el) : null; } catch (e) { return null; } };
-// at = tempo pedido, ft = início do quadro copiado (null = não se sabe; só vale para o mesmo tempo), src = VideoFrame ou o vídeo
+// at = tempo pedido, ft = início do quadro copiado (null = não se sabe; só vale para o mesmo tempo), src = VideoFrame ou o vídeo (false = quem chama desenha)
 function vidGrab(v, at, ft, src) {
   const el = v.el; let c = v.grab;
   if (!c) {
@@ -6510,7 +6511,7 @@ function vidGrab(v, at, ft, src) {
     Object.defineProperty(c, 'naturalHeight', { get:() => c.height });
   }
   if (c.width !== el.videoWidth || c.height !== el.videoHeight) { c.width = el.videoWidth; c.height = el.videoHeight; }
-  c.getContext('2d').drawImage(src || el, 0, 0, c.width, c.height);
+  if (src !== false) c.getContext('2d').drawImage(src || el, 0, 0, c.width, c.height);
   c.currentTime = at; v.gAt = at; v.gT = ft; v.gOk = true;
 }
 function vidStep(v, tg) {
@@ -6542,6 +6543,188 @@ function vidStep(v, tg) {
     v.step = true; el.requestVideoFrameCallback(f); vidRate(el, 1); el.play().catch(() => end(false));
   });
 }
+/* ------------ exportação: o vídeo decodificado direto (WebCodecs VideoDecoder), sem o <video> ------------
+   Tocar/pausar o <video> e buscar no meio dele dependia do tempo de verdade: com o quadro pesado (carrossel = N slides
+   desenhados por quadro) o vídeo passava do quadro e caía na busca, que com corte é no meio do arquivo (decodifica desde o
+   quadro-chave, ~1 s por quadro) e no Chrome com H.264 às vezes devolvia o quadro de antes: a imagem travava. Aqui o arquivo
+   é lido (MP4/MOV com o mp4box, WebM próprio), cada amostra vai para o VideoDecoder em ordem, e o quadro de cada tempo é
+   exatamente o que tem o carimbo certo; ir para a frente só decodifica o que falta. Voltar ou pular longe recomeça no
+   quadro-chave anterior. Na primeira vez o quadro é conferido contra o <video> (giro, corte da edit list); se não bater
+   ou o navegador não decodificar o formato, a camada volta ao caminho do <video> (v.noDec). */
+let MP4BOX_P = null;
+function needMp4box() {
+  if (typeof MP4Box !== 'undefined') return Promise.resolve();
+  return MP4BOX_P || (MP4BOX_P = new Promise((res, rej) => {
+    const s = document.createElement('script'); s.src = 'vendor/mp4box.min.js';
+    s.onload = res; s.onerror = () => { MP4BOX_P = null; s.remove(); rej(new Error('mp4box')); };
+    document.head.append(s);
+  }));
+}
+// { codecs:[codec, ...] (o primeiro que o navegador aceitar), desc, rot (radianos), s:[{ t (µs, apresentação), key, data }] em ordem de decodificação }
+async function demuxMp4(buf) {
+  await needMp4box();
+  const f = MP4Box.createFile(); let info = null;
+  f.onReady = i => { info = i; }; f.onError = () => {};
+  buf.fileStart = 0; f.appendBuffer(buf); f.flush();
+  const tr = info && info.videoTracks[0]; if (!tr) return null;
+  const trak = f.getTrackById(tr.id); let desc;
+  for (const e of trak.mdia.minf.stbl.stsd.entries) {
+    const b = e.avcC || e.hvcC || e.vpcC || e.av1C;
+    if (b) { const ds = new DataStream(undefined, 0, DataStream.BIG_ENDIAN); b.write(ds); desc = new Uint8Array(ds.buffer, 8); break; }
+  }
+  // edit list: o tempo 0 do <video> é o media_time da primeira edição que não é vazia (menos as vazias antes dela)
+  const sc = tr.timescale, ed = trak.edts && trak.edts.elst && trak.edts.elst.entries; let off = 0;
+  if (ed && ed.length) { let i = 0, empty = 0; while (i < ed.length && ed[i].media_time === -1) { empty += ed[i].segment_duration / (info.timescale || sc); i++; } if (i < ed.length) off = ed[i].media_time / sc - empty; }
+  const m = tr.matrix || [], rot = m.length ? Math.atan2(m[1], m[0]) : 0;
+  const s = (trak.samples || []).map(x => ({ t:Math.round((x.cts / sc - off) * 1e6), key:!!x.is_sync, data:new Uint8Array(buf, x.offset, x.size) }));
+  return s.length ? { codecs:[tr.codec], desc, rot, s } : null;
+}
+// WebM/Matroska: só o que precisa (faixa de vídeo, clusters, blocos sem lacing)
+function demuxWebm(buf) {
+  const u = new Uint8Array(buf), n = u.length; let p = 0;
+  const vint = keep => { const b = u[p]; let len = 1, m = 0x80; while (len <= 8 && !(b & m)) { len++; m >>= 1; } if (len > 8) throw 0; let v = keep ? b : b & (m - 1), ones = (b & (m - 1)) === m - 1; for (let i = 1; i < len; i++) { v = v * 256 + u[p + i]; if (u[p + i] !== 255) ones = false; } p += len; return { v, unk:!keep && ones }; };
+  const uint = (a, l) => { let v = 0; for (let i = 0; i < l; i++) v = v * 256 + u[a + i]; return v; };
+  const MASTER = new Set([0x18538067, 0x1654AE6B, 0xAE, 0xE0, 0x1F43B675, 0xA0, 0x1549A966]);
+  let scale = 1e6, track = null, curTrack = null, ctc = 0, grp = null; const tracks = [], s = [];
+  const block = (a, l, simple) => {
+    const q = p; p = a; const tn = vint(false).v, rel = (u[p] << 8 | u[p + 1]) << 16 >> 16, fl = u[p + 2]; p += 3;
+    const hd = p - a; p = q;
+    if (!track || tn !== track.num) return null;
+    if (fl & 6) throw 0; // lacing em vídeo: não lê
+    return { t:Math.round((ctc + rel) * scale / 1e3), key:simple ? !!(fl & 0x80) : true, data:u.subarray(a + hd, a + l) };
+  };
+  while (p < n) {
+    const id = vint(true).v, sz = vint(false), a = p, l = sz.unk ? Infinity : sz.v;
+    if (MASTER.has(id)) {
+      if (id === 0xAE) tracks.push(curTrack = {});
+      if (id === 0xA0) grp = { b:null, ref:false, end:a + l };
+      continue; // desce (tamanho desconhecido também)
+    }
+    if (!isFinite(l)) throw 0;
+    if (id === 0x2AD7B1) scale = uint(a, l);
+    else if (id === 0xD7 && curTrack) curTrack.num = uint(a, l);
+    else if (id === 0x83 && curTrack) { curTrack.type = uint(a, l); if (curTrack.type === 1 && !track) track = curTrack; }
+    else if (id === 0x86 && curTrack) curTrack.codec = new TextDecoder().decode(u.subarray(a, a + l));
+    else if (id === 0x63A2 && curTrack) curTrack.priv = u.slice(a, a + l);
+    else if (id === 0xE7) ctc = uint(a, l);
+    else if (id === 0xA3) { const b = block(a, l, true); if (b) s.push(b); }
+    else if (id === 0xA1 && grp) grp.b = block(a, l, false);
+    else if (id === 0xFB && grp) grp.ref = true;
+    p = a + l;
+    if (grp && p >= grp.end) { if (grp.b) { grp.b.key = !grp.ref; s.push(grp.b); } grp = null; }
+  }
+  if (grp && grp.b) { grp.b.key = !grp.ref; s.push(grp.b); }
+  if (!track || !s.length) return null;
+  const c = track.codec, pv = track.priv;
+  let codecs;
+  if (c === 'V_VP8') codecs = ['vp8'];
+  else if (c === 'V_VP9') { const k = s.find(x => x.key), pr = k ? ((k.data[0] >> 5) & 1) | ((k.data[0] >> 3) & 2) : 0; codecs = pr >= 2 ? ['vp09.0' + pr + '.10.10', 'vp09.0' + pr + '.10.12'] : ['vp09.0' + pr + '.10.08', 'vp09.00.41.08']; }
+  else if (c === 'V_AV1') codecs = ['av01.0.08M.08', 'av01.0.12M.08', 'av01.0.08M.10'];
+  else if (c === 'V_MPEG4/ISO/AVC' && pv && pv.length > 3) codecs = ['avc1.' + [1, 2, 3].map(i => pv[i].toString(16).padStart(2, '0')).join('')];
+  else return null;
+  return { codecs, desc:c === 'V_MPEG4/ISO/AVC' ? pv : undefined, rot:0, s };
+}
+const VDEM = new Map(); // id da mídia → Promise do demux (só durante a exportação)
+function vdemux(id) {
+  if (!VDEM.has(id)) VDEM.set(id, (async () => {
+    if (!window.VideoDecoder || !window.EncodedVideoChunk) return null;
+    const url = await mediaUrl(id); if (!url) return null;
+    const buf = await (await fetch(url)).arrayBuffer(), h = new Uint8Array(buf, 0, Math.min(16, buf.byteLength));
+    const dm = h[0] === 0x1A && h[1] === 0x45 && h[2] === 0xDF && h[3] === 0xA3 ? demuxWebm(buf) : await demuxMp4(buf);
+    if (!dm) return null;
+    for (const codec of dm.codecs) {
+      const cfg = { codec, optimizeForLatency:true }; if (dm.desc) cfg.description = dm.desc;
+      try { const r = await VideoDecoder.isConfigSupported(cfg); if (r.supported) { dm.cfg = cfg; break; } } catch (e) {}
+    }
+    if (!dm.cfg) return null;
+    dm.pts = dm.s.map(x => x.t).sort((a, b) => a - b); // tempos de apresentação em ordem
+    dm.at = new Map(dm.s.map((x, i) => [x.t, i])); // tempo → posição na ordem de decodificação
+    return dm;
+  })().catch(e => { console.warn('vídeo: não consegui ler o arquivo para exportar', e); return null; }));
+  return VDEM.get(id);
+}
+// decodificador de uma camada: { dm, dec, next (próxima amostra a mandar), out (quadros já saídos, em ordem), cur, want, wake }
+function vdecNew(dm) {
+  const d = { dm, next:0, out:[], cur:null, err:null, wake:null };
+  d.dec = new VideoDecoder({
+    output:fr => { if (d.want != null && fr.timestamp < d.want) fr.close(); else d.out.push(fr); if (d.wake) d.wake(); },
+    error:e => { d.err = e; if (d.wake) d.wake(); },
+  });
+  d.dec.configure(dm.cfg);
+  return d;
+}
+function vdecFree(d) {
+  if (!d) return;
+  for (const f of d.out) f.close(); d.out = [];
+  if (d.cur) { d.cur.close(); d.cur = null; }
+  try { if (d.dec.state !== 'closed') d.dec.close(); } catch (e) {}
+}
+function vdecCloseAll() {
+  for (const v of VIDS.values()) if (v.dec) { vdecFree(v.dec); v.dec = null; }
+  VDEM.clear();
+}
+// quadro do tempo vt (segundos do vídeo) no v.grab; false = não deu (volta ao caminho do <video>)
+async function vdecFrame(v, vt) {
+  const dm = await vdemux(v.media); if (!dm) return false;
+  const P = dm.pts, x = Math.round(vt * 1e6) + 100;
+  let lo = 0, hi = P.length - 1; if (P[0] > x) hi = -1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (P[m] <= x) lo = m; else hi = m - 1; }
+  const T = P[Math.max(0, hi)]; // o quadro que está na tela em vt (antes do primeiro: o primeiro)
+  let d = v.dec;
+  if (d && d.cur && d.cur.timestamp === T) return true; // vídeo com menos quadros por segundo que o projeto: repete
+  if (!d || d.err || d.dec.state === 'closed') { vdecFree(d); d = v.dec = vdecNew(dm); }
+  while (d.out.length && d.out[0].timestamp < T) d.out.shift().close();
+  if (!d.out.some(f => f.timestamp === T)) {
+    const j = dm.at.get(T); let k = j; while (k > 0 && !dm.s[k].key) k--;
+    // voltou (trecho repetindo), está longe à frente ou o decodificador já foi esvaziado no fim: recomeça no quadro-chave de antes
+    if (d.done || d.next > j + 8 || d.next < k || (d.want != null && T < d.want)) {
+      for (const f of d.out) f.close(); d.out = [];
+      d.dec.reset(); d.dec.configure(dm.cfg); d.next = k; d.done = false;
+    }
+  }
+  d.want = T;
+  const t0 = performance.now();
+  while (!d.out.some(f => f.timestamp >= T)) {
+    if (d.err) throw d.err;
+    if (performance.now() - t0 > 15000) throw new Error('vídeo: decodificação parada');
+    if (d.next < dm.s.length) {
+      // manda algumas amostras de cada vez (com B-frames o quadro só sai depois das seguintes)
+      while (d.next < dm.s.length && d.dec.decodeQueueSize < 4) {
+        const x = dm.s[d.next++];
+        d.dec.decode(new EncodedVideoChunk({ type:x.key ? 'key' : 'delta', timestamp:x.t, data:x.data }));
+      }
+      if (!d.out.some(f => f.timestamp >= T)) { await new Promise(r => { d.wake = r; setTimeout(r, 50); }); d.wake = null; }
+    } else if (!d.done) { d.done = true; await d.dec.flush(); } // depois do flush só volta a decodificar a partir de um quadro-chave
+    else break;
+    if (d.err) throw d.err;
+  }
+  const i = d.out.findIndex(f => f.timestamp === T), fr = i >= 0 ? d.out.splice(i, 1)[0] : d.out.length ? d.out.shift() : null;
+  if (!fr) return false;
+  if (d.cur) d.cur.close();
+  d.cur = fr;
+  vdecDraw(v, fr, dm.rot, vt);
+  return true;
+}
+// copia o quadro no v.grab do tamanho do <video> (o giro do MP4 o <video> aplica sozinho; o decodificador não)
+function vdecDraw(v, fr, rot, vt) {
+  const el = v.el, w = el.videoWidth || fr.displayWidth, hh = el.videoHeight || fr.displayHeight;
+  vidGrab(v, vt, fr.timestamp / 1e6, false);
+  const c = v.grab, x = c.getContext('2d'), q = Math.round(rot / (Math.PI / 2)) & 3;
+  if (c.width !== w || c.height !== hh) { c.width = w; c.height = hh; }
+  x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, w, hh);
+  x.translate(w / 2, hh / 2); x.rotate(q * Math.PI / 2);
+  const fw = q & 1 ? hh : w, fh = q & 1 ? w : hh;
+  x.drawImage(fr, -fw / 2, -fh / 2, fw, fh); x.setTransform(1, 0, 0, 1, 0, 0);
+}
+// primeira vez: o quadro decodificado tem que ser o mesmo que o <video> mostra no mesmo tempo (giro, edit list, cores)
+const vdecSig = src => { const c = document.createElement('canvas'); c.width = 16; c.height = 9; const x = c.getContext('2d', { willReadFrequently:true }); x.drawImage(src, 0, 0, 16, 9); return x.getImageData(0, 0, 16, 9).data; };
+async function vdecCheck(v, vt) {
+  const el = v.el;
+  if (Math.abs(el.currentTime - vt) > .0005) { const w = vidSeek(el); el.currentTime = vt; await w; }
+  const a = vdecSig(el), b = vdecSig(v.grab); let e = 0;
+  for (let i = 0; i < a.length; i += 4) e += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+  return e / (16 * 9 * 3) < 14;
+}
 async function seekVideos(t) {
   const jobs = [];
   for (const L of S.layers) {
@@ -6554,6 +6737,13 @@ async function seekVideos(t) {
     // a cópia já é deste quadro (vídeo com menos quadros por segundo que o projeto repete o quadro)
     if (v.gOk && (Math.abs(v.gAt - vt) < .0005 || (v.gT != null && v.fd && vt >= v.gT && vt < v.gT + v.fd - 1e-4))) continue;
     jobs.push((async () => {
+      // decodificado direto (vdecFrame); a primeira vez confere com o <video>
+      if (!v.noDec) {
+        try {
+          if (await vdecFrame(v, vt)) { if (v.decOk || (v.decOk = await vdecCheck(v, vt))) { v.gOk = true; return; } console.warn('vídeo: o quadro decodificado não bate com o <video>; exportando pelo <video>'); }
+        } catch (e) { console.warn('vídeo: decodificação falhou; exportando pelo <video>', e); }
+        v.noDec = true; vdecFree(v.dec); v.dec = null; v.gOk = false;
+      }
       // aba escondida não mostra quadros: só a busca funciona
       if (!same && !document.hidden && el.requestVideoFrameCallback && vt > cur && vt - cur < .6 && await vidStep(v, vt)) return;
       if (!same) { const w = vidSeek(el); el.currentTime = vt; await w; }
