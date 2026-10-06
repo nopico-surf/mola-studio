@@ -143,6 +143,39 @@
         "3023"
       ],
       "port": 3023
+    },
+    {
+      "name": "mola-abracar",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3071"
+      ],
+      "port": 3071
+    },
+    {
+      "name": "mola-preencher",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3083"
+      ],
+      "port": 3083
+    },
+    {
+      "name": "mola-colar",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3057"
+      ],
+      "port": 3057
     }
   ]
 }

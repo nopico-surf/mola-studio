@@ -76,23 +76,23 @@
     "name": "Marca",
     "colors": [
      {
-      "n": "Prim?ria",
+      "n": "Primária",
       "c": "#3FB950"
      },
      {
-      "n": "Prim?ria forte",
+      "n": "Primária forte",
       "c": "#238636"
      },
      {
-      "n": "Vibrante (an?ncio)",
+      "n": "Vibrante (anúncio)",
       "c": "#2EE06A"
      },
      {
-      "n": "Secund?ria",
+      "n": "Secundária",
       "c": "#4493F8"
      },
      {
-      "n": "Terci?ria",
+      "n": "Terciária",
       "c": "#AB7DF8"
      },
      {
@@ -147,14 +147,14 @@
     ]
    },
    {
-    "name": "Vibrantes (an?ncio)",
+    "name": "Vibrantes (anúncio)",
     "colors": [
      {
       "n": "Verde",
       "c": "#2EE06A"
      },
      {
-      "n": "Lim?o",
+      "n": "Limão",
       "c": "#C6F135"
      },
      {

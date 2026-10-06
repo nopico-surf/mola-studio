@@ -45,6 +45,7 @@ button{cursor:pointer}
 .top .durbox{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:11px;white-space:nowrap}
 .top .durbox input{width:62px}
 .top .durbox #slides{width:48px}
+.top .cdims{gap:4px}.top .cdims[hidden]{display:none}.top .durbox.cdims input{width:58px}
 
 .left,.right{background:var(--panel);overflow-y:auto;overflow-x:hidden;min-width:0}
 .left{grid-area:left;border-right:1px solid var(--line)}
@@ -324,6 +325,7 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .richbar{display:flex;gap:4px;align-items:center}
 .richbar .btn{width:30px;justify-content:center;padding-inline:0}
 .richbar select{flex:1;padding:4px 6px;font-size:11px}
+.fontgrp{display:flex;flex-direction:column;gap:8px;margin-top:12px;padding-top:14px;border-top:1px solid var(--line)}
 .colorctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 :root{--checker:conic-gradient(#8a8a8a 25%,#c9c9c9 0 50%,#8a8a8a 0 75%,#c9c9c9 0) 0 0/8px 8px}
 .cpick{width:34px;height:var(--ctl);border:1px solid var(--line-2);border-radius:5px;padding:0;cursor:pointer;background:linear-gradient(var(--c),var(--c)),var(--checker)}
@@ -535,6 +537,7 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .stage-hint span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stage-hint button{flex:none;border:0;background:var(--btn);color:var(--btn-ink);font-weight:600;font-size:11px;height:22px;padding:0 10px;border-radius:999px}
 .stage-hint button:hover{filter:brightness(1.08)}
+.stage-hint button.ghost{background:var(--raised);color:var(--fg);font-weight:500}
 .stage-hint .hseg{flex:none;display:flex;gap:2px;padding:2px;border-radius:999px;background:var(--raised)}
 .stage-hint .hseg button{background:transparent;color:var(--muted);font-weight:500;height:18px;padding:0 9px}
 .stage-hint .hseg button:hover{color:var(--fg);filter:none}
@@ -575,6 +578,8 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .add:hover .x,.add:focus-within .x{display:grid}
 .add .x:hover{background:var(--raised-2);color:var(--fg)}
 .add .x.ed{top:2px;right:2px}
+.add .x.ed.l{right:auto;left:2px}
+.add.my .nm-edit{width:100%;min-width:0;height:20px;font-size:11px;padding:0 4px}
 #audioBox{display:flex;flex-direction:column;gap:8px}
 #audioBox .hint{margin:0}
 .aud{display:flex;align-items:center;gap:6px;min-width:0}
@@ -608,8 +613,7 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .vside b{font-size:12px;color:var(--muted);font-weight:600}
 /* layout automático (grupo) */
 .flow .icon-btn[aria-pressed="true"]{color:var(--accent);background:var(--accent-soft)}
-.field.flowgap{grid-template-columns:76px minmax(0,1fr) auto}
-.flow-auto[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--fg)}
+.field.cont > label{visibility:hidden} /* continuação da linha de modo acima (Abraçar | Fixa…): mesmo nome, só para leitores de tela */
 .flow-num{font:11px var(--f-mono);color:var(--muted);text-align:right;padding:3px 5px}
 /* padronização: todo slider usa a cor da marca; o valor ao lado de um slider fora do .rng parece o do .rng */
 input[type=range]{-webkit-appearance:none;appearance:none;background:transparent;height:16px;margin:0;padding:0 6px;cursor:pointer;clip-path:inset(-8px 0)}
@@ -729,6 +733,7 @@ button.chip-cat{gap:8px}
 .comp-pv{display:block;max-width:100%;max-height:100%;width:100%;height:auto;aspect-ratio:640/300;border-radius:9px;border:1px solid var(--line-2)}
 .comp-play{position:absolute;right:8px;bottom:8px}
 .comp-body{display:flex;flex-direction:column;gap:6px}
+.comp-body>*{flex-shrink:0} /* com muitos campos a coluna rola; sem isso os campos encolhiam e se sobrepunham */
 .comp-body h3{margin:6px 0 0;font-size:12px;font-weight:600;color:var(--fg);display:flex;align-items:center;gap:8px}
 .comp-body h3.sub{font-size:11px;color:var(--muted);margin-top:10px}
 .comp-body h3 small{font-size:11px;font-weight:500;color:var(--faint)}
@@ -780,3 +785,23 @@ button.chip-cat{gap:8px}
 
 /* carrossel: renomear o slide pelo nome acima dele (clique duplo) */
 input.slide-nm{position:fixed;z-index:40;width:180px;height:var(--ctl);background:var(--raised);color:var(--fg);border:1px solid var(--accent);border-radius:var(--r);font:600 11px var(--f-ui);padding:0 8px;outline:none}
+
+/* segmento só de ícones (alinhamento, caixa alta/itálico, tipo de forma, contorno, máscara, virar, direção): mesmo controle dos
+   segmentos escritos (28 px, --raised, marcado = verde), com 32 px de largura por ícone; o nome fica no title */
+.segs.ico{display:flex;flex-wrap:wrap;gap:4px}
+.segs.ico button{width:30px;padding:0;display:grid;place-items:center}
+.segs.ico button svg{width:16px;height:16px;overflow:visible}
+.segs.ico button[aria-pressed="true"]{color:var(--fg)}
+/* as escolhas com ícone do layout automático (Livre/Coluna/Linha, Alinhar, Fixo) seguem o mesmo controle */
+.alrow:has(> .icon-btn[aria-pressed]){gap:4px}
+.alrow .icon-btn[aria-pressed]{width:30px;background:var(--raised);border:1px solid transparent}
+.alrow .icon-btn[aria-pressed]:hover{border-color:var(--line-2);color:var(--fg)}
+.alrow .icon-btn[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--fg)}
+/* B / I do editor de trecho: mesmo ícone do "Itálico" do texto inteiro */
+.richbar .icon-btn{flex:none;background:var(--raised)}
+.richbar .icon-btn:hover{background:var(--raised-2)}
+/* desfazer / refazer no topo */
+#undo,#redo{flex:none}
+#undo:disabled,#redo:disabled{opacity:.35;cursor:default;background:transparent}
+.comp-play{gap:5px}
+.comp-play svg{width:9px;height:9px}

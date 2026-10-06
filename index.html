@@ -1,6 +1,13 @@
 <!doctype html>
 <html lang="pt-BR">
 <head>
+<!-- Google Tag Manager -->
+<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-KRH28BRJ');</script>
+<!-- End Google Tag Manager -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Mola Studio</title>
@@ -8,11 +15,15 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Mona+Sans:wght@400;500;600;700;800&family=Inter:wght@400;450;500;600;700&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&display=swap">
-<link rel="stylesheet" href="css/app.css?v=19">
-<link rel="stylesheet" href="css/cutout.css?v=19">
+<link rel="stylesheet" href="css/app.css?v=24">
+<link rel="stylesheet" href="css/cutout.css?v=22">
 <style>body{margin:0}</style>
 </head>
 <body>
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-KRH28BRJ"
+height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
 <div class="app" id="app">
   <header class="top">
     <div class="logo-word"><i></i>mola</div>
@@ -24,6 +35,7 @@
       <span class="savest" id="saveState" aria-live="polite"></span>
     </div>
     <div class="seg" id="fmt" role="group" aria-label="Formato"></div>
+    <div class="durbox cdims" id="cdims" hidden title="Formato livre: largura e altura do vídeo em px"><input id="cW" type="number" min="16" max="4096" step="2" aria-label="Largura do formato livre (px)"><span aria-hidden="true">×</span><input id="cH" type="number" min="16" max="4096" step="2" aria-label="Altura do formato livre (px)"> px</div>
     <label class="durbox" for="slides" title="Carrossel: slides lado a lado no palco. Os elementos podem atravessar de um para o outro e cada slide sai como um arquivo">Slides <input id="slides" type="number" min="1" max="10" step="1"></label>
     <label class="durbox" for="dur" title="0 = imagem estática: sem animação, sem timeline, exporta PNG"><span id="durL">Duração</span> <input id="dur" type="number" min="0" max="60" step="0.5"> s</label>
     <label class="durbox" for="fps">FPS <select id="fps"></select></label>
@@ -44,8 +56,8 @@
     <div class="spacer"></div>
     <label class="tog" for="safe"><input type="checkbox" id="safe"> Zona segura 9:16</label>
     <button class="btn ghost keysbtn" id="keysBtn"title="Atalhos de teclado (?)" aria-label="Atalhos de teclado">?</button>
-    <button class="btn ghost" id="undo" title="Desfazer (Ctrl+Z)">Desfazer</button>
-    <button class="btn ghost" id="redo" title="Refazer (Ctrl+Shift+Z ou Ctrl+Y)" disabled>Refazer</button>
+    <button class="icon-btn" id="undo" title="Desfazer (Ctrl+Z)" aria-label="Desfazer"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3.5l-3 3 3 3"/><path d="M2.5 6.5H9a3.5 3.5 0 0 1 0 7H6"/></svg></button>
+    <button class="icon-btn" id="redo" title="Refazer (Ctrl+Shift+Z ou Ctrl+Y)" aria-label="Refazer" disabled><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 3.5l3 3-3 3"/><path d="M13.5 6.5H7a3.5 3.5 0 0 0 0 7h3"/></svg></button>
     <button class="btn ghost" id="varBtn" title="A mesma animação com outros textos, para exportar várias versões">Variações</button>
     <button class="btn primary" id="export">Exportar MP4</button>
   </header>
@@ -79,6 +91,9 @@
         <button class="btn small" id="gfontAdd">Adicionar</button>
       </div>
               <div class="gf-pop" id="gfonts" role="listbox" hidden></div>
+      <div class="row" hidden>
+        <button class="btn small" id="molaImport" title="Cores, paleta completa e fontes da Mola. O logo e os elementos do arquivo não mudam">Importar identidade da Mola</button>
+      </div>
       <div class="row">
         <button class="btn small" id="fontUp">Enviar arquivo de fonte</button>
         <input type="file" id="fontFile" accept=".ttf,.otf,.woff,.woff2" hidden>
@@ -168,10 +183,11 @@
 <script src="vendor/mp4-muxer.js"></script>
 <script src="vendor/paper-core.min.js"></script>
 <script src="vendor/polygon-clipping.min.js"></script>
-<script src="js/cutout.js?v=19"></script>
-<script src="js/vetor.js?v=19"></script>
-<script src="js/svgimport.js?v=19"></script>
-<script src="js/componentes.js?v=19"></script>
-<script src="js/app.js?v=19"></script>
+<script src="js/cutout.js?v=22"></script>
+<script src="js/vetor.js?v=22"></script>
+<script src="js/svgimport.js?v=22"></script>
+<script src="js/marca-mola.js?v=1"></script>
+<script src="js/componentes.js?v=22"></script>
+<script src="js/app.js?v=25"></script>
 </body>
 </html>

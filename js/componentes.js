@@ -13,13 +13,16 @@ const COMP_DEF = {
   sub:    { type:'text', role:'sub', label:'Subtítulo', y:.56, p:{ text:'Uma frase curta de apoio', font:'@f1', weight:500, size:40, opacity:.82, color:'@c1', hl:'@c2', in:'blurChar' } },
   kicker: { type:'text', role:'kicker', label:'Chamada', y:.3, p:{ text:'NOVIDADE', font:'@f1', weight:700, size:34, ls:.4, color:'@c2', hl:'@c2', in:'track' } },
   big:    { type:'text', role:'big', label:'Número', name:'Número grande', y:.38, p:{ text:'-30%', font:'@f2', weight:800, size:240, lh:1, color:'@c1', hl:'@c2', in:'counter', idle:'float' } },
-  hl:     { type:'text', role:'offer', label:'Destaque', y:.6, p:{ text:'frete grátis hoje', font:'@f1', weight:700, size:56, color:'@c0', hl:'@c2', in:'highlight' } },
+  hl:     { type:'text', role:'offer', label:'Destaque', y:.6, p:{ text:'frete grátis hoje', font:'@f1', weight:700, size:56, color:'@c0', hl:'@c2', tbg:true, in:'highlight' } },
   impact: { type:'text', role:'k1', label:'Impacto', name:'Frase de impacto', y:.5, p:{ text:'Sem pressa.', font:'@f2', weight:800, size:132, upper:true, lh:1, color:'@c1', hl:'@c2', in:'stamp' } },
   cta:    { type:'cta', role:'cta', label:'Botão', y:.74, p:{ text:'Peça agora  →', font:'@f1', weight:700, size:40, color:'@c0', bg:'@c2', lineColor:'@c2', in:'pop', idle:'pulse' } },
   // sizeA/sizeS = largura do logo sozinho no quadro / com outros elementos (fração da largura); viram L.size ao inserir
   logo:   { type:'logo', label:'Logo', p:{ sizeA:.36, sizeS:.14, drawColor:'@c2', lineColor:'@c2', tintColor:'@c1', idle:'shine' } },
   image:  { type:'image', label:'Imagem', y:.42, p:{ idle:'float', lineColor:'@c2' } },
   shape:  { type:'shape', label:'Forma', y:.5, p:{ c1:'@c2', c2:'@c0', c3:'@c3', c4:'@c4', strokeColor:'@c1' } },
+  // o que a caneta (P) cria ao terminar um desenho (pedido do usuário: escolher se entra só com o traço, preenchido etc.).
+  // penFill: auto = fechado preenche e aberto fica só no traço; fill = sempre preenchido; line = sempre só o traço (penStyle)
+  pen:    { type:'shape', label:'Desenho (caneta)', name:'Vetor', pl:'desenhos', p:{ kind:'custom', penFill:'auto', c1:'@c2', c2:'@c0', c3:'@c3', c4:'@c4', strokeColor:'@c1', in:'draw' } },
   // quadro e cena (pedido do usuário: margem, fundo e o resto que faz sentido). Fundo, margem e formato valem para o arquivo novo
   bg:     { type:'bg', label:'Fundo', grp:'Quadro', p:{ mode:'mesh', c1:'@c0', c2:'@c3', c3:'@c2', c4:'@c4', motion:1, angle:135, darken:.25, grain:.08 } },
   margin: { type:'margin', label:'Margem', grp:'Quadro', p:{ on:true, top:64, right:64, bottom:64, left:64 } },
@@ -31,7 +34,9 @@ COMP_DEF.cta.pl = 'botões'; COMP_DEF.image.pl = 'imagens'; COMP_DEF.title.pl = 
 const compPl = id => COMP_DEF[id].pl || COMP_DEF[id].label.toLowerCase() + 's';
 // não são camadas: só o arquivo (margem, formato/tempo)
 const COMP_FILE = new Set(['margin', 'file']);
-const compSkip = (id, k) => COMP_SKIP.has(k) && !(id === 'bg' && k === 'src'); // imagem do fundo entra no padrão (é mídia, não pesa)
+const compSkip = (id, k) => (COMP_SKIP.has(k) && !(id === 'bg' && k === 'src')) || (id === 'pen' && PEN_GEOM.has(k)); // imagem do fundo entra no padrão (é mídia, não pesa)
+// o desenho é de cada traço: do padrão da caneta só vem o estilo (preencher ou não sai de penFill)
+const PEN_GEOM = new Set(['d', 'vec', 'vecD', 'kind', 'size', 'mh', 'rot', 'fill', 'radius', 'radSep', 'rTL', 'rTR', 'rBR', 'rBL', 'points', 'inner']);
 const FONT_SLOTS = ['Título', 'Texto', 'Impacto'];
 // papel antigo (roteiros, preço) → componente, para "Usar como padrão" em elementos que não vieram de Adicionar
 const ROLE_COMP = { title:'title', brand:'title', sub:'sub', kicker:'kicker', tag:'kicker', big:'big', offer:'hl', k1:'impact', k2:'impact', k3:'impact', cta:'cta', logo:'logo', logoSmall:'logo', image:'image', shape:'shape' };
@@ -89,7 +94,14 @@ function mkComp(id) {
   if (d.type === 'logo') { o.size = role === 'logo' ? p.sizeA : p.sizeS; delete p.sizeA; delete p.sizeS; }
   if (p.in && p.inDur == null) delete o.inDur; // preset trocado no padrão: duração do preset
   Object.assign(o, p);
+  if (id === 'pen') { const L = mkShape(o); penStyle(L, false); return L; } // a prévia do padrão é um traço aberto
   return d.type === 'text' ? mkText(role, o) : d.type === 'cta' ? mkCta(o) : d.type === 'logo' ? mkLogo(role, o) : d.type === 'image' ? mkImage(o) : mkShape(o);
+}
+// preencher ou não o desenho da caneta (padrão "Desenho"): sem preenchimento fica só o traço (fill:false, como o caminho aberto de sempre)
+function penStyle(L, closed) {
+  const pf = L.penFill || 'auto'; delete L.penFill;
+  L.fill = pf === 'fill' || (pf === 'auto' && !!closed);
+  return L;
 }
 // o estilo de um elemento vira o padrão (fonte/cor que batem com a marca ficam ligadas a ela)
 function compCapture(L, id) {
@@ -118,7 +130,7 @@ function compCapture(L, id) {
 // margem e formato/tempo: o do arquivo aberto vira o padrão (só o que difere da fábrica)
 function compFileNow(id) {
   if (id === 'margin') return marginSides();
-  return { format:baseFmt(), duration:S.duration, fps:S.fps || 30, loop:S.loop !== false, slides:slides() };
+  return { format:baseFmt() === 'custom' ? COMP_DEF.file.p.format : baseFmt(), duration:S.duration, fps:S.fps || 30, loop:S.loop !== false, slides:slides() };
 }
 function compFromFile(id) {
   const now = compFileNow(id), fac = COMP_DEF[id].p, out = {};
@@ -212,7 +224,7 @@ function openComps(id = 'title') {
   const list = h('div', { class:'comp-nav', role:'listbox', 'aria-label':'Componentes' });
   const body = h('div', { class:'comp-body' });
   const pv = h('canvas', { class:'comp-pv', width:1280, height:600 });
-  const playB = h('button', { class:'btn small ghost comp-play', text:'▶ Ver entrada', title:'Toca a entrada uma vez', onclick:() => playPrev() });
+  const playB = h('button', { class:'btn small ghost comp-play', html:`${ICON_PLAY}<span>Ver entrada</span>`, title:'Toca a entrada uma vez', onclick:() => playPrev() });
   const pvBox = h('div', { class:'comp-pvbox' }, [pv, playB]);
   const close = () => { cancelAnimationFrame(prevRaf); closePicker(); document.removeEventListener('keydown', onKey); ov.remove(); COMPWIN = null; renderComps(); renderAdds(); needs = true; };
   // Esc também quando o foco caiu fora da janela (os campos são refeitos a cada mudança)
@@ -331,7 +343,7 @@ function openComps(id = 'title') {
     playB.hidden = t === 'margin' || t === 'file' || t === 'image';
     // quadro em pé precisa de mais altura que um elemento solto
     const ph = COMP_DEF[cur].grp ? 900 : 600; if (pv.height !== ph) { pv.height = ph; pv.style.aspectRatio = `${pv.width} / ${ph}`; }
-    playB.textContent = t === 'bg' ? '▶ Ver movimento' : t === 'camera' ? '▶ Ver câmera' : t === 'fx' ? '▶ Ver transição' : '▶ Ver entrada';
+    playB.lastChild.textContent = t === 'bg' ? 'Ver movimento' : t === 'camera' ? 'Ver câmera' : t === 'fx' ? 'Ver transição' : 'Ver entrada';
     playB.title = t === 'bg' ? 'Toca alguns segundos do fundo' : t === 'camera' ? 'Toca o movimento da câmera' : t === 'fx' ? 'Toca a transição uma vez' : 'Toca a entrada uma vez';
     drawPrev(); drawNav();
   };
@@ -339,10 +351,11 @@ function openComps(id = 'title') {
   const soon = () => { cancelAnimationFrame(rqf); rqf = requestAnimationFrame(refresh); };
 
   // camada de mentira: lê o padrão resolvido, escreve no padrão
-  const REDRAW = new Set(['mode', 'fx', 'cam', 'on']); // mudam quais campos aparecem
+  const REDRAW = new Set(['mode', 'fx', 'cam', 'on', 'tbg', 'stroke', 'kind', 'strokeDash', 'fill', 'penFill']); // mudam quais campos aparecem
   const proxy = () => {
     const tgt = mkComp(cur);
     if (COMP_DEF[cur].type === 'logo') { const p = compProps(cur); tgt.sizeA = p.sizeA; tgt.sizeS = p.sizeS; } // mkComp já trocou por size
+    if (cur === 'pen') tgt.penFill = compProps(cur).penFill || 'auto'; // mkComp já trocou por fill
     if (COMP_FILE.has(cur)) tgt.id = 'comp-' + cur; // margem/formato não são camadas: id só para os campos
     return new Proxy(tgt, { set(o, k, v) {
       o[k] = v;
@@ -392,17 +405,39 @@ function openComps(id = 'title') {
       put(textF(P, 'text', d.type === 'cta' ? 'Texto inicial do botão' : 'Texto inicial'), fontPick(),
         selectF(P, 'weight', 'Peso', weightsOf(P.font).map(([v, t]) => [v, `${t} ${v}`]), { num:true }),
         rangeF(P, 'size', 'Tamanho', 16, d.type === 'cta' ? 120 : 400, 1, px), colorPick('color', d.type === 'cta' ? 'Cor do texto' : 'Cor'));
-      if (d.type === 'text') put(P.in === 'highlight' || cur === 'hl' ? colorPick('hl', 'Marca-texto') : null,
-        rangeF(P, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em'),
-        rangeF(P, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2)),
-        segF(P, 'align', 'Alinhamento', [['left', 'Esq.'], ['center', 'Centro'], ['right', 'Dir.']]),
-        h('div', { class:'checks' }, [checkF(P, 'upper', 'Caixa alta'), checkF(P, 'italic', 'Itálico')]));
-      else put(colorPick('bg', 'Fundo'), rangeF(P, 'radius', 'Arredondado', 0, 999, 1, v => v >= 999 ? 'pílula' : px(v)),
+      if (d.type === 'text') {
+        put(rangeF(P, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em'),
+          rangeF(P, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2)),
+          segF(P, 'align', 'Alinhamento', ALIGN_OPTS),
+          togF(P, 'Letras', CASE_OPTS),
+          checkF(P, 'tbg', 'Fundo atrás do texto'));
+        // fundo atrás do texto (o mesmo do painel, textBg): espaços e cantos em em, mostrados em px
+        if (textBg(P)) {
+          const em = (k, label, min, max, def) => rangeF(P, k, label, min, max, .005, v => Math.round((v ?? def) * (P.size || 1)) + 'px', { scale:P.size || 1, dec:0, get:() => P[k] ?? def });
+          put(colorPick('hl', 'Cor do fundo'), em('hlPadX', 'Espaço ↔', 0, 1.5, .18), em('hlPadY', 'Espaço ↕', -.3, 1, 0), em('hlRad', 'Cantos', 0, 1, 0),
+            segF(P, 'hlBox', 'Caixa', TBG_OPTS));
+        }
+      } else put(rangeF(P, 'ls', 'Entre letras', -.08, .6, .005, v => (v || 0).toFixed(3) + 'em', { get:() => P.ls || 0 }),
+        togF(P, 'Letras', CASE_OPTS),
+        colorPick('bg', 'Fundo'), rangeF(P, 'radius', 'Arredondado', 0, 999, 1, v => v >= 999 ? 'pílula' : px(v)),
         rangeF(P, 'padX', 'Folga lateral', 10, 160, 1, px), rangeF(P, 'padY', 'Folga vertical', 6, 80, 1, px));
     } else if (d.type === 'shape') {
-      put(selectF(P, 'kind', 'Forma', Object.entries(SHAPE_KINDS).filter(([k]) => k !== 'custom' || P.kind === 'custom')),
-        colorPick('c1', 'Cor 1'), colorPick('c2', 'Cor 2'), pxF(P, 'size', 'Largura', .02, 1.6),
-        pxF(P, 'mh', 'Altura', .02, 2.6), rangeF(P, 'radius', 'Cantos', 0, 600, 1, px));
+      // preenchimento (estilo e cores, como no painel da forma) e contorno: o mesmo para a Forma e para o Desenho da caneta
+      const fillCols = () => {
+        const lbl = { mesh:['Base', 'Mancha 1', 'Mancha 2', 'Mancha 3'], linear:['Cor 1', 'Cor 2', 'Cor 3'], spot:['Base', 'Luz'], solid:['Cor'] }[P.mode] || ['Cor 1', 'Cor 2'];
+        return [segF(P, 'mode', 'Estilo', Object.entries(BG_MODES).filter(([k]) => k !== 'image')), ...lbl.map((t, i) => colorPick('c' + (i + 1), t))];
+      };
+      const stroke = (always) => [always ? null : checkF(P, 'stroke', 'Contorno'), always || P.stroke ? colorPick('strokeColor', 'Cor do traço') : null,
+        always || P.stroke ? rangeF(P, 'strokeW', 'Espessura', 1, 80, .5, v => v + 'px') : null];
+      if (cur === 'pen') {
+        const line = P.penFill === 'line';
+        put(h('p', { class:'hint', text:'O que a caneta (P) cria ao terminar um desenho. O desenho em si é o que você traçar.' }),
+          segF(P, 'penFill', 'Ao terminar', [['auto', 'Fechado preenche'], ['fill', 'Sempre preenchido'], ['line', 'Só o traço']]),
+          ...(line ? [] : fillCols()), ...stroke(line || P.penFill === 'auto'),
+          P.penFill === 'auto' ? h('p', { class:'hint', text:'Desenho aberto fica só no traço (esta cor e espessura). Fechado ganha o preenchimento.' }) : null);
+      } else put(segF(P, 'kind', 'Forma', icoOpts(SHAPE_KINDS, 'sh_').filter(([k]) => k !== 'custom' || P.kind === 'custom')),
+        ...fillCols(), pxF(P, 'size', 'Largura', .02, 1.6),
+        pxF(P, 'mh', 'Altura', .02, 2.6), rangeF(P, 'radius', 'Cantos', 0, 600, 1, px), ...stroke(false));
     } else if (d.type === 'image') {
       put(pxF(P, 'size', 'Largura', .1, 1.6), rangeF(P, 'radius', 'Cantos', 0, 600, 1, px));
     } else if (d.type === 'logo') {
@@ -430,7 +465,7 @@ function openComps(id = 'title') {
       }
     } else if (d.type === 'file') {
       put(h('p', { class:'hint', text:'Vale para arquivo novo. Os arquivos que já existem continuam como estão.' }),
-        segF(P, 'format', 'Formato', Object.keys(FORMATS).map(f => [f, fmtLabel(f)])),
+        segF(P, 'format', 'Formato', Object.keys(FORMATS).filter(f => f !== 'custom').map(f => [f, fmtLabel(f)])),
         rangeF(P, 'duration', 'Duração', 2, 60, .5, v => String(v).replace('.', ',') + ' s'),
         selectF(P, 'fps', 'FPS', FPS_OPTS.map(v => [v, v + ' quadros/s']), { num:true }),
         rangeF(P, 'slides', 'Slides', 1, SLIDES_MAX, 1, v => v <= 1 ? 'Um' : v + '', { after:refresh }),
@@ -476,7 +511,8 @@ function openComps(id = 'title') {
     refresh();
     if (!ov.contains(document.activeElement)) card.focus({ preventScroll:true });
   };
-  const SHOWN = new Set(['text', 'font', 'weight', 'size', 'color', 'hl', 'ls', 'lh', 'align', 'upper', 'italic', 'bg', 'radius', 'padX', 'padY', 'kind', 'c1', 'c2', 'mh', 'sizeA', 'sizeS', 'drawColor', 'in', 'out', 'idle', 'inDur']);
+  const SHOWN = new Set(['text', 'font', 'weight', 'size', 'color', 'hl', 'ls', 'lh', 'align', 'upper', 'lower', 'italic', 'bg', 'radius', 'padX', 'padY', 'kind', 'c1', 'c2', 'mh', 'sizeA', 'sizeS', 'drawColor', 'in', 'out', 'idle', 'inDur',
+    'tbg', 'hlPadX', 'hlPadY', 'hlRad', 'hlBox', 'stroke', 'strokeW', 'strokeColor', 'strokePos', 'mode', 'fill', 'penFill', 'c3', 'c4']);
   const SHOWN_G = new Set(['mode', 'c1', 'c2', 'c3', 'c4', 'src', 'darken', 'angle', 'motion', 'grain', 'on', 'top', 'right', 'bottom', 'left',
     'format', 'duration', 'fps', 'slides', 'loop', 'fx', 'cam', 'intensity', 'speed', 'opacity']);
   const drawNav = () => {

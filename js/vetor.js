@@ -496,7 +496,7 @@ async function glyphsD(family, size, items, T0) {
 async function textVecs(L) {
   ensureBounds([L]);
   const bd = L._bounds; if (!bd) throw new Error('Esse texto não está na tela');
-  const lay = layoutText(L, L.upper ? L.text.toUpperCase() : L.text), fk = bd.k || bd.w / lay.blockW || 1;
+  const lay = layoutText(L, caseTxt(L, L.text)), fk = bd.k || bd.w / lay.blockW || 1;
   const T0 = { ax:bd.x + bd.w / 2, ay:bd.y + bd.h / 2, k:fk }, byCol = new Map(); let missing = 0;
   for (const line of lay.lines) {
     const items = line.glyphs.filter(g => !g.space).map(g => { const m = /^(italic )?(\d+)/.exec(g.f) || []; return { ch:g.ch, x:line.x0 + g.x, y:line.baseline, w:+m[2] || L.weight, it:!!m[1], c:g.c || L.color }; });
@@ -506,6 +506,24 @@ async function textVecs(L) {
   const parts = [];
   for (const [color, d] of byCol) { const vec = vecParse(d); if (vec) parts.push({ color, d, vec }); }
   return { parts, missing, fk };
+}
+// fundo atrás do texto (textBg) em repouso, em px do quadro (uma caixa por linha ou uma só); a mesma conta do desenho (paintBg em drawText)
+function textBgBoxes(L) {
+  const bg = textBg(L), bd = L._bounds; if (!bg || !bd) return [];
+  const lay = layoutText(L, caseTxt(L, L.text)), fk = bd.k || bd.w / lay.blockW || 1, ax = bd.x + bd.w / 2, ay = bd.y + bd.h / 2;
+  const hh = TBG_H * lay.size + bg.py, mid = l => l.baseline - .32 * lay.size, ls = lay.lines.filter(l => l.text.trim());
+  const P = (x, y, w, hb) => ({ x:ax + x * fk, y:ay + y * fk, w:w * fk, h:hb * fk, r:Math.max(0, Math.min(bg.r * fk, w * fk / 2, hb * fk / 2)) });
+  if (!ls.length) return [];
+  if (bg.block) return [P(-lay.innerW / 2 - bg.px, mid(ls[0]) - hh, lay.innerW + 2 * bg.px, mid(ls[ls.length - 1]) - mid(ls[0]) + 2 * hh)];
+  return ls.map(l => P(l.x0 - bg.px, mid(l) - hh, l.width + 2 * bg.px, 2 * hh));
+}
+// retângulo arredondado como path só de retas e cúbicas (vecParse recusa arco)
+function rrD(b) {
+  const { x, y, w, h:hb } = b, r = b.r || 0, k = r * .5523;
+  if (r < .01) return `M${sn(x)} ${sn(y)}H${sn(x + w)}V${sn(y + hb)}H${sn(x)}Z`;
+  return `M${sn(x + r)} ${sn(y)}H${sn(x + w - r)}C${sn(x + w - r + k)} ${sn(y)} ${sn(x + w)} ${sn(y + r - k)} ${sn(x + w)} ${sn(y + r)}V${sn(y + hb - r)}`
+    + `C${sn(x + w)} ${sn(y + hb - r + k)} ${sn(x + w - r + k)} ${sn(y + hb)} ${sn(x + w - r)} ${sn(y + hb)}H${sn(x + r)}`
+    + `C${sn(x + r - k)} ${sn(y + hb)} ${sn(x)} ${sn(y + hb - r + k)} ${sn(x)} ${sn(y + hb - r)}V${sn(y + r)}C${sn(x)} ${sn(y + r - k)} ${sn(x + r - k)} ${sn(y)} ${sn(x + r)} ${sn(y)}Z`;
 }
 /* ------------ Texto em curvas (como "Create outlines" do Figma) ------------ */
 async function textToVector(list) {
@@ -523,13 +541,16 @@ async function textToVector(list) {
   ls.forEach((L, i) => {
     const r = res[i]; if (!r.parts.length) return;
     missing += r.missing;
-    const gid = r.parts.length > 1 && !L.grp ? 'g' + Math.random().toString(36).slice(2, 7) : null, see = strokeSee(L);
+    // fundo atrás do texto: vira mais uma forma, por baixo das letras
+    const boxes = textBgBoxes(L), bgVec = boxes.length ? vecParse(boxes.map(rrD).join('')) : null;
+    const gid = r.parts.length + (bgVec ? 1 : 0) > 1 && !L.grp ? 'g' + Math.random().toString(36).slice(2, 7) : null, see = strokeSee(L);
     const items = r.parts.map((p, j) => {
       const it = vecLayerFrom(L, p.vec, { name:r.parts.length > 1 ? `${L.name} ${j + 1}` : L.name, ...solidOver(p.color),
         ...(see ? { stroke:true, strokeColor:skC(L), strokeW:+(skW(L) * r.fk).toFixed(2), strokePos:L.strokePos === 'outside' ? 'outside' : 'center', strokeJoin:L.strokeJoin || 'round', strokeCap:'round', strokeDash:'solid' } : {}) });
       if (it && gid) it.n.grp = gid;
       return it;
     }).filter(Boolean);
+    if (bgVec) { const it = vecLayerFrom(L, bgVec, { name:`${L.name} fundo`, ...solidOver(L.hl || '#D98E4A') }); if (it) { if (gid) it.n.grp = gid; items.unshift(it); } }
     const at = S.layers.indexOf(L); S.layers.splice(at, 1);
     insertVecLayers(items, at); made.push(...items.map(o => o.n));
   });
@@ -571,7 +592,15 @@ const svgUid = (X, raw, fallback) => {
 // grupo (frame) da lista de camadas: um <g> com o nome, a opacidade e a mesclagem dele, e as camadas dentro
 function svgGroup(gid, inner, X) {
   const gm = (S.groups && S.groups[gid]) || {}, bm = blendOf(gm), op = gm.opacity ?? 1;
-  return `<g id="${svgEsc(svgUid(X, groupName(gid), 'grupo'))}"${op < 1 ? ` opacity="${+op.toFixed(3)}"` : ''}${bm ? ` style="mix-blend-mode:${SVG_BLEND[bm] || bm}"` : ''}>${inner}</g>`;
+  return `<g id="${svgEsc(svgUid(X, groupName(gid), 'grupo'))}"${op < 1 ? ` opacity="${+op.toFixed(3)}"` : ''}${bm ? ` style="mix-blend-mode:${SVG_BLEND[bm] || bm}"` : ''}>${svgFramePaint(gid, gm, X)}${inner}</g>`;
+}
+// frame com layout pintado (paintFrame): o retângulo do frame, por baixo das camadas dele (cantos diferentes saem com o maior)
+function svgFramePaint(gid, gm, X) {
+  if (!gPaintOn(gid)) return '';
+  const b = frameRect(gid); if (!b || b.w <= 0 || b.h <= 0) return '';
+  const rad = radOf(gm), r = Math.min((Array.isArray(rad) ? Math.max(...rad) : rad) * b.k, b.w / 2, b.h / 2);
+  const el = a => `<rect x="${sn(b.x)}" y="${sn(b.y)}" width="${sn(b.w)}" height="${sn(b.h)}"${r > .01 ? ` rx="${sn(r)}"` : ''} ${a}/>`;
+  return (gm.fill && !noCol(gm.fill) ? el(svgFill(gm.fill) + ' stroke="none"') : '') + (gm.stroke && strokeSee(gm) ? svgStroke({ ...gm, strokeW:skW(gm) * b.k }, el, X) : '');
 }
 // cada camada vira um <g> com opacidade, mesclagem, sombra e desfoque da camada
 function svgWrap(L, inner, X) {
@@ -675,16 +704,17 @@ async function svgShape(L, X) {
 async function svgText(L, X) {
   let r = null;
   try { r = await textVecs(L); } catch (e) { console.warn(e); }
+  const bgs = textBgBoxes(L).map(b => `<path d="${rrD(b)}" ${svgFill(L.hl || '#D98E4A')}/>`).join(''); // fundo atrás do texto, por baixo
   if (r && r.parts.length) {
     const see = strokeSee(L), out = r.parts.map(p => {
       const el = a => `<path d="${p.d}" ${a}/>`;
       return el(svgFill(p.color) + ' stroke="none"') + (see ? svgStroke({ ...L, strokeW:skW(L) * r.fk, strokeDash:'solid', strokePos:L.strokePos === 'outside' ? 'outside' : 'center' }, el, X) : '');
     }).join('');
-    return svgWrap(L, out, X);
+    return svgWrap(L, bgs + out, X);
   }
   const b = L._bounds; if (!b) return '';
-  const lay = layoutText(L, L.upper ? L.text.toUpperCase() : L.text), fk = b.k || 1, ax = b.x + b.w / 2, ay = b.y + b.h / 2;
-  const out = lay.lines.map(line => `<text x="${sn(ax + line.x0 * fk)}" y="${sn(ay + line.baseline * fk)}" font-family="${svgEsc(L.font)}" font-size="${sn(lay.size * fk)}" font-weight="${L.weight}"${L.italic ? ' font-style="italic"' : ''} letter-spacing="${sn((L.ls || 0) * lay.size * fk)}" ${svgFill(L.color)} xml:space="preserve">${svgEsc(line.text)}</text>`).join('');
+  const lay = layoutText(L, caseTxt(L, L.text)), fk = b.k || 1, ax = b.x + b.w / 2, ay = b.y + b.h / 2;
+  const out = bgs + lay.lines.map(line => `<text x="${sn(ax + line.x0 * fk)}" y="${sn(ay + line.baseline * fk)}" font-family="${svgEsc(L.font)}" font-size="${sn(lay.size * fk)}" font-weight="${L.weight}"${L.italic ? ' font-style="italic"' : ''} letter-spacing="${sn((L.ls || 0) * lay.size * fk)}" ${svgFill(L.color)} xml:space="preserve">${svgEsc(line.text)}</text>`).join('');
   return svgWrap(L, out, X);
 }
 async function svgCta(L, X) {
@@ -692,17 +722,15 @@ async function svgCta(L, X) {
   const k = b.w / G.w, cx = b.x + b.w / 2, cy = b.y + b.h / 2, r = clamp(L.radius || 0, 0, Math.min(G.w, G.h) / 2);
   const el = a => `<rect x="${sn(-G.w / 2)}" y="${sn(-G.h / 2)}" width="${sn(G.w)}" height="${sn(G.h)}"${r > .01 ? ` rx="${sn(r)}"` : ''} ${a}/>`;
   let out = `<g transform="translate(${sn(cx)} ${sn(cy)})${Math.abs(k - 1) > 1e-4 ? ` scale(${+k.toFixed(5)})` : ''}">${el(svgFill(L.bg) + ' stroke="none"')}${svgStroke(L, el, X)}</g>`;
-  // texto em curvas: cada letra na posição que o canvas mede (largura até ela menos a própria)
-  const f = fontStr(L, L.size); MCTX.font = f;
-  const chars = [...L.text], items = []; let pre = '';
-  const tw = MCTX.measureText(L.text).width;
-  for (const ch of chars) { pre += ch; const w = MCTX.measureText(ch).width; if (ch !== ' ') items.push({ ch, x:MCTX.measureText(pre).width - w - tw / 2, y:L.size * .35, w:L.weight, it:false, c:L.color }); }
+  // texto em curvas: cada letra na posição que o canvas mede (largura até ela menos a própria, com o espaço entre letras e a caixa alta)
+  const m = ctaMeasure(L, true), items = [];
+  m.chars.forEach((ch, i) => { if (ch !== ' ') items.push({ ch, x:m.xs[i] - m.w / 2, y:L.size * .35, w:L.weight, it:!!L.italic, c:L.color }); });
   try {
     const r2 = await glyphsD(L.font, L.size, items, { ax:cx, ay:cy, k });
     out += [...r2.map].map(([c, d]) => `<path d="${d}" ${svgFill(c)}/>`).join('');
   } catch (e) {
     console.warn(e);
-    out += `<text x="${sn(cx)}" y="${sn(cy + L.size * .35 * k)}" text-anchor="middle" font-family="${svgEsc(L.font)}" font-size="${sn(L.size * k)}" font-weight="${L.weight}" ${svgFill(L.color)}>${svgEsc(L.text)}</text>`;
+    out += `<text x="${sn(cx)}" y="${sn(cy + L.size * .35 * k)}" text-anchor="middle" font-family="${svgEsc(L.font)}" font-size="${sn(L.size * k)}" font-weight="${L.weight}"${L.italic ? ' font-style="italic"' : ''}${L.ls ? ` letter-spacing="${sn(ctaLs(L) * k)}"` : ''} ${svgFill(L.color)}>${svgEsc(m.tx)}</text>`;
   }
   return svgWrap(L, out, X);
 }
