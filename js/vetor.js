@@ -292,6 +292,8 @@ function localVec(L, G) {
   const s = G.w / b.w, bx = b.x + b.w / 2, by = b.y + b.h / 2, f = (x, y) => [(x - bx) * s, (y - by) * s];
   return vec.map(sp => ({ closed:sp.closed, pts:sp.pts.map(p => { const q = f(p.x, p.y), i = f(p.ix, p.iy), o = f(p.ox, p.oy); return { x:q[0], y:q[1], ix:i[0], iy:i[1], ox:o[0], oy:o[1] }; }) }));
 }
+// o desenho que aparece: com a ondulação, a onda (waveGet); senão a base
+const shapeLocal = (L, G) => waveOn(L) ? (waveGet(L, G) || {}).vec || null : localVec(L, G);
 const canOutline = L => !!L && (L.type === 'shape' || L.type === 'cta' || (L.type === 'image' && masked(L)));
 
 /* ------------ forma Vetor nova a partir de pontos na tela do formato aberto ------------ */
@@ -328,7 +330,7 @@ function outlineStroke(L) {
   ensureBounds([L]);
   const b = L._bounds, G = geomNow(L);
   if (!b || !G || !G.w) { toast('Esse elemento não está na tela', 3000); return false; }
-  const lv = L.type === 'shape' ? localVec(L, G) : shapePts({ ...L, kind:L.type === 'image' && L.mask === 'circle' ? 'ellipse' : 'rect' }, G);
+  const lv = L.type === 'shape' ? shapeLocal(L, G) : shapePts({ ...L, kind:L.type === 'image' && L.mask === 'circle' ? 'ellipse' : 'rect' }, G);
   if (!lv) { toast('Este caminho tem arcos (comando A) e não dá para converter. Redesenhe com a caneta (P)', 4500); return false; }
   const subs = flatSubs(lv); if (!subs.length) return false;
   const k = b.w / G.w, a = (L.type === 'shape' ? L.rot || 0 : 0) * Math.PI / 180, co = Math.cos(a), si = Math.sin(a), cx = b.x + b.w / 2, cy = b.y + b.h / 2;
@@ -675,7 +677,9 @@ async function svgShape(L, X) {
   const k = b.w / G.w, cx = b.x + b.w / 2, cy = b.y + b.h / 2, rot = L.rot || 0, kind = L.kind;
   const tf = `translate(${sn(cx)} ${sn(cy)})${rot ? ` rotate(${sn(rot)})` : ''}${Math.abs(k - 1) > 1e-4 ? ` scale(${+k.toFixed(5)})` : ''}`;
   let sc = 1, el;
-  if (kind === 'ellipse') el = a => `<ellipse cx="0" cy="0" rx="${sn(G.w / 2)}" ry="${sn(G.h / 2)}" ${a}/>`;
+  const wv = waveOn(L) && waveGet(L, G), wd = wv && vecD(wv.vec); // ondulada: o caminho da onda
+  if (wd) el = a => `<path d="${wd}" ${a}/>`;
+  else if (kind === 'ellipse') el = a => `<ellipse cx="0" cy="0" rx="${sn(G.w / 2)}" ry="${sn(G.h / 2)}" ${a}/>`;
   else if (kind === 'line') el = a => `<line x1="${sn(-G.w / 2)}" y1="0" x2="${sn(G.w / 2)}" y2="0" ${a}/>`;
   else if (kind === 'custom') {
     const bb = G.cust; sc = G.w / bb.w;

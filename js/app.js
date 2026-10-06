@@ -2150,7 +2150,8 @@ function drawPen(ctx, lg, G, dp) {
   const pen = lg.pen;
   if (dp >= 1) { ctx.drawImage(lg.img, -G.w / 2, -G.h / 2, G.w, G.h); return; }
   if (dp <= 0) return;
-  if (!PENC.mask) { PENC.mask = document.createElement('canvas'); PENC.lay = document.createElement('canvas'); }
+  const PC = RT.soft ? (PENC.s ||= { mask:null, lay:null }) : PENC; // exportação: telas em software (softCv)
+  if (!PC.mask) { PC.mask = newCv(); PC.lay = newCv(); }
   const m = ctx.getTransform(), k = Math.max(.05, Math.hypot(m.a, m.b)), inv = 1 / pen.soft;
   const gu = G.w / (lg.bw * pen.km), gv = G.h / (lg.bh * pen.km); // unidades do bloco por px da grade
   for (const ly of pen.layers) {
@@ -2164,9 +2165,9 @@ function drawPen(ctx, lg, G, dp) {
     if (!ly.id) { ly.id = new ImageData(w, h); ly.id.data.fill(255); }
     const d = ly.id.data;
     for (let i = 0, n = w * h; i < n; i++) { const a = (dp - T[i]) * inv; d[i * 4 + 3] = a <= 0 ? 0 : a >= 1 ? 255 : a * 255; }
-    const mc = PENC.mask; if (mc.width < w || mc.height < h) { mc.width = Math.max(mc.width, w); mc.height = Math.max(mc.height, h); }
+    const mc = PC.mask; if (mc.width < w || mc.height < h) { mc.width = Math.max(mc.width, w); mc.height = Math.max(mc.height, h); }
     mc.getContext('2d').putImageData(ly.id, 0, 0);
-    const pw = Math.max(1, Math.ceil(dw * k)), ph = Math.max(1, Math.ceil(dh * k)), lc = PENC.lay;
+    const pw = Math.max(1, Math.ceil(dw * k)), ph = Math.max(1, Math.ceil(dh * k)), lc = PC.lay;
     if (lc.width < pw || lc.height < ph) { lc.width = Math.max(lc.width, pw); lc.height = Math.max(lc.height, ph); }
     const lx = lc.getContext('2d');
     lx.setTransform(1, 0, 0, 1, 0, 0); lx.globalCompositeOperation = 'source-over'; lx.clearRect(0, 0, pw, ph);
@@ -2335,8 +2336,17 @@ function blurClip(ctx, x, y, w, h, b) {
 // o Chrome ignora blur() abaixo de ~0,7 px e trata 0,8 a 1,2 px como o mesmo valor: com o palco reduzido (carrossel, zoom
 // afastado) o desfoque da camada e o "desfocar atrás" sumiam. Abaixo de SUB_BLUR px, subBlur desfoca numa tela ampliada e volta
 // ao tamanho (mesma margem e recorte de src); devolve null quando o filtro normal basta
+/* Exportação em software (pedido do usuário: o PNG/MP4 saía com as curvas facetadas, comparando com o Figma). Com aceleração pela placa
+   de vídeo o Chrome aproxima curvas grandes (letra acima de ~150 px, formas) por segmentos, com a borda até ~4 px fora; em software o
+   desenho é exato. Medido no Chrome 154 + Radeon 860M. Só a exportação: o canvas final é softCv (o contexto fica preso em software
+   na primeira chamada de getContext) e renderFrame liga RT.soft enquanto desenha nele; as telas de apoio reaproveitadas (frameBuf,
+   fxCanvas, upBuf, caneta, logo de uma cor) têm uma versão à parte para a exportação (newCv), senão a letra com sombra/desfoque
+   continuava facetada e cada cópia ia e voltava da placa. O palco continua acelerado */
+const SOFT_OPT = { willReadFrequently:true };
+function softCv(w, hh) { const c = document.createElement('canvas'); if (w) { c.width = w; c.height = hh; } c.getContext('2d', SOFT_OPT); c._soft = true; return c; }
+const newCv = () => RT.soft ? softCv() : document.createElement('canvas');
 const SUB_BLUR = 2, UPBUF = {};
-function upBuf(k, w, hh) { let c = UPBUF[k]; if (!c) c = UPBUF[k] = document.createElement('canvas'); if (c.width !== w || c.height !== hh) { c.width = w; c.height = hh; } return c; }
+function upBuf(k, w, hh) { if (RT.soft) k = 's:' + k; let c = UPBUF[k]; if (!c) c = UPBUF[k] = newCv(); if (c.width !== w || c.height !== hh) { c.width = w; c.height = hh; } return c; }
 function subBlur(src, b) {
   if (!(b > 0 && b < SUB_BLUR)) return null;
   const w = src.width, hh = src.height, f = Math.min(Math.ceil(2.5 / b), Math.floor(4096 / Math.max(w, hh)));
@@ -2469,9 +2479,9 @@ function drawState(ctx, st, w, h, R, draw, o = {}) {
 }
 /* ------------ efeitos de imagem ------------
    O elemento é desenhado parado num canvas à parte (na escala em que vai aparecer) e redesenhado em pedaços. */
-const FXC = [];
+const FXC = [], FXCS = [];
 function fxCanvas(i, w, h) {
-  const c = FXC[i] || (FXC[i] = document.createElement('canvas'));
+  const A = RT.soft ? FXCS : FXC, c = A[i] || (A[i] = newCv());
   if (c.width < w || c.height < h) { c.width = Math.max(c.width, w); c.height = Math.max(c.height, h); }
   const x = c.getContext('2d');
   x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-over'; x.globalAlpha = 1; x.filter = 'none';
@@ -3090,7 +3100,10 @@ function blockGeom(L) {
   return null;
 }
 // texto do botão: caixa alta e espaço entre letras (em, como o do texto; o canvas mede e desenha com letterSpacing, que mantém o kerning)
-const caseTxt = (L, s) => L.upper ? s.toUpperCase() : L.lower ? s.toLowerCase() : s;
+// caixa: alta | baixa | cap = só a primeira letra do texto | title = a inicial de cada palavra (o resto fica baixo)
+const caseTxt = (L, s) => L.upper ? s.toUpperCase() : L.lower ? s.toLowerCase()
+  : L.title ? s.toLowerCase().replace(/(^|[^\p{L}\p{N}'’])(\p{L})/gu, (_, a, b) => a + b.toUpperCase())
+  : L.cap ? s.toLowerCase().replace(/\p{L}/u, c => c.toUpperCase()) : s;
 const ctaText = L => caseTxt(L, L.text || '');
 const ctaLs = L => (L.ls || 0) * L.size;
 // largura sem o espaço que o letterSpacing deixa depois da última letra (por quadro: guardada pela fonte + texto + espaço);
@@ -3176,6 +3189,7 @@ function strokeDash(L, len, dp) {
   return out;
 }
 function shapeVec(L, G) {
+  if (waveOn(L)) { const wv = waveGet(L, G); if (wv) return wv; }
   const w = G.w, h = G.h, k = L.kind;
   if (k === 'ellipse') { const p = new Path2D(); p.ellipse(0, 0, w / 2, h / 2, 0, 0, TAU); const a = w / 2, b = h / 2; return { path:p, len:Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b))), closed:true }; }
   if (k === 'line') { const p = new Path2D(); p.moveTo(-w / 2, 0); p.lineTo(w / 2, 0); return { path:p, len:w, closed:false }; }
@@ -3216,12 +3230,150 @@ function strokeOnPath(ctx, path, L, o = {}) {
   const dash = strokeDash({ ...L, strokeW:lw }, len, dp); if (dash.length) ctx.setLineDash(dash);
   ctx.stroke(path); ctx.restore();
 }
+/* Ondulação (pedido do usuário: borda em escamas, onda ou zigue-zague, também com cara de feita à mão), como o Zig Zag/Roughen
+   do Illustrator: um efeito sobre o caminho de qualquer forma. O caminho de base (`localVec`, o mesmo de sempre) é percorrido e
+   empurrado para dentro pela normal com o perfil da onda. Cada trecho entre cantos (em forma pronta, entre âncoras: fica simétrico)
+   ganha um número inteiro de ondas, então o canto fica no alto de uma onda e o desenho fecha certinho. Para dentro = a forma não passa
+   da caixa dela (alças, margem e alcance continuam valendo); caminho aberto ondula para o lado esquerdo. Sai como pontos com alças,
+   então preenchimento, contorno, "Desenhar traço", Contorno em vetor, Pathfinder e SVG usam o mesmo desenho; "Editar pontos" mexe na
+   base e a onda acompanha. Irregular: largura, altura e pico de cada onda variam e a linha oscila (rand: determinístico; `waveSeed`
+   sorteia outra). Pronto fica em WAVEC (fora da camada: não vai para o desfazer nem para o arquivo). */
+const WAVE_KINDS = { arc:'Escamas: arcos para fora', stamp:'Selo: arcos para dentro, pontas para fora', sine:'Onda', zig:'Zigue-zague' };
+const WAVE_DEF = { waveKind:'arc', waveSize:60, waveH:16, waveIrr:0 };
+const waveV = (L, k) => L[k] ?? WAVE_DEF[k];
+const waveOn = L => !!L && L.type === 'shape' && !!L.wave && waveV(L, 'waveH') > 0;
+// profundidade em u ∈ [0, 1] de uma onda (0 = no caminho, 1 = a altura toda para dentro); u = 0 e 1 sempre em 0, u = .5 é o meio
+function waveF(kind, u) {
+  if (kind === 'stamp') return Math.sqrt(Math.max(0, 1 - (2 * u - 1) ** 2));
+  if (kind === 'sine') return (1 - Math.cos(TAU * u)) / 2;
+  if (kind === 'zig') return 1 - Math.abs(2 * u - 1);
+  const w = u < .5 ? u + .5 : u - .5; return 1 - Math.sqrt(Math.max(0, 1 - (2 * w - 1) ** 2)); // escamas: arco para fora, bico no meio
+}
+const WAVEC = new WeakMap();
+function waveGet(L, G) {
+  const key = [G.w, G.h, L.kind, L.d, L.points, L.inner, JSON.stringify(radOf(L)), waveV(L, 'waveKind'), waveV(L, 'waveSize'), waveV(L, 'waveH'), waveV(L, 'waveIrr'), L.waveSeed || 0].join('|');
+  const c = WAVEC.get(L); if (c && c.key === key) return c;
+  const base = localVec(L, G), vec = base && waveBuild(L, base, G); if (!vec || !vec.length) return null;
+  const path = new Path2D(); let len = 0;
+  for (const sp of vec) {
+    const P = sp.pts, n = P.length; path.moveTo(P[0].x, P[0].y);
+    for (let i = 1; i <= (sp.closed ? n : n - 1); i++) {
+      const a = P[i - 1], b = P[i % n]; path.bezierCurveTo(a.ox, a.oy, b.ix, b.iy, b.x, b.y);
+      let q = a; for (let j = 1; j <= 4; j++) { const r = bezAt(a, b, j / 4); len += Math.hypot(r.x - q.x, r.y - q.y); q = r; }
+    }
+    if (sp.closed) path.closePath();
+  }
+  const r = { key, vec, path, len, closed:vec.every(sp => sp.closed) }; WAVEC.set(L, r); return r;
+}
+function waveBuild(L, base, G) {
+  const kind = waveV(L, 'waveKind'), size = Math.max(4, waveV(L, 'waveSize')), I = clamp(waveV(L, 'waveIrr'), 0, 1), seed = (L.waveSeed || 0) * 977 + 13;
+  // fechada: no máximo 45% do lado menor (mais que isso as ondas de lados opostos se cruzam); linha/caminho aberto não tem limite
+  const A = base.every(sp => sp.closed) ? Math.min(waveV(L, 'waveH'), Math.min(G.w, G.h) * .45) : waveV(L, 'waveH'), every = L.kind !== 'custom';
+  const tIn = (a, b) => { const p = hasH(b, 'i') ? [b.ix, b.iy] : hasH(a, 'o') ? [a.ox, a.oy] : [a.x, a.y]; return Math.atan2(b.y - p[1], b.x - p[0]); };
+  const tOut = (a, b) => { const p = hasH(a, 'o') ? [a.ox, a.oy] : hasH(b, 'i') ? [b.ix, b.iy] : [b.x, b.y]; return Math.atan2(p[1] - a.y, p[0] - a.x); };
+  const out = [];
+  base.forEach((sp, si) => {
+    const P = sp.pts.filter((p, i, a) => !i || Math.hypot(p.x - a[i - 1].x, p.y - a[i - 1].y) > .01), closed = sp.closed;
+    if (closed && P.length > 2 && Math.hypot(P[0].x - P[P.length - 1].x, P[0].y - P[P.length - 1].y) <= .01) P.pop();
+    const n = P.length; if (n < 2) return;
+    // âncoras onde a onda recomeça: cantos (ou todas, em forma pronta); a do começo do caminho aberto e a do fim também
+    const cut = [];
+    for (let i = 0; i < n; i++) {
+      if (!closed && (i === 0 || i === n - 1)) { cut.push({ i, corner:true }); continue; }
+      const pa = P[(i - 1 + n) % n], q = P[i], nx = P[(i + 1) % n];
+      const turn = Math.abs(Math.atan2(Math.sin(tOut(q, nx) - tIn(pa, q)), Math.cos(tOut(q, nx) - tIn(pa, q))));
+      if (turn > .2 || every) cut.push({ i, corner:turn > .2 });
+    }
+    // achata: pontos densos (curvas em passos de ~3 px), índice no achatado de cada âncora
+    const segs = closed ? n : n - 1, pts = [], at = [];
+    for (let i = 0; i < segs; i++) {
+      const a = P[i], b = P[(i + 1) % n]; at.push(pts.length); pts.push([a.x, a.y]);
+      if (hasH(a, 'o') || hasH(b, 'i')) {
+        const N = clamp(Math.ceil((Math.hypot(a.ox - a.x, a.oy - a.y) + Math.hypot(b.ix - a.ox, b.iy - a.oy) + Math.hypot(b.x - b.ix, b.y - b.iy)) / 3), 2, 400);
+        for (let j = 1; j < N; j++) { const q = bezAt(a, b, j / N); pts.push([q.x, q.y]); }
+      }
+    }
+    at.push(pts.length); pts.push(closed ? [P[0].x, P[0].y] : [P[n - 1].x, P[n - 1].y]);
+    const m = pts.length - 1, cum = [0];
+    for (let i = 1; i <= m; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    let area = 0; for (let i = 0; i < m; i++) area += pts[i][0] * pts[i + 1][1] - pts[i + 1][0] * pts[i][1];
+    const sg = !closed || area >= 0 ? 1 : -1; // normal para dentro (y para baixo): (-ty, tx) se a área é positiva
+    // trechos entre os cortes (fechado sem corte = a volta inteira, do começo)
+    let marks = cut.map(c => ({ s:cum[at[c.i]], corner:c.corner }));
+    if (!marks.length) marks = [{ s:0, corner:false }];
+    if (closed) marks.push({ s:marks[0].s + cum[m], corner:marks[0].corner });
+    const T = cum[m], posAt = s => { // ponto e normal no comprimento s (fechado: dá a volta)
+      s = closed ? ((s % T) + T) % T : clamp(s, 0, T);
+      let lo = 0, hi = m; while (hi - lo > 1) { const md = (lo + hi) >> 1; if (cum[md] <= s) lo = md; else hi = md; }
+      const a = pts[lo], b = pts[hi], d = cum[hi] - cum[lo] || 1, f = (s - cum[lo]) / d, tx = (b[0] - a[0]) / d, ty = (b[1] - a[1]) / d;
+      return { x:a[0] + (b[0] - a[0]) * f, y:a[1] + (b[1] - a[1]) * f, nx:-ty * sg, ny:tx * sg };
+    };
+    const Q = [], K = 6, cl = k => (1 - Math.cos(Math.PI * k / K)) / 2; // cada meia onda com pontos mais juntos nas pontas (o bico é vertical)
+    for (let r = 0; r < marks.length - 1; r++) {
+      const s0 = marks[r].s, Lr = marks[r + 1].s - s0, rid = si * 131 + r * 17;
+      if (Lr < .5) continue;
+      const nb = Math.max(1, Math.round(Lr / size)), wts = [];
+      for (let j = 0; j < nb; j++) wts.push(Math.max(.35, 1 + I * .8 * (rand(seed + rid, j) * 2 - 1)));
+      const tw = wts.reduce((a, v) => a + v, 0), wm = 1 + Math.floor(rand(seed + rid, 991) * 2) + Math.floor(Lr / (size * 6)), wa = I * .3 * A * (.5 + rand(seed + rid, 992) * .5);
+      const depth = (s, Aj, f) => Aj * f + wa * (1 - Math.cos(TAU * wm * (s - s0) / Lr)) / 2;
+      const push = (s, Aj, f, corner) => { const p = posAt(s), dd = depth(s, Aj, f); Q.push({ x:p.x + p.nx * dd, y:p.y + p.ny * dd, c:corner }); };
+      let acc = 0;
+      for (let j = 0; j < nb; j++) {
+        const bw = Lr * wts[j] / tw, b0 = s0 + acc; acc += bw;
+        const Aj = A * Math.max(.2, 1 + I * .55 * (rand(seed + rid, j + 500) * 2 - 1)), sk = I * .35 * (rand(seed + rid, j + 900) * 2 - 1), mid = bw * (1 + sk) / 2;
+        for (let k = 0; k < K; k++) { // primeira metade: u de 0 a .5
+          const s = b0 + mid * cl(k), u = .5 * cl(k);
+          push(s, Aj, waveF(kind, u), k === 0 && ((j === 0 && marks[r].corner) || kind === 'stamp' || kind === 'zig'));
+        }
+        for (let k = 0; k < K; k++) { // segunda metade: u de .5 a 1
+          const s = b0 + mid + (bw - mid) * cl(k), u = .5 + .5 * cl(k);
+          push(s, Aj, waveF(kind, u), k === 0 && (kind === 'arc' || kind === 'zig'));
+        }
+      }
+    }
+    if (!closed) { const p = posAt(T); Q.push({ x:p.x, y:p.y, c:true }); }
+    const N = Q.length; if (N < 2) return;
+    const pt = Q.map((q, i) => {
+      const o = vecPt(q.x, q.y); if (q.c || (!closed && (i === 0 || i === N - 1))) return o;
+      const a = Q[(i - 1 + N) % N], b = Q[(i + 1) % N], dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1;
+      const li = Math.hypot(q.x - a.x, q.y - a.y) / 3, lo = Math.hypot(b.x - q.x, b.y - q.y) / 3;
+      o.ix = q.x - dx / l * li; o.iy = q.y - dy / l * li; o.ox = q.x + dx / l * lo; o.oy = q.y + dy / l * lo; return o;
+    });
+    out.push({ pts:pt, closed });
+  });
+  return out;
+}
+// "Aplicar a ondulação": a forma vira Vetor com a onda nos pontos (para mexer ponto a ponto); o efeito desliga
+function waveBake(L) {
+  const G = geomNow(L), wv = G && waveOn(L) && waveGet(L, G); if (!wv) return false;
+  if (lockedNote(L)) return false;
+  const pl = placeOf(L), a = (L.rot || 0) * Math.PI / 180;
+  pushUndo();
+  L.vec = JSON.parse(JSON.stringify(wv.vec)); L.kind = 'custom'; L.wave = false;
+  vecApply(L, { s:pl.k, k:pl.k, co:Math.cos(a), si:Math.sin(a), ax:pl.x * W(), ay:pl.y * H(), bx:0, by:0 });
+  changed({ props:true });
+  toast('A ondulação virou pontos da forma', 2600, UNDO_ACT);
+  return true;
+}
+// campos da Ondulação (seção Forma e janela Componentes); `own` = elemento de verdade (os botões só fazem sentido nele)
+function waveFields(L, own) {
+  const on = !!L.wave, pct = v => Math.round(v * 100) + '%', px = v => Math.round(v) + 'px';
+  if (on) for (const k in WAVE_DEF) if (L[k] == null) L[k] = WAVE_DEF[k];
+  const irr = (L.waveIrr || 0) > 0;
+  return [checkF(L, 'wave', 'Ondulação'),
+    on ? segF(L, 'waveKind', 'Formato', icoOpts(WAVE_KINDS, 'wv_')) : null,
+    on ? rangeF(L, 'waveSize', 'Onda ↔', 8, 300, 1, px, { cap:2000 }) : null, // largura de cada onda ("Altura" já é da forma)
+    on ? rangeF(L, 'waveH', 'Onda ↕', 1, 120, 1, px, { cap:1000 }) : null,
+    on ? rangeF(L, 'waveIrr', 'Irregular', 0, 1, .01, pct, { after:() => { if ((L.waveIrr || 0) > 0 !== irr) renderProps(); } }) : null,
+    on && own && irr ? h('div', { class:'row' }, [h('button', { class:'btn small', text:'Sortear outra', title:'Outro desenho irregular, com os mesmos valores', onclick:() => { pushUndo(); for (const o of peersOf(L)) o.waveSeed = (o.waveSeed || 0) + 1; changed(); } })]) : null,
+    on && own ? h('div', { class:'row' }, [h('button', { class:'btn small', text:'Aplicar a ondulação', title:'A forma vira Vetor com a onda nos pontos, para editar ponto a ponto', onclick:() => waveBake(L) })]) : null];
+}
 function paintPart(ctx, pt, overrideAlpha) {
   ctx.globalAlpha *= pt.op;
   if (pt.fill) { ctx.fillStyle = pt.fill; ctx.fill(pt.path, pt.rule); }
   if (pt.stroke) { ctx.lineWidth = pt.sw; ctx.strokeStyle = pt.stroke; ctx.lineCap = pt.cap; ctx.lineJoin = pt.join; ctx.stroke(pt.path); }
 }
-let TINTC = null;
+let TINTC = null, TINTS = null;
 // contorno do logo: a silhueta da imagem engordada (cópias em volta, em passos pequenos para a espessura ficar cheia), guardada pronta
 function logoOutline(ctx, L, G, info) {
   const lg = logoOf(L); if (!lg || !lg.img) return;
@@ -3254,14 +3406,14 @@ function drawBlockBody(ctx, L, G, info, R) {
     // pinta o logo inteiro (imagem, traço, peças) numa cor só: desenha à parte e troca a cor de tudo que tem tinta
     const pad = Math.ceil(info.key === 'assemble' ? G.w * .7 : (L.drawWidth || 5) + 30);
     const w = Math.ceil(G.w + pad * 2), h = Math.ceil(G.h + pad * 2);
-    if (!TINTC) TINTC = document.createElement('canvas');
-    TINTC.width = w; TINTC.height = h;
-    const c = TINTC.getContext('2d');
+    const TC = RT.soft ? (TINTS ||= softCv()) : (TINTC ||= document.createElement('canvas')); // exportação: em software (softCv)
+    TC.width = w; TC.height = h;
+    const c = TC.getContext('2d');
     c.translate(w / 2, h / 2);
     drawBlockContent(c, { ...L, tint:false, drawOrig:false, stroke:false }, G, info, R);
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.globalCompositeOperation = 'source-in'; c.fillStyle = L.tintColor || '#ffffff'; c.fillRect(0, 0, w, h);
-    ctx.drawImage(TINTC, -w / 2, -h / 2);
+    ctx.drawImage(TC, -w / 2, -h / 2);
     return;
   }
   if (L.type === 'logo') {
@@ -3495,8 +3647,9 @@ function paintFill(ctx, L, t, w, hh) {
    Quadro
    ============================================================ */
 function renderFrame(ctx, t, rs, isExport) {
-  const ex = RT.drawExact; RT.drawExact = !!isExport; // exportação: fotos no tamanho original (imgFor)
-  try { renderFrame0(ctx, t, rs, isExport); } finally { RT.drawExact = ex; }
+  const ex = RT.drawExact, sf = RT.soft; RT.drawExact = !!isExport; // exportação: fotos no tamanho original (imgFor)
+  RT.soft = !!ctx.canvas._soft; // exportação em software (softCv): as telas de apoio também
+  try { renderFrame0(ctx, t, rs, isExport); } finally { RT.drawExact = ex; RT.soft = sf; }
 }
 function renderFrame0(ctx, t, rs, isExport) {
   if (S.still) t = 0;
@@ -3727,11 +3880,11 @@ const voX = c => c._vo ? c._vo.x : 0, voY = c => c._vo ? c._vo.y : 0;
 function frameBuf(ref, slot, pad = 0, geo = null) {
   const v = ref._vo, g = geo;
   const w = g ? g.w : ref.width - 2 * padOf(ref), hh = g ? g.h : ref.height - 2 * padOf(ref);
-  const k = `${slot}:${w}x${hh}+${pad}`, now = performance.now(); let c = FBUF.get(k);
+  const k = `${RT.soft ? 's:' : ''}${slot}:${w}x${hh}+${pad}`, now = performance.now(); let c = FBUF.get(k);
   if (c) { FBUF.delete(k); FBUF.set(k, c); c._t = now; } // mais recente no fim do Map
   else {
     for (const [kk, cc] of FBUF) if (now - cc._t > (cc.width * cc.height > FBUF_BIG ? FBUF_IDLE_BIG : FBUF_IDLE)) fbufDrop(kk, cc);
-    c = document.createElement('canvas'); c.width = w + pad * 2; c.height = hh + pad * 2; c._pad = pad; c._t = now;
+    c = newCv(); c.width = w + pad * 2; c.height = hh + pad * 2; c._pad = pad; c._t = now;
     FBUF_PX += c.width * c.height;
     for (const [kk, cc] of FBUF) { if (FBUF_PX <= FBUF_MAX) break; fbufDrop(kk, cc); }
     FBUF.set(k, c);
@@ -4156,7 +4309,7 @@ function reachOf(L, t) {
   const ph = phase(L, t); if (!ph || ph.mode !== 'hold') return null;
   const q = restRect(L); if (!q) return null;
   const b = q.b, sh = L.shadow && L.shadow !== 'none' ? SHADOWS[L.shadow] : null;
-  let pad = 240 + (L.lblur || 0) * 3 + (strokeOn(L) ? skW(L) * 2 : 0) + q.size * 1.6 + (L.move && L.move !== 'none' ? Math.max(b.w, b.h) * .5 : 0);
+  let pad = 240 + (L.lblur || 0) * 3 + (strokeOn(L) ? skW(L) * 2 : 0) + (waveOn(L) ? waveV(L, 'waveH') : 0) + q.size * 1.6 + (L.move && L.move !== 'none' ? Math.max(b.w, b.h) * .5 : 0);
   if (sh) pad += sh.long ? 160 : ((sh.blur || 0) + Math.max(Math.abs(sh.x || 0), Math.abs(sh.y || 0))) * 1.6;
   return { b, size:q.size, cx:b.x + b.w / 2, cy:b.y + b.h / 2, r:Math.hypot(b.w, b.h) / 2 * 1.6 + pad };
 }
@@ -4183,7 +4336,7 @@ function offView(tc, L, t, cam, depth) {
 function contentRect(L, q) {
   const b = q.b, mx = Math.max(b.w, b.h), idle = stillNow(L) ? 'none' : L.idle || 'none';
   const turn = !!L.rot || ['spin', 'sway', 'wiggle', 'float3d'].includes(idle), w = turn ? Math.hypot(b.w, b.h) : b.w, hh = turn ? w : b.h;
-  let m = 48 + mx * .12 + (strokeOn(L) ? skW(L) * 2 : 0) + q.size * .6;
+  let m = 48 + mx * .12 + (strokeOn(L) ? skW(L) * 2 : 0) + q.size * .6 + (waveOn(L) ? waveV(L, 'waveH') : 0); // linha ondulada sai da caixa
   if (L.type === 'text' && L.mark && L.mark !== 'none') m += q.size * 1.6;
   if (['float', 'float3d', 'wiggle', 'bounce'].includes(idle)) m += 80;
   if (idle === 'glow') m += Math.min(b.w, b.h) * .4 + 40;
@@ -6729,7 +6882,7 @@ async function encodeWebCodecs(canvas, ctx, w, hh, Ns, prog, mixes, sl = [0]) {
     if (achunks) opt.audio = { codec:apick.mux, sampleRate:mix.sampleRate, numberOfChannels:2 };
     const o = { s, N:Ns[k], muxer:new Mp4Muxer.Muxer(opt), err:null, cv:null };
     if (achunks) for (const [c, m] of achunks) o.muxer.addAudioChunk(c, m);
-    if (cut) { o.cv = document.createElement('canvas'); o.cv.width = w; o.cv.height = hh; }
+    if (cut) o.cv = softCv(w, hh);
     o.enc = new VideoEncoder({ output:(chunk, meta) => o.muxer.addVideoChunk(chunk, meta), error:e => { o.err = e; } });
     o.enc.configure(pick.cfg);
     return o;
@@ -6777,7 +6930,7 @@ async function renderVideo(prog, sl = [0]) {
   const w = W(), hh = H(), n = slides();
   const Ns = sl.map(s => Math.max(1, Math.round(slideDur(s) * fps())));
   await document.fonts.ready; await videosReady();
-  const canvas = document.createElement('canvas'); canvas.width = w * n; canvas.height = hh;
+  const canvas = softCv(w * n, hh); // em software: curvas exatas (ver softCv)
   const ctx = canvas.getContext('2d');
   // trilha: uma mistura por duração (o fade de saída cai no fim de cada slide)
   const mixes = sl.map(() => null);
@@ -6812,7 +6965,7 @@ async function renderVideo(prog, sl = [0]) {
 // as imagens (PNG) dos slides sl, em repouso, do jeito que S está agora. Devolve [[blob, slide], ...] (null se falhar)
 async function renderStills(sl) {
   await document.fonts.ready; await videosReady(); await seekVideos(0);
-  const n = slides(), c = document.createElement('canvas'); c.width = FW(); c.height = H();
+  const n = slides(), c = softCv(FW(), H());
   renderFrame(c.getContext('2d'), 0, 1, true);
   const one = n > 1 ? document.createElement('canvas') : c, out = [];
   if (n > 1) { one.width = W(); one.height = H(); }
@@ -6960,7 +7113,7 @@ async function saveSelectionPng(sel) {
   const x0 = Math.max(0, Math.floor(Math.min(...bs.map(o => o.x)) - pad)), y0 = Math.max(0, Math.floor(Math.min(...bs.map(o => o.y)) - pad));
   const x1 = Math.min(fw, Math.ceil(Math.max(...bs.map(o => o.x + o.w)) + pad)), y1 = Math.min(fh, Math.ceil(Math.max(...bs.map(o => o.y + o.h)) + pad));
   if (x1 <= x0 || y1 <= y0) { toast('A seleção está fora do quadro'); return; }
-  const c = document.createElement('canvas'); c.width = fw; c.height = fh;
+  const c = softCv(fw, fh);
   RT.only = new Set(sel.map(l => l.id));
   try { renderFrame(c.getContext('2d'), T, 1, true); } finally { RT.only = null; needs = true; }
   const out = document.createElement('canvas'); out.width = x1 - x0; out.height = y1 - y0;
@@ -6977,7 +7130,7 @@ async function saveFramePng(mode) {
   // carrossel: uma imagem por slide, cada uma um download (o Chrome não deixa escolher a pasta Downloads no seletor de pasta)
   const dir = null;
   await document.fonts.ready; await seekVideos(T);
-  const c = document.createElement('canvas'); c.width = FW(); c.height = H();
+  const c = softCv(FW(), H());
   renderFrame(c.getContext('2d'), T, 1, true); needs = true;
   const nm = `${outName()}-${T.toFixed(1).replace('.', ',')}s`;
   if (n < 2) {
@@ -7008,7 +7161,8 @@ function renderExportFrame(ctx, t) {
   const mb = MBLUR[S.mblur] || MBLUR.off;
   renderFrame(ctx, t, 1, true);
   if (mb.n < 2) return;
-  const sub = frameBuf(ctx.canvas, 4), sc = sub.getContext('2d'), dt = mb.sh / fps() / mb.n;
+  const sf = RT.soft; RT.soft = !!ctx.canvas._soft; // a tela dos subquadros no mesmo modo do quadro (softCv)
+  const sub = frameBuf(ctx.canvas, 4), sc = sub.getContext('2d'), dt = mb.sh / fps() / mb.n; RT.soft = sf;
   for (let k = 1; k < mb.n; k++) {
     renderFrame(sc, t + k * dt, 1, true);
     ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1 / (k + 1); ctx.drawImage(sub, 0, 0); ctx.restore();
@@ -7874,7 +8028,9 @@ function pfSubpaths(L) {
   const G = geomNow(L); if (!G) return null;
   const pl = placeOf(L), a = (L.rot || 0) * Math.PI / 180, co = Math.cos(a), si = Math.sin(a);
   let vec, bx = 0, by = 0, s = pl.k;
-  if (L.kind === 'custom') {
+  const wv = waveOn(L) && waveGet(L, G); // ondulada: entra com a onda (já no espaço da forma)
+  if (wv) vec = wv.vec;
+  else if (L.kind === 'custom') {
     vec = vecOf(L); const b = G.cust; if (!vec || !b) return null;
     s = G.w / b.w * pl.k; bx = b.x + b.w / 2; by = b.y + b.h / 2;
   } else vec = shapePts(L, G);
@@ -9815,6 +9971,7 @@ Object.assign(ICONS, {
   ta_right:SI('<path d="M2.5 3.5h11M6.5 6.5h7M2.5 9.5h11M6.5 12.5h7"/>'),
   bold:SI('<path d="M4.5 2.8h4a2.6 2.6 0 0 1 0 5.2h-4zM4.5 8h4.7a2.6 2.6 0 0 1 0 5.2H4.5z"/>', 1.8),
   italic:SI('<path d="M7 2.8h5M4 13.2h5M9.5 2.8l-3 10.4"/>'),
+  cap:SI('<path d="M1.5 3h6M4.5 3v10M9.5 8h5M12 5.5v7.5"/>'), title:SI('<path d="M.8 4h3.6M2.6 4v6M5 7.5h2.6M6.3 6v4M8.8 4h3.6M10.6 4v6M13 7.5h2.4M14.2 6v4"/>'),
   upper:SI('<path d="M1.5 3h5M4 3v10M9.5 3h5M12 3v10"/>'), lower:SI('<path d="M1.5 7h5M4 4.5v8.5M9.5 7h5M12 4.5v8.5"/>'),
   // fundo atrás do texto: uma caixa por linha × uma caixa só
   tbg_line:SI('<rect x="1.5" y="2" width="13" height="5" rx="1"/><path d="M4 4.5h8"/><rect x="1.5" y="9" width="9" height="5" rx="1"/><path d="M4 11.5h4"/>'),
@@ -9834,6 +9991,9 @@ Object.assign(ICONS, {
   ds_dashdot:SI('<path d="M1.5 8h13" stroke-width="2" stroke-dasharray="3.5 2.5 0 2.5"/>'),
   sh_rect:SI('<rect x="2.5" y="3.5" width="11" height="9" rx="1"/>'), sh_ellipse:SI('<circle cx="8" cy="8" r="5.5"/>'), sh_triangle:SI('<path d="M8 2.5l6 10.5H2z"/>'),
   sh_polygon:SI('<path d="M8 2l5.2 3v6L8 14l-5.2-3V5z"/>'), sh_star:SI('<path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.6l-3.8 2 .7-4.3-3.1-3 4.3-.6z"/>'),
+  // ondulação da forma: a borda de cima, com o lado de fora para cima
+  wv_arc:SI('<path d="M1.5 11a2.17 2.17 0 0 1 4.33 0a2.17 2.17 0 0 1 4.34 0a2.17 2.17 0 0 1 4.33 0"/>'), wv_stamp:SI('<path d="M1.5 6a2.17 2.17 0 0 0 4.33 0a2.17 2.17 0 0 0 4.34 0a2.17 2.17 0 0 0 4.33 0"/>'),
+  wv_sine:SI('<path d="M1.5 8q1.63-3.6 3.25 0t3.25 0 3.25 0 3.25 0"/>'), wv_zig:SI('<path d="M1.5 10l2.17-4 2.16 4 2.17-4 2.17 4 2.16-4 2.17 4"/>'),
   sh_line:SI('<path d="M3 13L13 3"/>'), sh_custom:SI(`<path d="M2.5 12.5C4 5 12 11 13.5 3.5"/><rect x="1.2" y="11.2" width="2.6" height="2.6" ${SI_FILL}/><rect x="12.2" y="2.2" width="2.6" height="2.6" ${SI_FILL}/>`),
   mk_fit:SI('<rect x="2" y="3" width="12" height="10" rx="1.2"/><path d="M2.5 11.5l3.5-3.5 2.5 2.5 2-2 3.5 3.5"/><circle cx="10.5" cy="6" r="1"/>'),
   mk_rect:SI('<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/>'), mk_circle:SI('<circle cx="8" cy="8" r="5.5"/>'),
@@ -9855,13 +10015,14 @@ function icoSeg(label, opts, on, pick) {
 // liga/desliga com ícone (caixa alta, itálico…): [chave, nome, ícone], vale para a seleção toda
 function togF(L, label, opts) {
   const seg = icoSeg(label, opts, k => !!L[k], k => {
-    pushUndo(); const v = !L[k], x = k === 'upper' ? 'lower' : k === 'lower' ? 'upper' : null; for (const o of peersOf(L)) { o[k] = v; if (v && x) o[x] = false; } RT.layout.clear(); changed();
+    pushUndo(); const v = !L[k], x = CASE_EX.includes(k) ? CASE_EX.filter(c => c !== k) : []; for (const o of peersOf(L)) { o[k] = v; if (v) for (const c of x) o[c] = false; } RT.layout.clear(); changed();
     seg.querySelectorAll('button').forEach((b, i) => b.setAttribute('aria-pressed', String(!!L[opts[i][0]])));
   });
   return field(label, seg);
 }
 const ALIGN_OPTS = [['left', 'Alinhar à esquerda', 'ta_left'], ['center', 'Centralizar', 'ta_center'], ['right', 'Alinhar à direita', 'ta_right']];
-const CASE_OPTS = [['upper', 'Caixa alta', 'upper'], ['lower', 'Caixa baixa', 'lower'], ['italic', 'Itálico', 'italic']];
+const CASE_EX = ['upper', 'lower', 'cap', 'title'];
+const CASE_OPTS = [['upper', 'Caixa alta', 'upper'], ['lower', 'Caixa baixa', 'lower'], ['cap', 'Só a primeira letra em caixa alta', 'cap'], ['title', 'Inicial de cada palavra em caixa alta', 'title'], ['italic', 'Itálico', 'italic']];
 const TBG_OPTS = [['line', 'Uma caixa por linha', 'tbg_line'], ['block', 'Uma caixa só', 'tbg_block']];
 function segF(L, k, label, opts) {
   const ico = opts.some(o => o[2]);
@@ -9894,7 +10055,7 @@ function cornersF(L, fmt) {
 }function checkF(L, k, label) {
   const id = fid(L, k);
   const inp = h('input', { type:'checkbox', id, checked:!!L[k] });
-  inp.addEventListener('change', () => { pushUndo(); for (const o of peersOf(L)) o[k] = inp.checked; RT.layout.clear(); changed(); if (k === 'stroke' || k === 'tint' || k === 'fill') renderProps(); });
+  inp.addEventListener('change', () => { pushUndo(); for (const o of peersOf(L)) o[k] = inp.checked; RT.layout.clear(); changed(); if (k === 'stroke' || k === 'tint' || k === 'fill' || k === 'wave') renderProps(); });
   return h('label', { class:'check', for:id }, [inp, label]);
 }
 function textF(L, k, label, multi) {
@@ -10387,6 +10548,7 @@ function styleProps(L) {
       k === 'polygon' || k === 'star' ? rangeF(L, 'points', 'Pontas', 3, 12, 1, v => String(Math.round(v))) : null,
       k === 'star' ? rangeF(L, 'inner', 'Profundidade', .1, .95, .01, pct) : null,
       rotF(L),
+      ...waveFields(L, true),
       k !== 'line' ? h('h3', { text:'Preenchimento' }) : null);
     if (k !== 'line') fillProps(L, sec);
     put(...strokeSecs(L),

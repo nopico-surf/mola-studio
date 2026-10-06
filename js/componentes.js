@@ -434,10 +434,11 @@ function openComps(id = 'title') {
         put(h('p', { class:'hint', text:'O que a caneta (P) cria ao terminar um desenho. O desenho em si é o que você traçar.' }),
           segF(P, 'penFill', 'Ao terminar', [['auto', 'Fechado preenche'], ['fill', 'Sempre preenchido'], ['line', 'Só o traço']]),
           ...(line ? [] : fillCols()), ...stroke(line || P.penFill === 'auto'),
-          P.penFill === 'auto' ? h('p', { class:'hint', text:'Desenho aberto fica só no traço (esta cor e espessura). Fechado ganha o preenchimento.' }) : null);
+          P.penFill === 'auto' ? h('p', { class:'hint', text:'Desenho aberto fica só no traço (esta cor e espessura). Fechado ganha o preenchimento.' }) : null,
+          ...waveFields(P));
       } else put(segF(P, 'kind', 'Forma', icoOpts(SHAPE_KINDS, 'sh_').filter(([k]) => k !== 'custom' || P.kind === 'custom')),
         ...fillCols(), pxF(P, 'size', 'Largura', .02, 1.6),
-        pxF(P, 'mh', 'Altura', .02, 2.6), rangeF(P, 'radius', 'Cantos', 0, 600, 1, px), ...stroke(false));
+        pxF(P, 'mh', 'Altura', .02, 2.6), rangeF(P, 'radius', 'Cantos', 0, 600, 1, px), ...waveFields(P), ...stroke(false));
     } else if (d.type === 'image') {
       put(pxF(P, 'size', 'Largura', .1, 1.6), rangeF(P, 'radius', 'Cantos', 0, 600, 1, px));
     } else if (d.type === 'logo') {
@@ -511,7 +512,7 @@ function openComps(id = 'title') {
     refresh();
     if (!ov.contains(document.activeElement)) card.focus({ preventScroll:true });
   };
-  const SHOWN = new Set(['text', 'font', 'weight', 'size', 'color', 'hl', 'ls', 'lh', 'align', 'upper', 'lower', 'italic', 'bg', 'radius', 'padX', 'padY', 'kind', 'c1', 'c2', 'mh', 'sizeA', 'sizeS', 'drawColor', 'in', 'out', 'idle', 'inDur',
+  const SHOWN = new Set(['text', 'font', 'weight', 'size', 'color', 'hl', 'ls', 'lh', 'align', 'upper', 'lower', 'cap', 'title', 'italic', 'bg', 'radius', 'padX', 'padY', 'kind', 'c1', 'c2', 'mh', 'sizeA', 'sizeS', 'drawColor', 'in', 'out', 'idle', 'inDur',
     'tbg', 'hlPadX', 'hlPadY', 'hlRad', 'hlBox', 'stroke', 'strokeW', 'strokeColor', 'strokePos', 'mode', 'fill', 'penFill', 'c3', 'c4']);
   const SHOWN_G = new Set(['mode', 'c1', 'c2', 'c3', 'c4', 'src', 'darken', 'angle', 'motion', 'grain', 'on', 'top', 'right', 'bottom', 'left',
     'format', 'duration', 'fps', 'slides', 'loop', 'fx', 'cam', 'intensity', 'speed', 'opacity']);
