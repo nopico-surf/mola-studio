@@ -6282,7 +6282,7 @@ const DB = {
   db:null,
   async open() {
     if (this.db) return this.db;
-    this.db = await new Promise((res, rej) => { const r = indexedDB.open('mola-studio', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    this.db = await new Promise((res, rej) => { const r = indexedDB.open('mola', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
     return this.db;
   },
   async get(k) { try { const db = await this.open(); return await new Promise((res, rej) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); } catch (e) { return undefined; } },
