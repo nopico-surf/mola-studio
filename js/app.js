@@ -6283,11 +6283,54 @@ const DB = {
   async open() {
     if (this.db) return this.db;
     this.db = await new Promise((res, rej) => { const r = indexedDB.open('mola', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    await this.migrateLegacy(this.db);
     return this.db;
   },
-  async get(k) { try { const db = await this.open(); return await new Promise((res, rej) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); } catch (e) { return undefined; } },
-  async del(k) { try { const db = await this.open(); await new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); return true; } catch (e) { return false; } },
-  async set(k, v) { try { const db = await this.open(); await new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); return true; } catch (e) { return false; } },
+  /* O banco se chamava 'mola-studio' até o projeto ser renomeado; trocar o nome fez o editor abrir vazio.
+     Ao abrir, o editor já salvava um "Sem título" no banco novo. Roda uma vez ('legacyDone'): traz o que está no
+     antigo, junta os índices 'files' e 'projects' pelo id e só copia o resto se ainda não existe. Não apaga nem cria o antigo. */
+  async migrateLegacy(db) {
+    try {
+      const rd = (k) => new Promise((res, rej) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+      if (await rd('legacyDone')) return;
+      const old = await new Promise((res) => { const r = indexedDB.open('mola-studio', 1); r.onupgradeneeded = () => { r.transaction.abort(); res(null); }; r.onsuccess = () => res(r.result); r.onerror = () => res(null); });
+      let rows = [];
+      if (old) {
+        if (old.objectStoreNames.contains('kv')) rows = await new Promise((res, rej) => { const out = [], c = old.transaction('kv').objectStore('kv').openCursor(); c.onsuccess = () => { const cu = c.result; if (cu) { out.push([cu.key, cu.value]); cu.continue(); } else res(out); }; c.onerror = () => rej(c.error); });
+        old.close();
+      }
+      const cur = {};
+      for (const [k] of rows) cur[k] = await rd(k);
+      await new Promise((res, rej) => {
+        const tx = db.transaction('kv', 'readwrite'), st = tx.objectStore('kv');
+        rows.forEach(([k, v]) => {
+          if ((k === 'files' || k === 'projects') && Array.isArray(v)) {
+            const mine = Array.isArray(cur[k]) ? cur[k] : [], ids = new Set(v.map(x => x && x.id));
+            st.put(v.concat(mine.filter(x => !(x && ids.has(x.id)))), k);
+          } else if (k === 'currentId') st.put(v, k);
+          else if (cur[k] === undefined) st.put(v, k);
+        });
+        st.put(true, 'legacyDone');
+        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+      });
+    } catch (e) { /* tenta de novo na próxima abertura */ }
+  },
+  /* Com pasta de salvamento (js/pasta.js) as chaves de arquivos, projetos, marcas, elementos e mídia vão para ela;
+     _get/_set/_del/_keys são o IndexedDB puro. Mídia que ainda só existe no navegador continua sendo lida de lá. */
+  async get(k) {
+    if (DISK.dir && DISK.route(k)) { const v = await DISK.read(k); if (v !== undefined || !k.startsWith('media:')) return v; }
+    return this._get(k);
+  },
+  async set(k, v) { return DISK.dir && DISK.route(k) ? DISK.write(k, v) : this._set(k, v); },
+  async del(k) { if (DISK.dir && DISK.route(k)) { await this._del(k); return DISK.remove(k); } return this._del(k); },
+  async keys() {
+    const ks = await this._keys();
+    return DISK.dir ? [...new Set([...ks, ...await DISK.keys()])] : ks;
+  },
+  async _keys() { try { const db = await this.open(); return await new Promise(res => { const q = db.transaction('kv').objectStore('kv').getAllKeys(); q.onsuccess = () => res(q.result); q.onerror = () => res([]); }); } catch (e) { return []; } },
+  async _get(k) { try { const db = await this.open(); return await new Promise((res, rej) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); } catch (e) { return undefined; } },
+  async _del(k) { try { const db = await this.open(); await new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); return true; } catch (e) { return false; } },
+  async _set(k, v) { try { const db = await this.open(); await new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); return true; } catch (e) { return false; } },
 };
 /* ------------ arquivos: tudo salva sozinho, como no Figma ------------
    'files' = índice [{ id, name, createdAt, updatedAt, thumb, project? }], 'file:<id>' = projeto (JSON), 'currentId' = arquivo aberto.
@@ -6317,7 +6360,7 @@ async function flushSave() {
   const ok2 = await DB.set('files', list);
   saving = false;
   setSaveState(ok && ok2 ? 'Salvo' : 'Não salvou');
-  if (!(ok && ok2)) toast('Este navegador bloqueou o armazenamento. Use Exportar .json.', 3600);
+  if (!(ok && ok2)) toast(DISK.dir ? `Não consegui gravar na pasta "${DISK.name}". Confira se ela ainda existe e se o acesso está liberado.` : 'Este navegador bloqueou o armazenamento. Use Exportar .json.', 4200);
   if (!$('#files').hidden) renderFiles();
 }
 function changed(opts = {}) {
@@ -6337,7 +6380,9 @@ async function openState(st, id, name, project = FILES.project) {
   if (project) try { const pb = JSON.parse(await DB.get('pbrand:' + project) || 'null'); if (pb) st.brand = pb; } catch (e) {} // marca do projeto
   await internImages(st); // foto em dataURL (arquivo antigo ou .json importado) vai para fora do JSON
   fixTornGroups(st);
+  const pjChanged = (project || null) !== FILES.project;
   FILES.id = id; FILES.name = name; FILES.project = project || null; showFileName(); showProject();
+  if (pjChanged) loadElements();
   DB.set('currentId', id);
   undoStack.length = 0; redoStack.length = 0; redoBase = null; HIST_STR.clear(); HIST_ID.clear(); syncHist();
   FC.pre = FC.suf = null; FC.sigs = null; LCACHE.clear(); LCACHE_PX = 0; // o cache do palco era do arquivo de antes
@@ -6441,7 +6486,8 @@ async function projDelete(id) {
   if (!(await askConfirm(`Apagar o projeto "${p.name}"?`, (mine.length ? `${mine.length === 1 ? 'O arquivo dele vai' : `Os ${mine.length} arquivos dele vão`} para Rascunhos. ` : '') + 'Nenhum arquivo é apagado.', 'Apagar projeto', true))) return;
   mine.forEach(f => { delete f.project; });
   await DB.set('files', list); await DB.set('projects', ps.filter(x => x.id !== id));
-  if (FILES.project === id) FILES.project = null;
+  await DB.del('elements:' + id);
+  if (FILES.project === id) { FILES.project = null; loadElements(); }
   if (FVIEW === id) FVIEW = '*';
   await projSync(); renderFiles();
 }
@@ -6452,7 +6498,7 @@ async function moveFile(id, project) {
   if (project) rec.project = project; else delete rec.project;
   await DB.set('files', list);
   if (id === FILES.id) {
-    FILES.project = project || null; showProject();
+    FILES.project = project || null; showProject(); loadElements();
     // entrou num projeto: passa a usar a marca dele (projeto sem marca ainda fica com a deste arquivo)
     let pb = null; if (project) try { pb = JSON.parse(await DB.get('pbrand:' + project) || 'null'); } catch (e) {}
     if (pb) { pushUndo(); S.brand = pb; RT.layout.clear(); renderBrand(); renderProps(); await refreshLogo(); ensureFonts(); }
@@ -6488,6 +6534,34 @@ function projMenu() {
   m.prepend(h('button', { onclick:() => { closeMenu(); openFiles('*'); } }, [h('span', { text:'Todos os arquivos' })]),
     h('button', { onclick:() => { closeMenu(); openFiles(FILES.project || ''); } }, [h('span', { text:FILES.project ? `Arquivos de "${PROJ_NAMES.get(FILES.project) || 'Projeto'}"` : 'Ver rascunhos' })]),
     h('button', { onclick:() => { closeMenu(); newFile(FILES.project); } }, [h('span', { text:'Novo arquivo aqui' })]), h('hr'));
+}
+/* ------------ pasta de salvamento (js/pasta.js) ------------ */
+function showDisk() {
+  const b = $('#diskBtn'), s = $('#saveState'); if (!b) return;
+  b.title = DISK.dir ? `Salvando na pasta "${DISK.name}". Clique para trocar` : 'Salvando só no navegador. Clique para escolher uma pasta';
+  if (s) s.title = DISK.dir ? `Os arquivos ficam na pasta "${DISK.name}"` : 'Os arquivos ficam no navegador';
+}
+async function diskApply(go) { if (!(await go())) return; toast('Pasta pronta. Reabrindo o editor…', 1600); setTimeout(() => location.reload(), 500); }
+function diskMenu() {
+  const b = $('#diskBtn');
+  if (document.querySelector('.ctx.diskmenu')) { closeMenu(); return; }
+  closeMenu();
+  const item = (text, fn, o = {}) => h('button', { disabled:o.off || null, onclick:() => { closeMenu(); fn(); } }, [h('span', { text })]);
+  const kids = [h('div', { class:'ctx-lbl', text:DISK.dir ? `Pasta: ${DISK.name}` : 'Salvando só no navegador' })];
+  if (!DISK.supported) kids.push(item('Este navegador não deixa escolher pasta (use Chrome ou Edge)', () => {}, { off:true }));
+  else {
+    kids.push(item(DISK.dir ? 'Trocar a pasta…' : 'Escolher a pasta de salvamento…', () => diskApply(() => DISK.pick())));
+    if (DISK.dir) kids.push(item('Voltar a salvar no navegador', async () => {
+      if (!(await askConfirm('Voltar a salvar no navegador?', `Os arquivos continuam na pasta "${DISK.name}", mas o editor deixa de abri-los e de salvar neles. O navegador abre com o que ele já tinha.`, 'Voltar ao navegador'))) return;
+      if (saveT) await flushSave();
+      await DISK.disconnect(); showDisk(); toast('Reabrindo o editor…', 1600); setTimeout(() => location.reload(), 500);
+    }));
+  }
+  const m = h('div', { class:'ctx diskmenu', role:'menu' }, kids);
+  document.body.append(m);
+  const r = b.getBoundingClientRect(), mr = m.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(r.left, innerWidth - mr.width - 8)) + 'px';
+  m.style.top = (r.bottom + 4) + 'px';
 }
 function renameProjInline(id) {
   const el = document.querySelector(`.fproj[data-id="${id}"] .fp-nm`); if (!el) return;
@@ -6980,11 +7054,11 @@ async function portableState() {
 // mídia que nenhum arquivo usa mais (arquivo apagado, recorte refeito) sai do navegador. Roda uma vez, depois de abrir
 async function gcMedia() {
   try {
-    const db = await DB.open();
-    const keys = await new Promise(res => { const q = db.transaction('kv').objectStore('kv').getAllKeys(); q.onsuccess = () => res(q.result); q.onerror = () => res([]); });
+    const keys = await DB.keys();
     const ids = keys.filter(k => typeof k === 'string' && k.startsWith('media:')).map(k => k.slice(6)); if (!ids.length) return;
     let txt = JSON.stringify(S) + undoStack.join('') + redoStack.join('') + JSON.stringify((await DB.get('elements')) || []);
-    for (const k of keys) if (typeof k === 'string' && k.startsWith('file:')) txt += (await DB.get(k)) || '';
+    for (const k of keys) if (typeof k === 'string' && k.startsWith('elements:')) txt += JSON.stringify((await DB.get(k)) || []);
+    for (const k of keys) if (typeof k === 'string' && k.startsWith('file:')) { const t = await DB.get(k); if (typeof t !== 'string') return; txt += t; } // não conseguiu ler um arquivo: não apaga mídia na dúvida
     for (const id of ids) if (!txt.includes(id)) { await DB.del('media:' + id); const u = MEDIA.get(id); if (u) { URL.revokeObjectURL(u); MEDIA.delete(id); } }
   } catch (e) {}
 }
@@ -10960,7 +11034,7 @@ function renderAdds() {
     COMP_DEF[k.id] ? h('span', { class:'x ed', role:'button', tabindex:'0', title:`Editar o padrão de ${k.label}`, 'aria-label':`Editar o padrão de ${k.label}`, html:ICON_PEN,
       onclick:e => { e.stopPropagation(); openComps(k.id); }, onkeydown:e => { if (e.key === 'Enter') { e.stopPropagation(); e.preventDefault(); openComps(k.id); } } }) : null]));
   }
-  // meus elementos: salvos pelo botão direito ("Salvar em Meus elementos"), valem para qualquer arquivo
+  // meus elementos: salvos pelo botão direito ("Salvar em Meus elementos"), valem para os arquivos do mesmo projeto (chave elements:<projeto>; Rascunhos usam elements)
   if (!MY_ELS.length) return;
   box.append(h('div', { class:'adds-sub', text:'Meus elementos' }));
   for (const el of MY_ELS) {
@@ -11215,6 +11289,7 @@ $('#fontFile').addEventListener('change', async e => {
 // arquivos
 $('#filesOpen').onclick = () => openFiles();
 $('#projBtn').onclick = projMenu;
+$('#diskBtn').onclick = diskMenu;
 $('#filesClose').onclick = closeFiles;
 $('#fileNew').onclick = () => newFile();
 $('#files').addEventListener('pointerdown', e => { if (e.target.id === 'files') closeFiles(); });
@@ -11575,7 +11650,9 @@ function openVars() {
 
 /* ------------ meus elementos: camadas salvas para reusar em qualquer arquivo (no navegador, chave 'elements') ------------ */
 let MY_ELS = [];
-async function loadElements() { MY_ELS = (await DB.get('elements')) || []; renderAdds(); }
+// pedido do usuário: Meus elementos são do projeto, não de todos. Rascunhos ficam com a chave antiga 'elements'
+const elKey = (pj = FILES.project) => pj ? 'elements:' + pj : 'elements';
+async function loadElements() { MY_ELS = []; renderAdds(); MY_ELS = (await DB.get(elKey())) || []; renderAdds(); }
 // miniatura: cada camada no seu quadro de repouso, recortada em volta
 function elementThumb(ls) {
   try {
@@ -11596,8 +11673,8 @@ async function saveElement() {
   const L = selL(), ls = pickedLayers();
   const name = ls.length > 1 ? (L && L.grp && ls.every(o => o.grp === L.grp) ? groupName(L.grp) : `${ls.length} elementos`) : ls[0].name;
   MY_ELS = [{ id:uid(), name, thumb:elementThumb(ls), p }, ...MY_ELS].slice(0, 48);
-  await DB.set('elements', MY_ELS); renderAdds();
-  toast(`"${name}" salvo em Meus elementos, na coluna da esquerda`);
+  await DB.set(elKey(), MY_ELS); renderAdds();
+  toast(`"${name}" salvo em Meus elementos${FILES.project ? ' deste projeto' : ''}, na coluna da esquerda`);
 }
 function addElement(el) {
   const p = JSON.parse(JSON.stringify(el.p)), st = nextStart(), s0 = Math.min(...p.layers.map(l => +l.start || 0));
@@ -11619,7 +11696,7 @@ function renameElementInline(el, span) {
   const end = async ok => {
     if (done) return; done = true;
     const v = inp.value.trim();
-    if (ok && v && v !== old) { el.name = v; await DB.set('elements', MY_ELS); toast(`Renomeado para "${v}"`); }
+    if (ok && v && v !== old) { el.name = v; await DB.set(elKey(), MY_ELS); toast(`Renomeado para "${v}"`); }
     renderAdds();
   };
   inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') end(true); if (e.key === 'Escape') end(false); });
@@ -11628,8 +11705,8 @@ function renameElementInline(el, span) {
 }
 async function removeElement(el) {
   const i = MY_ELS.indexOf(el); if (i < 0) return;
-  MY_ELS.splice(i, 1); await DB.set('elements', MY_ELS); renderAdds();
-  toast(`"${el.name}" saiu de Meus elementos`, 5000, { label:'Desfazer', fn:async () => { MY_ELS.splice(Math.min(i, MY_ELS.length), 0, el); await DB.set('elements', MY_ELS); renderAdds(); } });
+  const key = elKey(); MY_ELS.splice(i, 1); await DB.set(key, MY_ELS); renderAdds();
+  toast(`"${el.name}" saiu de Meus elementos`, 5000, { label:'Desfazer', fn:async () => { if (elKey() !== key) return; MY_ELS.splice(Math.min(i, MY_ELS.length), 0, el); await DB.set(key, MY_ELS); renderAdds(); } });
 }
 $('#varBtn').onclick = openVars;
 
@@ -11637,6 +11714,8 @@ $('#varBtn').onclick = openVars;
    Início
    ============================================================ */
 (async function boot() {
+  await DISK.init(); // pasta de salvamento escolhida (js/pasta.js): tem que vir antes de ler qualquer arquivo
+  showDisk();
   const list = await migrateFiles();
   let id = await DB.get('currentId'); if (!list.some(f => f.id === id)) id = list[0]?.id;
   let saved = null;
