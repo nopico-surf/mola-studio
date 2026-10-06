@@ -146,9 +146,9 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 
 .stage{grid-area:stage;display:flex;flex-direction:column;min-width:0;min-height:0;background:
   radial-gradient(circle at 1px 1px, var(--raised) 1px, transparent 0) 0 0/18px 18px, var(--bg)}
-.stage-box{flex:1;min-height:0;position:relative;overflow:hidden}
+.stage-box{flex:1;min-height:0;position:relative;overflow:hidden;touch-action:none} /* pinça = zoom do palco (js, TCH); sem o zoom da página por cima */
 /* o palco rola quando o zoom passa do espaço; em volta do quadro sobra mesa (as alças de quem encosta na borda ficam à mão) */
-.stage-scroll{position:absolute;inset:0;overflow:auto;display:flex}
+.stage-scroll{position:absolute;inset:0;overflow:auto;display:flex;touch-action:none}
 .stage-pad{margin:auto;padding:var(--stage-pad,36px);flex:none}
 .stage-ov{position:absolute;left:0;top:0;pointer-events:none;z-index:1}
 .zoom{display:inline-flex;align-items:center;flex:none;border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
@@ -204,6 +204,7 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .tl-bar em{position:relative;z-index:1;display:block;font:normal 500 10px var(--f-mono);color:var(--fg);padding:3px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 .tl-bar{touch-action:none;user-select:none;-webkit-user-select:none}
 .tl-bar .h{position:absolute;top:0;bottom:0;width:9px;pointer-events:none}
+@media (pointer:coarse){.tl-bar .h{width:22px}}
 .tl-bar .h.l{left:0}
 .tl-bar .h.r{right:0}
 .tl-bar .h::after{content:"";position:absolute;top:22%;bottom:22%;width:3px;border-radius:2px;background:var(--c);opacity:0;transition:opacity .12s}
@@ -236,9 +237,11 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .hexwrap input.hex,.hexwrap input.cp-hex{width:62px;border:0;background:transparent;color:var(--fg);font:11px var(--f-mono);text-transform:uppercase;padding:0;outline:none}
 .tl-head{position:absolute;top:0;height:100%;width:0;border-left:1.5px solid var(--fg);pointer-events:none;z-index:4}
 .tl-head::before{content:"";position:absolute;top:0;left:-5px;border:5px solid transparent;border-top:6px solid var(--fg)}
-.tl-grip{height:7px;flex:none;cursor:ns-resize;background:var(--panel);border-top:1px solid var(--line);position:relative}
+.tl-grip{height:7px;flex:none;cursor:ns-resize;touch-action:none;background:var(--panel);border-top:1px solid var(--line);position:relative}
 .tl-grip::after{content:"";position:absolute;left:50%;top:2px;width:36px;height:3px;margin-left:-18px;border-radius:2px;background:var(--line-2)}
 .tl-grip:hover::after{background:var(--muted)}
+.tl-grip::before{content:"";position:absolute;left:0;right:0;top:-14px;bottom:-6px}
+@media (pointer:coarse){.tl-grip{height:14px}.tl-grip::after{top:5px}}
 .tl-grip[hidden]{display:none}
 .tl-end{position:absolute;top:0;bottom:0;right:0;width:12px;cursor:ew-resize;z-index:2;border-right:3px solid var(--muted)}
 .tl-end:hover{background:rgba(255,255,255,.06)}

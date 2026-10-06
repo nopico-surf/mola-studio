@@ -4700,6 +4700,46 @@ $('#stageBox').addEventListener('pointerdown', e => {
   if (!RT.hand || e.button !== 0 || onScrollbar(e)) return;
   e.stopPropagation(); RT.handUsed = true; panStage(e);
 }, true); // sem a rolagem automática do navegador
+/* Pinça no celular/tablet (pedido do usuário): dois dedos no palco dão zoom (afastar = aproxima) e também levam o quadro junto com o
+   ponto médio. Os ouvintes pegam na captura da janela, antes de tudo: o segundo dedo cancela o que o primeiro começou (arrastar,
+   seleção por área, alça) e, enquanto houver dedo no palco depois disso, nada mais reage a ele. Só toque (mouse e caneta seguem
+   como eram); o `touch-action:none` do CSS impede o navegador de dar o zoom da página por cima. */
+const TCH = new Map(); let pinch = null, pinchSynth = false;
+const pinchGeo = () => { const [a, b] = [...TCH.values()]; return { d:Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), cx:(a.x + b.x) / 2, cy:(a.y + b.y) / 2 }; };
+addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch' || !$('#stageBox').contains(e.target) || e.target.closest('#stageHint')) return;
+  if (!TCH.size) RT.pinched = false;
+  TCH.set(e.pointerId, { x:e.clientX, y:e.clientY });
+  if (TCH.size < 2) return;
+  e.stopImmediatePropagation(); e.preventDefault();
+  if (TCH.size > 2 || pinch) return; // terceiro dedo: ignora
+  RT.pinched = true;
+  const first = [...TCH.keys()][0], hadDrag = !!RT.drag;
+  pinchSynth = true; // cancela o gesto do primeiro dedo (arrasto, seleção por área, alça) como se ele tivesse sido interrompido
+  try { cv.dispatchEvent(new PointerEvent('pointercancel', { pointerId:first, pointerType:'touch', bubbles:true })); } catch (er) {}
+  pinchSynth = false;
+  if (hadDrag && undoStack.length && histPack() !== undoStack[undoStack.length - 1]) undo(); // o pedacinho que o dedo já tinha arrastado volta
+  const g = pinchGeo(); pinch = { d:g.d, cx:g.cx, cy:g.cy, z:RT.zoom || 1 };
+}, true);
+addEventListener('pointermove', e => {
+  const t = TCH.get(e.pointerId); if (!t) return;
+  t.x = e.clientX; t.y = e.clientY;
+  if (!RT.pinched) return;
+  e.stopImmediatePropagation();
+  if (!pinch || TCH.size !== 2) return;
+  const g = pinchGeo();
+  shiftView(g.cx - pinch.cx, g.cy - pinch.cy);
+  setZoom(pinch.z * g.d / pinch.d, g.cx, g.cy, true);
+  pinch.cx = g.cx; pinch.cy = g.cy;
+}, true);
+const pinchEnd = e => {
+  if (pinchSynth || !TCH.has(e.pointerId)) return;
+  TCH.delete(e.pointerId);
+  if (RT.pinched) e.stopImmediatePropagation();
+  if (TCH.size < 2) pinch = null;
+  if (!TCH.size) RT.pinched = false;
+};
+addEventListener('pointerup', pinchEnd, true); addEventListener('pointercancel', pinchEnd, true);
 
 const ov = $('#ov'), octx = ov.getContext('2d');
 function drawOverlays() {
@@ -6151,6 +6191,7 @@ function marquee(ev) {
   const up = () => {
     removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
     const r = RT.marq; RT.marq = null; needs = true;
+    if (RT.pinched) return; // o segundo dedo cancelou: era pinça, não seleção (nem clique no vazio)
     if (!moved || !r) { if (!add) selectBg(); return; } // Shift errando o clique não solta a seleção
     const hits = marqHits(r);
     if (!hits.length) { if (!add) selectBg(); return; }
@@ -9102,7 +9143,8 @@ function tlScrub(e) {
 }
 // qual parte da barra está sob o ponteiro: 'l' | 'r' (borda, com folga de 8px para fora) | 'm' (meio) | null
 function tlHit(bar, cx) {
-  const r = bar.getBoundingClientRect(), out = 8, inn = Math.min(8, r.width / 4);
+  // no toque o dedo é grosso e a borda direita fica colada na beirada da tela (a folga para fora não existe): zona de dentro maior
+  const touch = matchMedia('(pointer:coarse)').matches, r = bar.getBoundingClientRect(), out = touch ? 14 : 8, inn = Math.min(touch ? 22 : 8, r.width / (touch ? 3 : 4));
   const dl = cx - r.left, dr = r.right - cx;
   if (dl >= -out && dl <= inn && dl <= dr) return 'l';
   if (dr >= -out && dr <= inn) return 'r';
@@ -9341,9 +9383,10 @@ function tlDrag(e, L, bar, mode) {
   try { const hh = +localStorage.getItem('mola-tlh'); if (hh) { tl.style.height = hh + 'px'; tl.style.maxHeight = 'none'; } } catch (e) {}
   grip.addEventListener('pointerdown', e => {
     e.preventDefault(); const y0 = e.clientY, h0 = tl.getBoundingClientRect().height;
+    try { grip.setPointerCapture(e.pointerId); } catch (er) {}
     const mv = ev => { const hh = Math.round(clamp(h0 - (ev.clientY - y0), 50, innerHeight * .7)); tl.style.height = hh + 'px'; tl.style.maxHeight = 'none'; };
-    const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); try { localStorage.setItem('mola-tlh', String(parseInt(tl.style.height))); } catch (e) {} };
-    addEventListener('pointermove', mv); addEventListener('pointerup', up);
+    const up = () => { grip.removeEventListener('pointermove', mv); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up); try { localStorage.setItem('mola-tlh', String(parseInt(tl.style.height))); } catch (e) {} };
+    grip.addEventListener('pointermove', mv); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
   });
   b.onclick = () => { on = !on; try { localStorage.setItem('mola-tl', on ? '1' : '0'); } catch (e) {} apply(); };
   apply();
