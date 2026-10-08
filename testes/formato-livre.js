@@ -38,7 +38,7 @@ const near = (a, b, e = 1e-4) => Math.abs(a - b) < e;
   conf(await p.evaluate(() => W() === 1200 && H() === 802), 'largura 1200 e altura ímpar 801 vira 802 (par)');
   conf(await p.evaluate(() => { const rc = cv.getBoundingClientRect(); return Math.abs(rc.width / rc.height - 1200 / 802) < .02; }), 'palco na proporção nova');
   await setDim('#cW', 99999);
-  conf(await p.evaluate(() => W() === 4096), 'largura acima do limite fica em 4096');
+  conf(await p.evaluate(() => W() === 99998), 'largura sem teto: 99999 vira 99998 (par)');
   await p.keyboard.press('Escape'); await p.evaluate(() => document.activeElement && document.activeElement.blur());
   await p.keyboard.press('Control+z'); await p.waitForTimeout(120);
   conf(await p.evaluate(() => W() === 1200 && H() === 802), 'Ctrl+Z volta o tamanho');

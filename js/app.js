@@ -285,21 +285,22 @@ const FILL_MODES = { ...BG_MODES, video:'Vídeo' };
 
 const FORMATS = { '1x1':{w:1080,h:1080,label:'1:1'}, '4x5':{w:1080,h:1350,label:'4:5'}, '3x4':{w:1080,h:1440,label:'3:4'}, '9x16':{w:1080,h:1920,label:'9:16'} };
 /* formato livre (pedido do usuário: palco de qualquer tamanho, sem seguir os do Instagram). S.custom = { w, h } em px (ausente =
-   CUSTOM_DEF); par (o H.264 pede) e entre CUSTOM_MIN e CUSTOM_MAX. Por enquanto não se liga aos outros (`linked`): com ele aberto ou
+   CUSTOM_DEF); par (o H.264 pede) e no mínimo CUSTOM_MIN; sem teto (pedido do usuário). Por enquanto não se liga aos outros (`linked`): com ele aberto ou
    como principal nada se reorganiza de um formato para o outro; quem não tem posição própria fica na mesma posição relativa (fração
    do quadro) e o que se mexe nele fica só nele (fpos.custom), como em qualquer formato que não é o principal. Não vira principal por
    clique duplo nem entra no padrão de arquivo novo (Componentes). */
-const CUSTOM_DEF = { w:1920, h:1080 }, CUSTOM_MIN = 16, CUSTOM_MAX = 4096;
-const customDim = k => { const c = S && S.custom, v = Math.round(+(c && c[k]) || CUSTOM_DEF[k]); return clamp(v + v % 2, CUSTOM_MIN, CUSTOM_MAX); };
+const CUSTOM_DEF = { w:1920, h:1080 }, CUSTOM_MIN = 16;
+const customDim = k => { const c = S && S.custom, v = Math.round(+(c && c[k]) || CUSTOM_DEF[k]); return Math.max(v + v % 2, CUSTOM_MIN); };
 FORMATS.custom = { get w() { return customDim('w'); }, get h() { return customDim('h'); }, get label() { return `${customDim('w')}×${customDim('h')}`; } };
+const SU = 1080; // unidade dos tamanhos (fração × SU = px): igual em todo formato, inclusive no livre de outra largura
 const linked = () => S.format !== 'custom' && baseFmt() !== 'custom';
 // conta "no principal" feita com a largura do formato aberto só vale se os dois têm a mesma largura (os do Instagram têm 1080)
 const sameW = () => FORMATS[baseFmt()].w === W();
 const FPS_OPTS = [24, 25, 30, 50, 60];
 const fps = () => (S && FPS_OPTS.includes(S.fps) ? S.fps : 30);
-const TYPE_LABEL = { bg:'Fundo', text:'Texto', logo:'Logo', cta:'Botão', image:'Imagem', video:'Vídeo', svg:'SVG', shape:'Forma', camera:'Câmera', fx:'Transição' };
+const TYPE_LABEL = { bg:'Fundo', text:'Texto', logo:'Logo', cta:'Botão', image:'Imagem', video:'Vídeo', svg:'SVG', shape:'Forma', camera:'Câmera', fx:'Transição', audio:'Áudio' };
 const typeKey = L => L.type === 'image' && L.video ? 'video' : L.type === 'logo' && L.svg ? 'svg' : L.type;
-const TYPE_COLOR = { bg:'var(--c-bg)', text:'var(--c-text)', logo:'var(--c-logo)', cta:'var(--c-cta)', image:'var(--c-image)', video:'var(--c-video)', svg:'var(--c-svg)', shape:'var(--c-shape)', camera:'var(--c-camera)', fx:'var(--c-fx)' };
+const TYPE_COLOR = { bg:'var(--c-bg)', text:'var(--c-text)', logo:'var(--c-logo)', cta:'var(--c-cta)', image:'var(--c-image)', video:'var(--c-video)', svg:'var(--c-svg)', shape:'var(--c-shape)', camera:'var(--c-camera)', fx:'var(--c-fx)', audio:'var(--c-audio)' };
 const ROLE_NAME = { logo:'Logo', logoSmall:'Logo pequeno', brand:'Nome da marca', title:'Título', sub:'Subtítulo', cta:'Botão', big:'Número grande', offer:'Oferta', tag:'Etiqueta', kicker:'Chamada', k1:'Frase 1', k2:'Frase 2', k3:'Frase 3', image:'Imagem', bg:'Fundo' };
 const ROLE_TEXT = { brand:'GRÃO LENTO', title:'Café de verdade,\nsem pressa.', sub:'Torra artesanal na sua porta em 24h', cta:'Peça agora  →', big:'-30%', offer:'na primeira assinatura', tag:'Só até domingo', kicker:'LANÇAMENTO', k1:'Moído na hora.', k2:'Torrado ontem.', k3:'Na sua porta amanhã.' };
 const GOOGLE_SUGGEST = ['Urbanist','Inter Tight','Roboto','Open Sans','Lato','Nunito','Nunito Sans','Raleway','Work Sans','Mulish','Karla','Barlow','Barlow Condensed','Josefin Sans','Quicksand','Kanit','Prompt','Jost','Albert Sans','Be Vietnam Pro','Public Sans','IBM Plex Sans','IBM Plex Serif','Libre Franklin','Merriweather','Lora','EB Garamond','Crimson Pro','Source Serif 4','Noto Sans','Noto Serif','Playfair','Abril Fatface','Alfa Slab One','Space Mono','JetBrains Mono','Fraunces','Manrope','Unbounded','Bricolage Grotesque','Syne','Sora','Outfit','Plus Jakarta Sans','DM Sans','DM Serif Display','Instrument Serif','Instrument Sans','Space Grotesk','Archivo','Archivo Black','Anton','Bebas Neue','Oswald','Montserrat','Poppins','Inter','Figtree','Onest','Rubik','Geist','Hanken Grotesk','Schibsted Grotesk','Familjen Grotesk','Big Shoulders Display','Bodoni Moda','Playfair Display','Cormorant Garamond','Gloock','Caveat','Permanent Marker','Lexend','Red Hat Display','Chivo','Darker Grotesque','Krona One','Dela Gothic One','Rethink Sans','Epilogue','Young Serif','Libre Caslon Display','Shrikhand','Righteous','Bowlby One','Lilita One'];
@@ -417,7 +418,7 @@ function restBoxIn(L, fmt) {
 function adaptLayout() {
   const bf = baseFmt(), Hb = FORMATS[bf].h, Ht = H(), dH = Ht - Hb, all = [], out = new Map();
   for (const L of S.layers) {
-    if (L.type === 'bg' || NOBOX(L)) continue;
+    if (L.type === 'bg' || NOBOX(L) || tpLink(L)) continue; // texto que segue uma forma fica onde a forma ficar
     const r = restBoxIn(L, bf); if (!r) continue;
     const up = freeType(L) && r.t <= 1, dn = freeType(L) && r.b >= Hb - 1; // só imagem e forma sangram
     all.push({ L, ...r, hs:holdSpan(L), s0:slideAt(r.l + 1), s1:slideAt(r.r - 1), edge:up && dn ? 'cover' : up ? 'top' : dn ? 'bottom' : null,
@@ -636,12 +637,14 @@ function placement() {
 // fpos[formato] também guarda o que foi mexido no palco só naquele formato: s (escala pela alça do canto),
 // ww/hh (máscara pelas alças laterais, px) e zoom/ix/iy (enquadramento da imagem)
 function placeRaw(L) {
+  { const sh = tpLink(L); if (sh) return placeRaw(sh); } // texto que segue uma forma: onde a forma está
   if (S.format === baseFmt()) return { x:L.x, y:L.y, k:1, hh:null, ww:null };
   const p = placement().get(L.id) || { x:L.x, y:L.y, k:1, hh:null, ww:null }, f = L.fpos && L.fpos[S.format];
   return f ? { ...p, x:f.x ?? p.x, y:f.y ?? p.y, k:p.k * (f.s ?? 1), ww:f.ww ?? p.ww, hh:f.hh ?? p.hh, fsz:f.fsz } : p;
 }
 // grupo com layout automático: a fila decide a posição (o item arrastado para trocar de lugar segue o mouse)
 function placeOf(L) {
+  { const sh = tpLink(L); if (sh) return placeOf(sh); }
   const p = placeRaw(L);
   if (!(S.flow || inFlow(L))) return p;
   const q = flowPlace().get(L.id), k = q && q.s ? p.k * q.s : p.k; // s = item encolhido para a fila caber na margem
@@ -682,11 +685,11 @@ function setFrame(L, patch) { if (fmtOwn()) setFmt(L, patch); else Object.assign
 const setPan = (L, ix, iy) => setFrame(L, { ix, iy });
 // escala pela alça do canto (e "Tamanho da seleção"): fora do principal, um fator só deste formato
 // mw = largura em que o texto quebra (fração do quadro, já limitada pela margem): escalar o texto escala ela junto, senão as linhas quebram em outro lugar e a altura não acompanha
-const wrapW = o => { const M = marginBox(); return Math.min((o.maxW || .84) * W(), M ? M.x1 - M.x0 : Infinity) / W(); };
-const size0 = o => ({ size:o.size, mh:o.mh, padX:o.padX, padY:o.padY, fs:fOf(o).s ?? 1,
+const wrapW = o => { const M = marginBox(); return Math.min((o.maxW || .84) * SU, M ? M.x1 - M.x0 : Infinity) / SU; };
+const size0 = o => ({ size:o.size, mh:o.mh, padX:o.padX, padY:o.padY, fs:fOf(o).s ?? 1, tpR:o.tpR, tpAmp:o.tpAmp, tpLen:o.tpLen, tpDist:o.tpDist,
   mw:o.type === 'text' && (o.fixW || layoutText(o, caseTxt(o, o.text)).nLines > 1) ? wrapW(o) : null });
 function scaleAny(L, s0, f) {
-  if (!fmtOwn()) return scaleLayer(L, s0, f);
+  if (!fmtOwn() || tpLink(L)) return scaleLayer(L, s0, f); // texto que segue uma forma: a escala do formato é a da forma, aqui muda a letra
   const s = +clamp(s0.fs * f, .001, L.type === 'text' || L.type === 'cta' ? 8 : Infinity).toFixed(4); setFmt(L, { s }); return s / s0.fs; // a escala que valeu de fato
 }
 const ownPos = L => S.format !== baseFmt() && !!(L.fpos && L.fpos[S.format]);
@@ -721,7 +724,7 @@ const gleaves = gid => S.layers.filter(l => l.grp && ginside(l.grp, gid));
 const gkids = gid => S.groups ? Object.keys(S.groups).filter(k => gpar(k) === gid && S.layers.some(l => l.grp && ginside(l.grp, k))) : [];
 function chainFlow(gid) { for (let n = 0; gid && n < 20; n++, gid = gpar(gid)) if (flowOf(gid)) return true; return false; }
 function flowRoot(gid) { let r = null; for (let n = 0; gid && n < 20; n++, gid = gpar(gid)) if (flowOf(gid)) r = gid; return r; }
-const flowMember = L => !!(L && L.grp && L.visible && !L.flowFree && L.type !== 'bg' && !NOBOX(L));
+const flowMember = L => !!(L && L.grp && L.visible && !L.flowFree && L.type !== 'bg' && !NOBOX(L) && !tpLink(L)); // texto que segue uma forma vai com ela
 const inFlow = L => flowMember(L) && chainFlow(L.grp);
 // a seleção leva todos os itens da fila (então mover, alinhar ou escalar é do grupo inteiro)
 const flowWhole = (gid, ls) => gleaves(gid).every(o => !inFlow(o) || ls.includes(o));
@@ -968,7 +971,7 @@ function frameSolve(base, Hf, M, pos, sizes, D, groups) {
     return out;
   };
   S.layers.forEach((L, i) => {
-    if (!L.visible || L.type === 'bg' || NOBOX(L)) return;
+    if (!L.visible || L.type === 'bg' || NOBOX(L) || tpLink(L)) return; // texto que segue uma forma vai com ela
     const g = L.grp ? gtop(L.grp) : null; if (g ? (gmeta(g) || {}).free : L.flowFree) return;
     let it = flowItem(L, base ? { x:L.x, y:L.y, k:1 } : placeRaw(L), Hf); if (!it) return;
     { const s = pos.get(L.id)?.s; if (s) it = { ...it, w:it.w * s, h:it.h * s }; } // encolhido pela fila do grupo
@@ -2666,11 +2669,220 @@ function textBg(L) {
 }
 // caixa do fundo de uma linha (centro vertical no meio da letra, como o marca-texto de sempre)
 const TBG_H = .56; // meia altura em em, sem o espaço vertical
+
+/* ------------ Texto em curva (pedido do usuário: "digitar texto em forma, tipo um texto seguir um círculo") ------------
+   L.tpath = 'circle' | 'arc' | 'wave' | 'shape' (ausente = reto). As letras saem do layout de sempre (fonte, kerning, entre letras,
+   Enter quebra a linha, alinhamento) e depois cada uma é levada para o caminho: fica de pé sobre a corda entre as duas pontas dela
+   no caminho (como o "Type on a Path" do Illustrator; numa quina, vira no meio). Mais linhas ficam paralelas ao caminho (no círculo,
+   concêntricas, com o espaçamento medido na própria linha). Campos:
+   - tpR raio do círculo e tpAmp/tpLen altura e comprimento da onda (fração da largura do quadro, o painel mostra px), tpPh fase (graus)
+   - tpBend curvatura do arco (−1..1; 1 = a linha dá a volta inteira; negativo = sorriso)
+   - tpOff onde o texto se apoia (0..1 da volta a partir de cima, no sentido horário); o Alinhamento diz se ele começa, centraliza ou
+     termina ali. tpFlip = por dentro (sentido anti-horário: o texto de baixo de um selo lê da esquerda para a direita)
+   - tpV 'base' (as letras ficam sobre o caminho) | 'mid' (centradas) | 'top' (penduradas); tpDist afasta do caminho (fração da largura)
+   - tpFit espalha pela volta inteira (caminho fechado)
+   - tpRef = id da forma seguida; tpPts/tpClosed = cópia do caminho dela (px, centro em 0), para o texto ficar onde estava se ela sumir
+   Círculo e forma ficam presos ao centro do caminho (caixa simétrica em volta dele: editar o texto não tira o círculo do lugar);
+   arco e onda se medem pelas letras, como o texto reto. Tudo entra em layoutText (lay.tp, blockW/blockH), então margem, alinhar,
+   alças, seleção, layouts e exportação veem a caixa certa sem saber de curva. O texto que segue uma forma tem a posição e a escala
+   dela (placeOf redireciona), fica fora dos layouts e da margem, e arrastar desliza pelo caminho (`tpSlide`). */
+const TP_KINDS = [['', 'Reto', 'tp_none'], ['circle', 'Círculo', 'tp_circle'], ['arc', 'Arco', 'tp_arc'], ['wave', 'Onda', 'tp_wave'], ['shape', 'Seguir uma forma', 'tp_shape']];
+const TP_KEYS = ['tpath', 'tpR', 'tpOff', 'tpFlip', 'tpV', 'tpDist', 'tpFit', 'tpBend', 'tpAmp', 'tpLen', 'tpPh', 'tpRef', 'tpPts', 'tpClosed'];
+const tpKind = L => L && L.type === 'text' && (L.tpath === 'circle' || L.tpath === 'arc' || L.tpath === 'wave' || L.tpath === 'shape') ? L.tpath : null;
+// forma que o texto segue (viva); null = não segue, ou ela foi apagada (aí vale a cópia tpPts)
+let TPL = null;
+function tpLink(L) {
+  if (!L || L.type !== 'text' || L.tpath !== 'shape' || !L.tpRef || !S) return null;
+  let i = TPL && TPL.ls === S.layers ? TPL.m.get(L.tpRef) : undefined;
+  if (i == null || !S.layers[i] || S.layers[i].id !== L.tpRef) { TPL = { ls:S.layers, m:new Map(S.layers.map((o, j) => [o.id, j])) }; i = TPL.m.get(L.tpRef); }
+  const o = i == null ? null : S.layers[i];
+  return o && o.type === 'shape' ? o : null;
+}
+// o que muda o desenho da forma (entra na chave do layout do texto que a segue)
+const TP_SH_SIG = ['kind', 'd', 'size', 'mh', 'rot', 'radius', 'radSep', 'rTL', 'rTR', 'rBR', 'rBL', 'points', 'inner', 'wave', 'waveKind', 'waveSize', 'waveH', 'waveIrr', 'waveSeed'];
+// caminho da forma no espaço dela (centro em 0, com o giro, sem a escala do formato): o pedaço mais comprido, em linhas finas
+function tpShapeLine(sh, G) {
+  let subs = null;
+  try { const v = shapeLocal(sh, G); subs = v ? flatSubs(v) : null; } catch (e) { subs = null; }
+  if (!subs || !subs.length) subs = [{ closed:true, pts:Array.from({ length:96 }, (_, i) => [Math.sin(i / 96 * TAU) * G.w / 2, -Math.cos(i / 96 * TAU) * G.h / 2]) }]; // caminho com arco (A): a elipse da caixa
+  const len = sp => { let s = 0; const n = sp.pts.length; for (let i = 1; i < n + (sp.closed ? 1 : 0); i++) { const a = sp.pts[i - 1], b = sp.pts[i % n]; s += Math.hypot(b[0] - a[0], b[1] - a[1]); } return s; };
+  const sp = subs.reduce((a, b) => (len(b) > len(a) ? b : a));
+  const r = (sh.rot || 0) * Math.PI / 180, co = Math.cos(r), si = Math.sin(r);
+  return { closed:!!sp.closed, pts:sp.pts.map(([x, y]) => [x * co - y * si, x * si + y * co]) };
+}
+// caminho do texto 'shape': o da forma viva ou a cópia guardada
+function tpSource(L) {
+  const sh = tpLink(L);
+  if (sh) { const G = geomNow(sh); return G ? tpShapeLine(sh, G) : null; }
+  const a = L.tpPts; if (!Array.isArray(a) || a.length < 4) return null;
+  const pts = []; for (let i = 0; i + 1 < a.length; i += 2) pts.push([a[i], a[i + 1]]);
+  return { closed:L.tpClosed !== false, pts };
+}
+function tpCirclePts(r, ccw) { // começa em cima no sentido horário; ccw = começa embaixo, anti-horário (lê da esquerda para a direita embaixo)
+  const N = 360, out = [];
+  for (let i = 0; i < N; i++) { const t = i / N * TAU; out.push([r * Math.sin(t), ccw ? r * Math.cos(t) : -r * Math.cos(t)]); }
+  return out;
+}
+// polilinha -> caminho medido. raw = já está no sentido e no começo certos; senão: fechado no sentido horário começando onde a
+// vertical do centro cruza o contorno mais em cima (0 = em cima), aberto da esquerda para a direita
+function tpMkPath(pts, closed, raw) {
+  pts = pts.map(p => [p[0], p[1]]);
+  let area = 0; if (closed) for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; area += p[0] * q[1] - q[0] * p[1]; }
+  if (!raw) {
+    if (closed) {
+      if (area < 0) { pts.reverse(); area = -area; }
+      let best = null;
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i], q = pts[(i + 1) % pts.length];
+        if ((p[0] <= 0 && q[0] >= 0) || (p[0] >= 0 && q[0] <= 0)) {
+          const f = q[0] === p[0] ? 0 : -p[0] / (q[0] - p[0]), y = p[1] + (q[1] - p[1]) * f;
+          if (!best || y < best.y) best = { i, y };
+        }
+      }
+      if (best) pts = [[0, best.y], ...pts.slice(best.i + 1), ...pts.slice(0, best.i + 1)];
+    } else if (pts[pts.length - 1][0] < pts[0][0]) pts.reverse();
+  }
+  const P = closed ? [...pts, pts[0]] : pts, n = P.length, cum = new Float64Array(n);
+  for (let i = 1; i < n; i++) cum[i] = cum[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]);
+  const dir = (a, b) => { const d = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1; return [(b[0] - a[0]) / d, (b[1] - a[1]) / d]; };
+  let i0 = 1; while (i0 < n - 1 && cum[i0] < 1e-6) i0++;
+  let i1 = n - 2; while (i1 > 0 && cum[n - 1] - cum[i1] < 1e-6) i1--;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const [x, y] of P) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  return { P, cum, len:cum[n - 1], closed, sgn:area < 0 ? -1 : 1, d0:dir(P[0], P[i0]), d1:dir(P[i1], P[n - 1]), box:{ x0, x1, y0, y1 } };
+}
+// sentido contrário, mesmo começo (por dentro): s passa a ser len - s
+function tpReverse(T) {
+  const pts = T.P.slice(0, T.closed ? -1 : undefined), r = T.closed ? [pts[0], ...pts.slice(1).reverse()] : pts.slice().reverse();
+  return tpMkPath(r, T.closed, true);
+}
+function tpPt(T, s) {
+  const { P, cum, len } = T, n = P.length;
+  if (!(len > 0)) return { x:P[0][0], y:P[0][1] };
+  if (T.closed) s = ((s % len) + len) % len;
+  else if (s < 0 || s > len) { const e = s < 0 ? T.d0 : T.d1, q = s < 0 ? P[0] : P[n - 1], d = s < 0 ? s : s - len; return { x:q[0] + e[0] * d, y:q[1] + e[1] * d }; } // aberto: passa da ponta reto
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] <= s) lo = m; else hi = m; }
+  const sl = cum[hi] - cum[lo], f = sl > 0 ? (s - cum[lo]) / sl : 0;
+  return { x:P[lo][0] + (P[hi][0] - P[lo][0]) * f, y:P[lo][1] + (P[hi][1] - P[lo][1]) * f };
+}
+// direção (rad) da corda entre s - hw e s + hw: a letra fica de pé sobre ela
+function tpAng(T, s, hw) {
+  hw = Math.max(hw, T.len * 1e-4, .05); if (T.closed) hw = Math.min(hw, T.len / 4);
+  const a = tpPt(T, s - hw), b = tpPt(T, s + hw);
+  return Math.atan2(b.y - a.y, b.x - a.x);
+}
+// s do ponto do caminho mais perto de (x, y)
+function tpNear(T, x, y) {
+  const P = T.P; let best = Infinity, bs = 0;
+  for (let i = 1; i < P.length; i++) {
+    const a = P[i - 1], b = P[i], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+    const f = l2 ? clamp(((x - a[0]) * dx + (y - a[1]) * dy) / l2) : 0, d = (a[0] + dx * f - x) ** 2 + (a[1] + dy * f - y) ** 2;
+    if (d < best) { best = d; bs = T.cum[i - 1] + f * (T.cum[i] - T.cum[i - 1]); }
+  }
+  return bs;
+}
+// u (distância na própria linha, a partir da âncora) -> ponto do texto (px, centro do bloco em 0) e direção. y = altura no texto reto
+function tpMapU(lay, line, u, y, hw = 0) {
+  const tp = lay.tp, q = line.tpl, s = q.s0 + u * q.k, p = tpPt(tp.T, s), a = tpAng(tp.T, s, hw * q.k), dn = y - tp.refY - tp.dist;
+  return { x:p.x - Math.sin(a) * dn - tp.sx, y:p.y + Math.cos(a) * dn - tp.sy, a };
+}
+// ponto do texto reto (x, y no layout) -> no caminho. idx = número da letra na linha (espalhar pela volta soma um espaço por letra)
+function tpMap(lay, line, x, y, idx, hw = 0) {
+  const q = line.tpl;
+  if (q.e && idx == null) { idx = 0; for (const g of line.glyphs) if (x >= line.x0 + g.x) idx = g.k; }
+  return tpMapU(lay, line, x + q.ua + (q.e ? (idx || 0) * q.e : 0), y, hw);
+}
+// fundo atrás do texto em curva: a caixa da linha (com espaço e cantos) dobrada pelo caminho, como uma faixa. am = quanto já apareceu
+function tpBandPts(lay, line, bg, am = 1) {
+  const q = line.tpl, size = lay.size, mid = line.baseline - .32 * size, hh = TBG_H * size + bg.py, y0 = mid - hh, y1 = mid + hh;
+  const u0 = q.e ? line.x0 + q.ua - q.e / 2 : line.x0 + q.ua - bg.px, u1 = u0 + (q.e ? q.lenOff : line.width + 2 * bg.px) * am;
+  const r = Math.max(0, Math.min(bg.r, hh, (u1 - u0) / 2)), out = [], put = (u, y) => { const p = tpMapU(lay, line, u, y); out.push([p.x, p.y]); };
+  const edge = (ua, ub, y) => { const n = clamp(Math.ceil(Math.abs(ub - ua) / (size * .15)), 2, 600); for (let i = 0; i <= n; i++) put(ua + (ub - ua) * i / n, y); };
+  const arc = (cu, cy, a0) => { if (r < .01) return; for (let i = 1; i < 6; i++) { const a = a0 + i / 6 * Math.PI / 2; put(cu + Math.cos(a) * r, cy + Math.sin(a) * r); } };
+  edge(u0 + r, u1 - r, y0); arc(u1 - r, y0 + r, -Math.PI / 2);
+  put(u1, y0 + r); put(u1, y1 - r); arc(u1 - r, y1 - r, 0);
+  edge(u1 - r, u0 + r, y1); arc(u0 + r, y1 - r, Math.PI / 2);
+  put(u0, y1 - r); put(u0, y0 + r); arc(u0 + r, y0 + r, Math.PI);
+  return out;
+}
+// monta lay.tp, a posição e a direção de cada letra (g.tp) e a caixa do bloco curvo
+function tpBuild(L, lay, txtAll) {
+  const kind = tpKind(L); if (!kind || !lay.lines.length) return;
+  const size = lay.size, Wq = SU;
+  let T = null, s0 = 0, anchored = true;
+  const off = L.tpOff;
+  if (kind === 'circle') T = tpMkPath(tpCirclePts(Math.max(2, (L.tpR || .25) * Wq)), true, true);
+  else if (kind === 'shape') { const src = tpSource(L); if (!src || src.pts.length < 2) return; T = tpMkPath(src.pts, src.closed && src.pts.length > 2); }
+  else if (kind === 'arc') {
+    const b = clamp(L.tpBend ?? .3, -1, 1), phi = Math.abs(b) * TAU; if (phi < .02) return; // quase reto: fica reto
+    const r = Math.max(lay.innerW, size) / phi; anchored = false;
+    T = tpMkPath(tpCirclePts(r, b < 0).map(([x, y]) => [x, y + (b < 0 ? -r : r)]), true, true);
+  } else { // onda
+    const A = (L.tpAmp ?? .03) * Wq, lam = Math.max(8, (L.tpLen ?? .3) * Wq), ph = (L.tpPh || 0) * Math.PI / 180;
+    const X = Math.max(lay.innerW, size) / 2 + lam, half = Math.min(2000, Math.ceil(X / lam * 32)), pts = [];
+    for (let i = -half; i <= half; i++) { const x = i / half * X; pts.push([x, -A * Math.sin(TAU * x / lam + ph)]); }
+    T = tpMkPath(pts, false, true); s0 = T.cum[half]; anchored = false;
+  }
+  if (!T || !(T.len > 0)) return;
+  if ((kind === 'circle' || kind === 'shape') && L.tpFlip) T = tpReverse(T);
+  if (kind === 'circle' || kind === 'shape') { const f = off ?? (T.closed ? 0 : .5); s0 = (L.tpFlip ? 1 - f : f) * T.len; if (T.closed) s0 = ((s0 % T.len) + T.len) % T.len; }
+  const ls = lay.lines, b0 = ls[0].baseline, b1 = ls[ls.length - 1].baseline, v = L.tpV || 'base';
+  const refY = v === 'top' ? b0 - size * .74 : v === 'mid' ? (b0 + b1) / 2 - size * .34 : b1;
+  const tp = lay.tp = { kind, T, refY, dist:(L.tpDist || 0) * Wq, sx:0, sy:0, anchored };
+  const fit = !!L.tpFit && T.closed;
+  for (const line of ls) {
+    const dn = line.baseline - refY - tp.dist, n = line.glyphs.length, w = line.width;
+    const lenOff = T.closed ? Math.max(T.len * .05, T.len - TAU * dn * T.sgn) : T.len, k = T.closed ? T.len / lenOff : 1; // no círculo a linha de dentro é mais curta
+    let ua = 0, e = 0;
+    if (fit && n) { e = (lenOff - w) / n; ua = (L.align === 'left' ? 0 : L.align === 'right' ? -lenOff : -lenOff / 2) + e / 2 - line.x0; }
+    else if (anchored) ua = -(L.align === 'left' ? line.x0 : L.align === 'right' ? line.x0 + w : line.x0 + w / 2);
+    line.tpl = { s0, k, ua, e, dn, lenOff };
+  }
+  // letras e caixa (cantos de cada letra: largura × do alto da letra até o fim da perna; com fundo, a faixa dele)
+  const m = (MCTX.font = lay.font, MCTX.measureText(txtAll || 'Hg'));
+  const asc = Math.max(m.actualBoundingBoxAscent || 0, size * .8), desc = Math.max(m.actualBoundingBoxDescent || 0, size * .2);
+  const bg = textBg(L), yT = bg ? Math.min(-asc, -.32 * size - TBG_H * size - bg.py) : -asc, yB = bg ? Math.max(desc, -.32 * size + TBG_H * size + bg.py) : desc, px = bg ? bg.px : 0;
+  tp.asc = asc; tp.desc = desc; tp.yT = yT; tp.yB = yB; tp.px = px;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const line of ls) for (const g of line.glyphs) {
+    const q = g.tp = tpMap(lay, line, line.x0 + g.x + g.w / 2, line.baseline, g.k, g.w / 2);
+    if (g.space && !bg) continue;
+    const co = Math.cos(q.a), si = Math.sin(q.a);
+    for (const [cx, cy] of [[-g.w / 2 - px, yT], [g.w / 2 + px, yT], [g.w / 2 + px, yB], [-g.w / 2 - px, yB]]) {
+      const X = q.x + cx * co - cy * si, Y = q.y + cx * si + cy * co;
+      if (X < x0) x0 = X; if (X > x1) x1 = X; if (Y < y0) y0 = Y; if (Y > y1) y1 = Y;
+    }
+  }
+  if (!isFinite(x0)) { x0 = T.box.x0; x1 = T.box.x1; y0 = T.box.y0; y1 = T.box.y1; }
+  if (anchored) { // centro do caminho no centro da caixa
+    const hx = Math.max(Math.abs(x0), Math.abs(x1), Math.abs(T.box.x0), Math.abs(T.box.x1), size * .5), hy = Math.max(Math.abs(y0), Math.abs(y1), Math.abs(T.box.y0), Math.abs(T.box.y1), size * .5);
+    lay.blockW = 2 * hx; lay.blockH = 2 * hy;
+  } else {
+    tp.sx = (x0 + x1) / 2; tp.sy = (y0 + y1) / 2; lay.blockW = x1 - x0; lay.blockH = y1 - y0;
+    for (const line of ls) for (const g of line.glyphs) { g.tp.x -= tp.sx; g.tp.y -= tp.sy; }
+  }
+}
+function tpSig(L) {
+  const k = tpKind(L); if (!k) return '';
+  const base = [k, L.tpR, L.tpOff, L.tpFlip ? 1 : 0, L.tpV, L.tpDist, L.tpFit ? 1 : 0, L.tpBend, L.tpAmp, L.tpLen, L.tpPh, W()].join(',');
+  if (k !== 'shape') return base;
+  const sh = tpLink(L);
+  if (sh) { const G = geomNow(sh); return base + '|' + (G ? G.w + ',' + G.h : '') + JSON.stringify(sh, TP_SH_SIG); }
+  return base + '|' + (L.tpPts ? objId(L.tpPts) : '-');
+}
+// onde o texto fica no quadro: o texto que segue uma forma vai onde a forma está (com a margem dela, se ela respeita); senão a margem do texto
+function textFit(L, lay, pl) {
+  const sh = tpLink(L);
+  if (sh) { const G = geomNow(sh); return freeType(sh) || inFlow(sh) || !G ? { ax:pl.x * W(), ay:pl.y * H(), k:1 } : fitInMargin(pl.x * W(), pl.y * H(), G.w * pl.k, G.h * pl.k); }
+  return inFlow(L) || freeType(L) ? { ax:pl.x * W(), ay:pl.y * H(), k:1 } : fitInMargin(pl.x * W(), pl.y * H(), lay.blockW * pl.k, lay.blockH * pl.k);
+}
 function layoutText(L, txt) {
-  const M = marginBox(), size = L.size, ls = (L.ls || 0) * size, bg = textBg(L), bpx = bg ? bg.px : 0;
-  const mw0 = Math.min((L.maxW || .84) * W(), M ? M.x1 - M.x0 : Infinity), maxW = bg ? Math.max(size, mw0 - 2 * bpx) : mw0; // com fundo, quebra antes para a caixa caber
+  const M = marginBox(), size = L.size, ls = (L.ls || 0) * size, bg = textBg(L), bpx = bg ? bg.px : 0, tk = tpKind(L);
+  // texto em curva não quebra sozinho (só no Enter): a linha corre pelo caminho
+  const mw0 = tk ? Infinity : Math.min((L.maxW || .84) * SU, M ? M.x1 - M.x0 : Infinity), maxW = bg && !tk ? Math.max(size, mw0 - 2 * bpx) : mw0; // com fundo, quebra antes para a caixa caber
   const font = fontStr(L, size), sty = charStyles(L, txt);
-  const key = [txt, font, ls, maxW, L.lh, L.align, L.fixW ? 1 : 0, sty ? sty.join(';') : '', bg ? [bg.px, bg.py].join() : ''].join('|');
+  const key = [txt, font, ls, maxW, L.lh, L.align, L.fixW && !tk ? 1 : 0, sty ? sty.join(';') : '', bg ? [bg.px, bg.py].join() : '', tk ? tpSig(L) + (bg ? bg.r : '') : ''].join('|');
   let lay = RT.layout.get(key); if (lay) return lay;
   if (RT.layout.size > 400) RT.layout.clear();
   const all = [...txt].map((ch, i) => ({ ch, c:sty ? sty[i][2] : null, f:sty ? fontStr(L, size, sty[i][0], sty[i][1]) : font }));
@@ -2719,11 +2931,12 @@ function layoutText(L, txt) {
     const baseline = -blockH / 2 + li * lineH + lineH / 2 + size * .34;
     return { text:cs.map(c => c.ch).join(''), glyphs, width, baseline, li };
   });
-  if (L.fixW) blockW = Math.max(blockW, maxW); // largura fixa (puxada pela alça lateral): a caixa tem essa largura e o texto se alinha dentro
+  if (L.fixW && !tk) blockW = Math.max(blockW, maxW); // largura fixa (puxada pela alça lateral): a caixa tem essa largura e o texto se alinha dentro
   for (const l of out) l.x0 = L.align === 'left' ? -blockW / 2 : L.align === 'right' ? blockW / 2 - l.width : -l.width / 2;
   // fundo: o bloco cresce o espaço lateral e o que a caixa passa da linha em cima/embaixo (o texto fica onde está, no meio)
   const padV = bg ? Math.max(0, TBG_H * size + bg.py - lineH / 2) : 0;
   lay = { lines:out, blockW:blockW + 2 * bpx, blockH:blockH + 2 * padV, innerW:blockW, lineH, size, font, mixed:!!sty, nChars:ci, nWords:wi, nLines:out.length };
+  if (tk) tpBuild(L, lay, out.map(l => l.text).join('')); // texto em curva: letras no caminho e a caixa curva
   RT.layout.set(key, lay);
   return lay;
 }
@@ -2751,12 +2964,12 @@ function drawText(ctx, L, t, R) {
   }
   const lay = layoutText(L, txt);
   const size = lay.size;
-  const pl = placeOf(L), fit = inFlow(L) ? { ax:pl.x * W(), ay:pl.y * H(), k:1 } : fitInMargin(pl.x * W(), pl.y * H(), lay.blockW * pl.k, lay.blockH * pl.k), ax = fit.ax, ay = fit.ay, fk = fit.k * pl.k;
+  const pl = placeOf(L), fit = textFit(L, lay, pl), ax = fit.ax, ay = fit.ay, fk = fit.k * pl.k;
   const idl = idleState(L, tl, ph, true, lay.blockH / 2);
   L._bounds = { x:ax - lay.blockW * fk / 2, y:ay - lay.blockH * fk / 2, w:lay.blockW * fk, h:lay.blockH * fk, k:fk };
 
   ctx.save();
-  ctx.translate(ax + (idl.dx || 0), ay + (idl.dy || 0)); if (idl.rot) ctx.rotate(idl.rot);
+  ctx.translate(ax + (idl.dx || 0), ay + (idl.dy || 0)); if (L.rot) ctx.rotate(L.rot * Math.PI / 180); if (idl.rot) ctx.rotate(idl.rot); // L.rot = giro do texto (graus, em volta do centro)
   const isx = (idl.sc ?? 1) * (idl.sx ?? 1) * fk, isy = (idl.sc ?? 1) * (idl.sy ?? 1) * fk;
   if (isx !== 1 || isy !== 1) ctx.scale(isx, isy);
   ctx.globalAlpha *= L.opacity ?? 1;
@@ -2790,16 +3003,33 @@ function drawText(ctx, L, t, R) {
   let lastVisible = -1;
 
   const skOn = strokeSee(L), skw = skW(L), skOut = L.strokePos === 'outside'; // contorno da letra (fora = por baixo, com o dobro da espessura)
+  const tpd = lay.tp; // texto em curva: cada letra é desenhada no espaço do texto reto, levada para o caminho (posição e giro dela)
   const drawGlyph = (c, line, g, st, px, py, track) => {
     const a = st.a == null ? 1 : st.a;
     if (a <= .001) return false;
     c.save();
-    if (st.clip === true) { const sx = skOn ? skw : 0; c.beginPath(); c.rect(line.x0 - size * 2, line.baseline - lay.mask.top - sx, line.width + size * 4, lay.mask.h + sx * 2); c.clip(); }
-    else if (st.clip) clipFx(c, st, lay.blockW, lay.blockH);
-    c.globalAlpha *= a;
-    c.translate(px + (st.dx || 0), py + (st.dy || 0));
-    applyXf(c, st);
-    c.translate(-px, -py);
+    const maskClip = () => { const sx = skOn ? skw : 0; c.beginPath(); c.rect(line.x0 - size * 2, line.baseline - lay.mask.top - sx, line.width + size * 4, lay.mask.h + sx * 2); c.clip(); };
+    if (tpd) {
+      // a letra no caminho: origem = meio da letra na linha de base do texto reto
+      const ox = line.x0 + g.x + g.w / 2 + track, Gm = track ? tpMap(lay, line, ox, line.baseline, g.k, g.w / 2) : g.tp, m0 = c.getTransform();
+      const toCurve = () => { c.translate(Gm.x, Gm.y); c.rotate(Gm.a); c.translate(-ox, -line.baseline); };
+      if (st.clip === true) { toCurve(); maskClip(); c.setTransform(m0); } // a janela da máscara acompanha a letra no caminho
+      else if (st.clip) clipFx(c, st, lay.blockW, lay.blockH);
+      c.globalAlpha *= a;
+      // o movimento da animação vale no caminho: em volta do pivô levado para lá, "subir" = para fora da curva
+      if (st.dx || st.dy || st.rot || st.kx || (st.sc ?? 1) !== 1 || (st.sx ?? 1) !== 1 || (st.sy ?? 1) !== 1) {
+        const Pv = unit === 'all' ? { x:0, y:0, a:0 } : unit === 'char' ? tpMap(lay, line, px + track, py, g.k, g.w / 2) : tpMap(lay, line, px, py, null, g.w / 2);
+        c.translate(Pv.x, Pv.y); c.rotate(Pv.a); c.translate(st.dx || 0, st.dy || 0); applyXf(c, st); c.rotate(-Pv.a); c.translate(-Pv.x, -Pv.y);
+      }
+      toCurve();
+    } else {
+      if (st.clip === true) maskClip();
+      else if (st.clip) clipFx(c, st, lay.blockW, lay.blockH);
+      c.globalAlpha *= a;
+      c.translate(px + (st.dx || 0), py + (st.dy || 0));
+      applyXf(c, st);
+      c.translate(-px, -py);
+    }
     if (lay.mixed) c.font = g.f;
     let ch = g.ch, gx = line.x0 + g.x + track;
     if (st.scr) { ch = SCR[Math.floor(rand(seed, g.ci + 3) * SCR.length)]; gx = line.x0 + g.x + g.w / 2 - c.measureText(ch).width / 2; }
@@ -2840,6 +3070,7 @@ function drawText(ctx, L, t, R) {
     const box = (x, y, w, hb) => { if (w > .01 && hb > .01) { rrect(c, x, y, w, hb, tbg.r); c.fill(); } };
     c.save(); c.fillStyle = L.hl || '#D98E4A';
     const ls = lay.lines.filter(l => l.text.trim());
+    if (tpd) { for (const l of ls) { const am = amt(l.li); if (am > .001) { c.beginPath(); tpBandPts(lay, l, tbg, am).forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y)); c.fill(); } } c.restore(); return; } // em curva: uma faixa por linha, seguindo o caminho
     if (tbg.block && ls.length) box(-lay.innerW / 2 - tbg.px, mid(ls[0]) - hh, (lay.innerW + 2 * tbg.px) * Math.max(...ls.map(l => amt(l.li))), mid(ls[ls.length - 1]) - mid(ls[0]) + 2 * hh);
     else for (const l of ls) box(l.x0 - tbg.px, mid(l) - hh, (l.width + 2 * tbg.px) * amt(l.li), 2 * hh);
     c.restore();
@@ -2878,12 +3109,16 @@ function drawText(ctx, L, t, R) {
   } else paint(ctx, stateFor);
   // cursor
   if (P && P.cursor && ph.mode === 'in') {
-    let gx = 0, by = 0, found = false;
-    for (const line of lay.lines) for (const g of line.glyphs) if (g.ci === lastVisible) { gx = line.x0 + g.x + g.w + size * .06; by = line.baseline; found = true; }
+    let gx = 0, by = 0, found = false, cl = lay.lines[0], ck = 0;
+    for (const line of lay.lines) for (const g of line.glyphs) if (g.ci === lastVisible) { gx = line.x0 + g.x + g.w + size * .06; by = line.baseline; found = true; cl = line; ck = g.k + 1; }
     if (!found && lay.lines[0]) { gx = lay.lines[0].x0; by = lay.lines[0].baseline; }
-    if (Math.floor(t * 3) % 2 === 0 || ph.p < .95) { ctx.fillStyle = L.color; ctx.fillRect(gx, by - size * .78, Math.max(3, size * .06), size * .9); }
+    if ((Math.floor(t * 3) % 2 === 0 || ph.p < .95) && cl) {
+      ctx.fillStyle = L.color;
+      if (tpd) { const q = tpMap(lay, cl, gx, by, ck, size * .1); ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(q.a); ctx.fillRect(0, -size * .78, Math.max(3, size * .06), size * .9); ctx.restore(); } // no caminho
+      else ctx.fillRect(gx, by - size * .78, Math.max(3, size * .06), size * .9);
+    }
   }
-  drawMark(ctx, L, lay, ph, t, R); // marca à mão (sublinhar, circular, riscar…)
+  if (!tpd) drawMark(ctx, L, lay, ph, t, R); // marca à mão (sublinhar, circular, riscar…); no texto em curva não vale
   ctx.restore();
 }
 
@@ -3080,18 +3315,18 @@ function adjVignette(ctx, v, w, hh) {
 function blockGeom(L) {
   if (L.type === 'logo') {
     const lg = logoOf(L); if (!lg) return null;
-    const w = L.size * W(); const s = w / lg.bw; return { w, h:lg.bh * s, s };
+    const w = L.size * SU; const s = w / lg.bw; return { w, h:lg.bh * s, s };
   }
   if (L.type === 'image') {
-    const img = (L.video && videoEl(L)) || imgNow(L.src); const w = L.size * W(); // vídeo: o quadro atual; até carregar, o pôster (src)
-    const h = L.mask && L.mask !== 'fit' && L.mh != null ? L.mh * W() : img ? w * img.naturalHeight / img.naturalWidth : w * .75;
+    const img = (L.video && videoEl(L)) || imgNow(L.src); const w = L.size * SU; // vídeo: o quadro atual; até carregar, o pôster (src)
+    const h = L.mask && L.mask !== 'fit' && L.mh != null ? L.mh * SU : img ? w * img.naturalHeight / img.naturalWidth : w * .75;
     return { w, h, img };
   }
   if (L.type === 'shape') {
-    const w = L.size * W();
+    const w = L.size * SU;
     if (L.kind === 'custom') { const b = customBox(L.d); return { w, h:w * b.h / b.w, cust:b }; }
     if (L.kind === 'line') return { w, h:Math.max(1, L.strokeW || 8) };
-    return { w, h:(L.kind === 'ellipse' && L.mh == null ? L.size : L.mh ?? L.size * .6) * W() };
+    return { w, h:(L.kind === 'ellipse' && L.mh == null ? L.size : L.mh ?? L.size * .6) * SU };
   }
   if (L.type === 'cta') {
     const tw = ctaMeasure(L).w;
@@ -3530,7 +3765,9 @@ function drawBlockBody(ctx, L, G, info, R) {
     if (ls) ctx.letterSpacing = '0px';
   }
 }
-const freeType = L => ((L.type === 'image' || L.type === 'shape') && !L.keepIn); // sem margem: imagem e forma podem sangrar (com "Manter dentro da margem" obedecem)
+const freeType = L => ((L.type === 'image' || L.type === 'shape' || tpFree(L)) && !L.keepIn); // sem margem: imagem e forma podem sangrar (com "Manter dentro da margem" obedecem)
+// texto em círculo ou numa forma é desenho, como a forma: a caixa (o círculo inteiro) não é empurrada pela margem, senão saía do disco/da forma
+const tpFree = L => L.type === 'text' && (L.tpath === 'circle' || L.tpath === 'shape') && !!tpKind(L);
 // tamanho do bloco no formato aberto (fora do principal, a máscara de foto ou forma em retângulo pode mudar)
 function geomNow(L) { const G = blockGeom(L); if (!G) return G; const pl = placeOf(L); return pl.hh || pl.ww ? { ...G, h:pl.hh || G.h, w:pl.ww || G.w } : G; }
 function drawBlock(ctx, L, t, R) {
@@ -3697,6 +3934,7 @@ function layerSig(L, t, hid) {
   let fr = ''; for (let g = L.grp, n = 0; g && n < 20; g = gpar(g), n++) if (gPaintOn(g)) fr += JSON.stringify(frameRect(g));
   // vídeo: o quadro que está pronto agora (o decodificado chega depois do pedido; parado, o tempo não muda e o cache segurava o anterior)
   if (vidOn(L)) { const v = VIDS.get(L.id); fr += v ? `v${v.ok ? 1 : 0}${v.gOk ? 1 : 0}${v.gAt}|${v.el.currentTime}|${v.el.seeking ? 1 : 0}` : 'v-'; }
+  { const sh = tpLink(L); if (sh) fr += JSON.stringify(sh, TP_SH_SIG) + JSON.stringify(geomNow(sh)) + sh.keepIn; } // texto que segue uma forma: o desenho e o tamanho dela
   return JSON.stringify(L, SIG_SKIP) + JSON.stringify(placeOf(L)) + ph.mode + fr + (!hid && layerMoves(L, ph) ? '@' + t : '');
 }
 // fundo escondido: fotos opacas e paradas cobrem todos os slides, então o movimento/granulado do fundo não aparece e, no cache,
@@ -3720,7 +3958,7 @@ function opaqueCover(L, t) {
   if (!imgOpaque(imgNow(L.src))) return null;
   const q = restRect(L); if (!q) return null;
   // cantos arredondados: só cobre o que fica a um raio da borda dela (o canto fica para fora do slide)
-  const r = L.mask === 'rect' ? Math.max(0, ...[].concat(radOf(L))) * (q.b.k || q.b.w / Math.max(1, L.size * W())) : 0;
+  const r = L.mask === 'rect' ? Math.max(0, ...[].concat(radOf(L))) * (q.b.k || q.b.w / Math.max(1, L.size * SU)) : 0;
   return { x:q.b.x + r, y:q.b.y + r, w:q.b.w - 2 * r, h:q.b.h - 2 * r };
 }
 function bgHidden(els, t) {
@@ -3856,7 +4094,7 @@ function drawFrame(ctx, t, rs, isExport, clip) {
    Tudo por preset. Câmera e transição são camadas da timeline (tipos 'camera' e 'fx'): não aparecem no palco
    e só valem entre o início e o fim da barra. Sombra, marca, movimento e moldura são escolhas da própria camada.
    ============================================================ */
-const NOBOX = L => L.type === 'camera' || L.type === 'fx';
+const NOBOX = L => L.type === 'camera' || L.type === 'fx' || L.type === 'audio'; // áudio: só tempo, também não aparece no palco
 const sinIO = u => .5 - .5 * Math.cos(Math.PI * clamp(u));
 const hashId = s => { let x = 7; for (const c of String(s)) x = (x * 31 + c.charCodeAt(0)) % 100003; return x; };
 // telas de apoio do tamanho do quadro: uma por uso e por tamanho
@@ -4296,7 +4534,7 @@ const slideClipOf = L => !!L.slideClip || L.inSlide === true;
 function restRect(L) {
   if (L.type === 'text') {
     const lay = layoutText(L, caseTxt(L, L.text)), pl = placeOf(L);
-    const fit = inFlow(L) ? { ax:pl.x * W(), ay:pl.y * H(), k:1 } : fitInMargin(pl.x * W(), pl.y * H(), lay.blockW * pl.k, lay.blockH * pl.k), fk = fit.k * pl.k;
+    const fit = textFit(L, lay, pl), fk = fit.k * pl.k;
     return { b:{ x:fit.ax - lay.blockW * fk / 2, y:fit.ay - lay.blockH * fk / 2, w:lay.blockW * fk, h:lay.blockH * fk, k:fk }, size:lay.size * fk };
   }
   const G = geomNow(L); if (!G) return null;
@@ -4640,13 +4878,20 @@ function markPaths(L, lay) {
   return out.map(P => { let len = 0; for (let i = 1; i < P.length; i++) len += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]); return { P, len }; });
 }
 const MARKC = new Map();
+/* velocidade e intensidade da marca, separadas na entrada e na saída (pedido do usuário). Ausente: a entrada segue a
+   velocidade da entrada do texto, a saída 1×, intensidade 50% (= a curva de antes: cúbica na entrada, linear na saída) */
+const MARK_RHY = { in:['markInSpeed', 'markInInt'], out:['markOutSpeed', 'markOutInt'] };
+const markSpd = (L, m) => L[MARK_RHY[m][0]] ?? (m === 'in' ? spdOf(L, 'in') : 1) ?? 1;
+const markInt = (L, m) => L[MARK_RHY[m][1]] ?? .5;
 // chamada no fim de drawText, no espaço do bloco de texto (acompanha posição, escala e movimento contínuo)
 function drawMark(ctx, L, lay, ph, t, R) {
   if (!L.mark || L.mark === 'none' || !MARKS[L.mark]) return;
-  const big = L.mark === 'circle' || L.mark === 'box' || L.mark === 'arrow', sp = spdOf(L, 'in') || 1;
+  const big = L.mark === 'circle' || L.mark === 'box' || L.mark === 'arrow', sp = markSpd(L, 'in') || 1;
   const t0 = L.start + ph.inD * .8, md = (big ? .8 : .55) / sp;
-  let pr = stillNow(L) ? 1 : Ease.cubicOut(clamp((t - t0) / md)), a = 1;
-  if (ph.mode === 'out') { pr *= 1 - clamp(ph.p * 1.5); a = 1 - clamp(ph.p * 1.4 - .3); }
+  // intensidade = força da curva: entrada 1 - (1-u)^k (k = 3 em 50%), saída u^k (k = 1 em 50%)
+  const kIn = 3 * 2 ** ((markInt(L, 'in') - .5) * 3), kOut = 2 ** ((markInt(L, 'out') - .5) * 3);
+  let pr = stillNow(L) ? 1 : 1 - (1 - clamp((t - t0) / md)) ** kIn, a = 1;
+  if (ph.mode === 'out') { const q = clamp(ph.p * 1.5 * (markSpd(L, 'out') || 1)) ** kOut; pr *= 1 - q; a = 1 - clamp(q * 1.4 - .3); }
   if (pr <= 0 || a <= 0) return;
   const key = [L.id, L.mark, lay.blockW.toFixed(1), lay.blockH.toFixed(1), lay.size, lay.nLines].join('|');
   let paths = MARKC.get(key); if (!paths) { if (MARKC.size > 200) MARKC.clear(); paths = markPaths(L, lay); MARKC.set(key, paths); }
@@ -4978,6 +5223,7 @@ function drawOverlays() {
       ctx.setLineDash([]); ctx.lineWidth = 1.25 / OS;
       ctx.strokeStyle = uiA('sel', .9);
       outlineBox(ctx, L._bounds, L, selPad(L)); // girada (forma ou grupo): a caixa gira junto
+      if (tpKind(L)) drawTpGuide(ctx, L, FW() / (cv.getBoundingClientRect().width || 1)); // texto em curva: o caminho e a bolinha de apoio
       handlesOf(L).forEach(hdl);
       for (const q of radDots(L)) { // cantos arredondados: bolinha vazada dentro de cada canto
         const on = RT.drag && RT.drag.mode === 'rad' && RT.drag.ci === q.ci;
@@ -4993,7 +5239,7 @@ function drawOverlays() {
   }
   // largura máx. do texto enquanto arrasta a alça lateral: onde as linhas quebram
   if (RT.drag && RT.drag.mode === 'rs' && RT.drag.how === 'tw' && RT.drag.L._bounds) {
-    const D = RT.drag, b = D.L._bounds, cx = b.x + b.w / 2, hw = D.L.maxW * W() * D.k / 2;
+    const D = RT.drag, b = D.L._bounds, cx = b.x + b.w / 2, hw = D.L.maxW * SU * D.k / 2;
     ctx.setLineDash([8, 8]); ctx.lineWidth = 1.5 / OS; ctx.strokeStyle = uiA('frame', .9);
     ctx.beginPath(); ctx.moveTo(cx - hw, 0); ctx.lineTo(cx - hw, H()); ctx.moveTo(cx + hw, 0); ctx.lineTo(cx + hw, H()); ctx.stroke(); ctx.setLineDash([]);
   }
@@ -5317,13 +5563,125 @@ function hitTest(pt) {
     const a = rotOf(L), cm = camOf(L);
     if (a || (cm && cm.ga)) { // forma ou grupo girado: testa no espaço da camada, sem o giro
       const q = rotPt(camInv(cm, pt), boxC(L._bounds), -a), b = L._bounds, p = 16;
-      if (q.x >= b.x - p && q.x <= b.x + b.w + p && q.y >= b.y - p && q.y <= b.y + b.h + p) return L;
+      if (q.x >= b.x - p && q.x <= b.x + b.w + p && q.y >= b.y - p && q.y <= b.y + b.h + p && tpHitOk(L, q)) return L;
       continue;
     }
     const b = visB(L), p = 16;
-    if (pt.x >= b.x - p && pt.x <= b.x + b.w + p && pt.y >= b.y - p && pt.y <= b.y + b.h + p) return L;
+    if (pt.x >= b.x - p && pt.x <= b.x + b.w + p && pt.y >= b.y - p && pt.y <= b.y + b.h + p && tpHitOk(L, cm ? camInv(cm, pt) : pt)) return L;
   }
   return null;
+}
+/* ------------ texto em curva no palco ------------
+   Clique só pega perto das letras (no círculo, o meio fica livre para a forma ou o que estiver atrás). A bolinha no caminho é onde o
+   texto se apoia: arrastar desliza o texto pelo caminho (tpOff; Shift = de 15 em 15°). O texto que segue uma forma também desliza
+   quando é arrastado (mover não faz sentido: ele fica onde a forma está). O caminho aparece fino com o texto escolhido. */
+// quadro (camada, sem câmera) <-> espaço do texto (px, centro do caminho em 0)
+function tpSpace(L) {
+  if (!tpKind(L) || !L._bounds) return null;
+  const lay = layoutText(L, caseTxt(L, L.text)), tp = lay.tp; if (!tp) return null;
+  const b = L._bounds, k = b.k || b.w / lay.blockW || 1, cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  return { lay, tp, k, toLoc:p => ({ x:(p.x - cx) / k + tp.sx, y:(p.y - cy) / k + tp.sy }), toStage:p => ({ x:cx + (p.x - tp.sx) * k, y:cy + (p.y - tp.sy) * k }) };
+}
+function tpHitOk(L, p) {
+  const sp = tpSpace(L); if (!sp) return true;
+  const { lay, tp, k } = sp, q0 = sp.toLoc(p), x = q0.x - tp.sx, y = q0.y - tp.sy, pad = 10 / k, bg = !!textBg(L);
+  for (const line of lay.lines) for (const g of line.glyphs) {
+    if (g.space && !bg) continue;
+    const q = g.tp, co = Math.cos(q.a), si = Math.sin(q.a), dx = x - q.x, dy = y - q.y, lx = dx * co + dy * si, ly = -dx * si + dy * co;
+    if (Math.abs(lx) <= g.w / 2 + tp.px + pad && ly >= tp.yT - pad && ly <= tp.yB + pad) return true;
+  }
+  return false;
+}
+// onde o texto se apoia (círculo e forma): a bolinha que desliza
+function tpHandle(L) {
+  if (playing || RT.pen || RT.vec || RT.exporting || !L || L.locked || !L.visible || pickedLayers().length !== 1 || !phase(L, T)) return null;
+  const kd = tpKind(L); if (kd !== 'circle' && kd !== 'shape') return null;
+  const sp = tpSpace(L); if (!sp) return null;
+  const p = tpPt(sp.tp.T, sp.lay.lines[0].tpl.s0), v = camFwd(camOf(L), sp.toStage(p));
+  return { k:'tp', tp:true, hx:0, hy:0, x:v.x, y:v.y };
+}
+// arrastar desliza pelo caminho: o quanto andou no caminho, do ponto pego até o mouse (o texto não pula para o mouse)
+function tpSlideStart(ev, pt, L, undo = true) {
+  const sp = tpSpace(L); if (!sp) return false;
+  if (undo) pushUndo();
+  const cm = camOf(L), T0 = sp.tp.T, at = q => { const l = sp.toLoc(camInv(cm, q)); return tpNear(T0, l.x, l.y); };
+  const s = at(pt);
+  RT.drag = { L, mode:'tpslide', at, len:T0.len, closed:T0.closed, prev:s, acc:0, s0:sp.lay.lines[0].tpl.s0, flip:!!L.tpFlip, circ:L.tpath === 'circle', pxy:[ev.clientX, ev.clientY] };
+  cv.setPointerCapture(ev.pointerId);
+  return true;
+}
+function tpSlideTo(D, pt, ev) {
+  if (!D.go) { if (Math.hypot(ev.clientX - D.pxy[0], ev.clientY - D.pxy[1]) <= 3) return; D.go = true; }
+  const s = D.at(pt); let ds = s - D.prev; D.prev = s;
+  if (D.closed) ds = ((ds + D.len / 2) % D.len + D.len) % D.len - D.len / 2; // passou pelo começo da volta
+  D.acc += ds;
+  let f = (D.s0 + D.acc) / D.len; if (D.flip) f = 1 - f;
+  if (ev.shiftKey) f = Math.round(f * 24) / 24;
+  f = D.closed ? ((f % 1) + 1) % 1 : clamp(f);
+  D.L.tpOff = +f.toFixed(4); D.show = D.circ ? Math.round(f * 360) % 360 + '°' : Math.round(f * 100) + '%';
+  const i = document.getElementById(fid(D.L, 'tpOff')); if (i) { i.value = f; const o = i.parentElement.querySelector('.num'); if (o && document.activeElement !== o) o.value = D.show; }
+}
+// setas no texto que segue uma forma: deslizam pelo caminho (1 px de caminho, Shift 10)
+function tpNudge(L, d) {
+  const sp = tpSpace(L); if (!sp) return false;
+  const T0 = sp.tp.T, f0 = L.tpOff ?? (T0.closed ? 0 : .5), df = d / Math.max(1, T0.len) * (L.tpFlip ? -1 : 1);
+  pushUndo(); L.tpOff = +(T0.closed ? (((f0 + df) % 1) + 1) % 1 : clamp(f0 + df)).toFixed(4); changed({ props:true });
+  return true;
+}
+// o caminho, fino, e a bolinha de apoio (overlay, unidades do quadro)
+function drawTpGuide(ctx, L, px) {
+  const sp = tpSpace(L); if (!sp) return;
+  const cm = camOf(L), P = sp.tp.T.P, pt = q => camFwd(cm, sp.toStage({ x:q[0], y:q[1] }));
+  ctx.save(); ctx.setLineDash([4 * px, 4 * px]); ctx.lineWidth = 1 * px; ctx.strokeStyle = uiA('sel', .7);
+  ctx.beginPath(); P.forEach((q, i) => { const v = pt(q); i ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y); }); ctx.stroke(); ctx.setLineDash([]);
+  const hd = tpHandle(L);
+  if (hd) {
+    const on = RT.drag && RT.drag.mode === 'tpslide';
+    ctx.beginPath(); ctx.arc(hd.x, hd.y, hRad() * (on ? .5 : .42), 0, TAU);
+    ctx.fillStyle = uiC('sel'); ctx.fill(); ctx.lineWidth = hRad() / 7; ctx.strokeStyle = uiC('bg'); ctx.stroke();
+    if (on && RT.drag.show) {
+      const txt = RT.drag.show; ctx.font = `600 ${12 * px}px Inter, system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const tw = ctx.measureText(txt).width + 14 * px, th = 20 * px, ty = hd.y - 22 * px;
+      ctx.fillStyle = uiC('sel'); rrect(ctx, hd.x - tw / 2, ty - th / 2, tw, th, 4 * px); ctx.fill();
+      ctx.fillStyle = uiC('selInk'); ctx.fillText(txt, hd.x, ty + px * .5);
+    }
+  }
+  ctx.restore();
+}
+// liga o texto ao caminho de uma forma: fica onde a forma está e acompanha (tamanho, pontos, giro, posição em todo formato)
+function tpAttach(L, sh) {
+  if (!L || !sh || L.type !== 'text' || sh.type !== 'shape') return;
+  if (lockedNote([L])) return;
+  pushUndo();
+  L.tpath = 'shape'; L.tpRef = sh.id; delete L.tpOff; delete L.tpFlip; delete L.tpFit; // começa por fora, centrado em cima (o que valia no círculo não serve aqui)
+  // atrás da forma, o preenchimento dela cobriria o texto: sobe logo acima dela (se nenhum dos dois está num grupo)
+  const i = S.layers.indexOf(L), j = S.layers.indexOf(sh);
+  if (i < j && !L.grp && !sh.grp) { S.layers.splice(i, 1); S.layers.splice(S.layers.indexOf(sh) + 1, 0, L); }
+  RT.layout.clear(); tpSync();
+  changed({ props:true, layers:true }); renderTimeline();
+  toast('O texto segue a forma. Arraste o texto (ou a bolinha) para deslizar pelo caminho');
+}
+// texto + forma escolhidos (para "Pôr o texto na forma")
+function tpPair() {
+  const ls = pickedLayers(); if (ls.length !== 2) return null;
+  const t = ls.find(o => o.type === 'text'), s = ls.find(o => o.type === 'shape');
+  return t && s ? { t, s } : null;
+}
+// a cada mudança: o texto que segue uma forma guarda a posição e uma cópia do caminho dela (se a forma for apagada, ele fica onde estava)
+function tpSync() {
+  if (!S) return;
+  for (const L of S.layers) {
+    if (L.type !== 'text' || L.tpath !== 'shape' || !L.tpRef) continue;
+    const sh = tpLink(L);
+    if (!sh) { delete L.tpRef; continue; }
+    L.x = sh.x; L.y = sh.y;
+    if (sh.fpos) { const fp = {}; for (const [f, v] of Object.entries(sh.fpos)) if (v && (v.x != null || v.y != null || v.s != null)) fp[f] = { x:v.x, y:v.y, s:v.s }; L.fpos = fp; }
+    else delete L.fpos;
+    const G = blockGeom(sh); if (!G) continue;
+    const src = tpShapeLine(sh, G), a = []; for (const [x, y] of src.pts) a.push(+x.toFixed(1), +y.toFixed(1));
+    if (!L.tpPts || L.tpPts.length !== a.length || L.tpPts.some((v, n) => v !== a[n])) L.tpPts = a;
+    L.tpClosed = src.closed;
+  }
 }
 // alças: canto = escala tudo; lateral/baixo = largura/altura da máscara da imagem; lateral do texto = largura máx. (quebra de linha)
 const hRad = () => 11 * FW() / (cv.getBoundingClientRect().width || 1);
@@ -5332,7 +5690,7 @@ const hRad = () => 11 * FW() / (cv.getBoundingClientRect().width || 1);
 const SEL_FINE = .55;
 function selPad(L) {
   if (!L || L.type !== 'shape' || L.kind === 'line' || !strokeOn(L)) return 0;
-  const g = L._bounds && L.size ? L._bounds.w / (L.size * W()) : 1, pos = L.strokePos || 'center';
+  const g = L._bounds && L.size ? L._bounds.w / (L.size * SU) : 1, pos = L.strokePos || 'center';
   return skW(L) * (pos === 'outside' ? 1 : pos === 'inside' ? 0 : .5) * (isFinite(g) && g > 0 ? g : 1);
 }
 const masked = L => L.type === 'image' && (L.mask === 'rect' || L.mask === 'circle');
@@ -5350,7 +5708,7 @@ function selUnion() {
 // (imagem com máscara e forma: só largura ou só altura; texto: largura de quebra nas laterais; linha: comprimento e espessura; o resto escala).
 // Alt ao arrastar escala a partir do centro. [hx, hy] = para que lado a alça puxa.
 // rotação: forma (L.rot) e grupo inteiro (S.groups[gid].rot, `gRad`), em graus, em torno do centro. A caixa da seleção e as alças giram junto
-const rotOf = L => L && L.type === 'shape' && L.rot ? L.rot * Math.PI / 180 : 0;
+const rotOf = L => L && (L.type === 'shape' || L.type === 'text') && L.rot ? L.rot * Math.PI / 180 : 0;
 const boxC = b => ({ x:b.x + b.w / 2, y:b.y + b.h / 2 });
 const rotPt = (p, c, a) => { const co = Math.cos(a), si = Math.sin(a), x = p.x - c.x, y = p.y - c.y; return { x:c.x + x * co - y * si, y:c.y + x * si + y * co }; };
 const ROT_ARC = 'M5 12a7 7 0 0 1 12-4.9M19 12a7 7 0 0 1-12 4.9';
@@ -5365,7 +5723,7 @@ function handlesOf(L) {
   const at = { nw:[x0, y0], n:[mx, y0], ne:[x1, y0], e:[x1, my], se:[x1, y1], s:[mx, y1], sw:[x0, y1], w:[x0, my] };
   const min = hRad() * 1.9 * SEL_FINE; // alça de lado que encostaria nas de canto some (elemento pequeno no zoom baixo)
   // padrão: só o canto escala; o lado só existe onde muda outra coisa (frame: tamanho; texto: largura da caixa; máscara, forma e linha: largura ou altura)
-  const sideOk = k => { const [kx, ky] = HDIR[k]; if (kx && ky) return true; if (ub) return !!ub.gid; if (L.type === 'text') return ky === 0; return resizable(L) || (L.type === 'shape' && L.kind === 'line'); };
+  const sideOk = k => { const [kx, ky] = HDIR[k]; if (kx && ky) return true; if (ub) return !!ub.gid; if (L.type === 'text') return ky === 0 && !tpKind(L); return resizable(L) || (L.type === 'shape' && L.kind === 'line'); };
   const cm = camOf(L), ra = ub ? 0 : rotOf(L), rc = { x:mx, y:my }; // x/y = onde a alça aparece na tela (com giro e câmera); lx/ly = o mesmo ponto no espaço da camada, sem giro (as contas de escala partem dele)
   return Object.keys(HDIR).filter(sideOk).filter(k => !(HDIR[k][0] === 0 && b.w / 2 + p < min) && !(HDIR[k][1] === 0 && b.h / 2 + p < min))
     .map(k => { const v = camFwd(cm, ra ? rotPt({ x:at[k][0], y:at[k][1] }, rc, ra) : { x:at[k][0], y:at[k][1] }); return { k, hx:HDIR[k][0], hy:HDIR[k][1], x:v.x, y:v.y, lx:at[k][0], ly:at[k][1], grp:!!ub, a:ra + (cm ? cm.ga : 0) }; }); // a = giro com que a alça aparece
@@ -5375,10 +5733,11 @@ function rotTarget() {
   if (playing || RT.pen || RT.vec) return null;
   const L = selL(), ub = L && selUnion();
   if (ub) { const gid = ub.gid || ub.rg; return gid && freePicked().length === pickedLayers().length ? { gid, b:ub, p:0, a:0 } : null; } // grupo com item bloqueado não gira
-  return L && L.type === 'shape' && !L.locked && pickedLayers().length === 1 ? { L, b:L._bounds, p:selPad(L), a:rotOf(L) } : null;
+  return L && (L.type === 'shape' || L.type === 'text') && !L.locked && pickedLayers().length === 1 ? { L, b:L._bounds, p:selPad(L), a:rotOf(L) } : null;
 }
 function handleAt(pt) {
   const r = hRad() * 1.3, d = q => Math.hypot(pt.x - q.x, pt.y - q.y);
+  const th = tpHandle(selL()); if (th && d(th) <= hRad() * 1.1) return th; // texto em curva: a bolinha onde ele se apoia
   const hs = handlesOf(selL()), hit = hs.filter(q => Math.abs(pt.x - q.x) <= r && Math.abs(pt.y - q.y) <= r).sort((a, b) => d(a) - d(b))[0];
   if (hit) return hit;
   const rd = radDots(selL()).filter(q => d(q) <= hRad() * 1.1).sort((a, b) => d(a) - d(b))[0]; if (rd) return rd; // cantos arredondados
@@ -5449,6 +5808,7 @@ function scaleLayer(L, s0, f) {
   if (L.type === 'text') {
     L.size = Math.round(clamp(s0.size * f, 6, 600)); RT.layout.clear();
     if (s0.mw != null) L.maxW = +clamp(s0.mw * L.size / s0.size, .1, 1).toFixed(4);
+    for (const k of ['tpR', 'tpAmp', 'tpLen', 'tpDist']) if (s0[k] != null) L[k] = +(s0[k] * L.size / s0.size).toFixed(5); // texto em curva: o caminho escala junto
     return L.size / s0.size;
   }
   if (L.type === 'cta') { L.size = Math.round(clamp(s0.size * f, 8, 200)); L.padX = Math.round(s0.padX * f); L.padY = Math.round(s0.padY * f); return L.size / s0.size; }
@@ -5469,7 +5829,7 @@ function startResize(ev, pt, hd) {
     if (resizable(L)) how = hy === 0 ? 'wid' : hx === 0 ? 'hei' : 'uni';
     else if (L.type === 'shape' && L.kind === 'line') how = hy === 0 ? 'wid' : hx === 0 ? 'thick' : 'uni';
     else if (L.type === 'text' && hy === 0) how = 'tw';
-    if (resizable(L) && L.mh == null) L.mh = (S.format === baseFmt() ? b.h : blockGeom(L).h) / W(); // fora do principal a altura na tela pode estar esticada
+    if (resizable(L) && L.mh == null) L.mh = (S.format === baseFmt() ? b.h : blockGeom(L).h) / SU; // fora do principal a altura na tela pode estar esticada
   }
   const items = (grp ? freePicked().filter(o => o._bounds) : [L]).map(o => { const q = posOf(o); return { o, n0:natBox(o), x0:q.x, y0:q.y, ox:o._bounds.x + o._bounds.w / 2, oy:o._bounds.y + o._bounds.h / 2, s0:{ ...size0(o), strokeW:o.strokeW } }; });
   RT.drag = { L, mode:'rs', cm, how, hx, hy, pad:grp ? 0 : selPad(L), pt0:pt, rotA:ra, items, off:{ x:pt.x - hd.x, y:pt.y - hd.y }, b0:{ w:b.w, h:b.h }, C:{ x:cx, y:cy }, g0:grp ? null : geomNow(L),
@@ -5554,8 +5914,8 @@ function resizeTo(D, pt, ev) {
       const room = alt ? 2 * Math.min(D.C.x - Mg.x0, Mg.x1 - D.C.x) : hx > 0 ? Mg.x1 - D.A.x : D.A.x - Mg.x0;
       cap = Math.max(D.bw + 1, room / D.k); // se já estava além da margem, não encolhe de repente
     }
-    const mw = clamp(D.bw + d + 1, .1 * W(), Math.max(.1 * W(), cap));
-    L.fixW = true; L.maxW = +(mw / W()).toFixed(4);
+    const mw = clamp(D.bw + d + 1, .1 * SU, Math.max(.1 * SU, cap));
+    L.fixW = true; L.maxW = +(mw / SU).toFixed(4);
     if (!alt) setPos(L, +(q0.x0 + hx * (mw - D.bw - 1) * D.k / 2 / W()).toFixed(5), null);
     RT.layout.clear(); return;
   }
@@ -5566,14 +5926,14 @@ function resizeTo(D, pt, ev) {
     // fora do formato principal a máscara muda só neste formato (fpos ww/hh, px do bloco antes da escala)
     if (D.how === 'wid') {
       let aw; // largura que valeu de fato
-      if (fmtOwn()) { aw = clamp(span * dist, SZ_MIN * W(), W() * SZ_MAX); setFmt(L, { ww:+(D.g0.w * aw / D.b0.w).toFixed(2) }); }
-      else { L.size = clamp(D.s0.size * Math.max(SZ_MIN * W(), span * dist) / D.b0.w, SZ_MIN, SZ_MAX); aw = D.b0.w * L.size / D.s0.size; }
+      if (fmtOwn()) { aw = clamp(span * dist, SZ_MIN * SU, SU * SZ_MAX); setFmt(L, { ww:+(D.g0.w * aw / D.b0.w).toFixed(2) }); }
+      else { L.size = clamp(D.s0.size * Math.max(SZ_MIN * SU, span * dist) / D.b0.w, SZ_MIN, SZ_MAX); aw = D.b0.w * L.size / D.s0.size; }
       const v = rotV(D, alt ? 0 : A.x + hx * aw / 2 - D.C.x, 0); // o centro anda no espaço da forma; com giro, na diagonal
       setPos(L, +(q0.x0 + v.x / W()).toFixed(4), D.rotA ? +(q0.y0 + v.y / H()).toFixed(4) : null);
     } else {
       let ah;
-      if (D.how === 'hei' && fmtOwn()) { ah = clamp(span * dist, SZ_MIN * W(), W() * MH_MAX); setFmt(L, { hh:+(D.g0.h * ah / D.b0.h).toFixed(2) }); }
-      else if (D.how === 'hei') { L.mh = clamp(D.s0.mh * Math.max(SZ_MIN * W(), span * dist) / D.b0.h, SZ_MIN, MH_MAX); ah = D.b0.h * L.mh / D.s0.mh; }
+      if (D.how === 'hei' && fmtOwn()) { ah = clamp(span * dist, SZ_MIN * SU, SU * MH_MAX); setFmt(L, { hh:+(D.g0.h * ah / D.b0.h).toFixed(2) }); }
+      else if (D.how === 'hei') { L.mh = clamp(D.s0.mh * Math.max(SZ_MIN * SU, span * dist) / D.b0.h, SZ_MIN, MH_MAX); ah = D.b0.h * L.mh / D.s0.mh; }
       else { const s = Math.max(1, D.s0.strokeW || 8); L.strokeW = clamp(Math.round(s * Math.max(1, span * dist) / D.b0.h), 1, 80); ah = D.b0.h * Math.max(1, L.strokeW) / s; }
       const v = rotV(D, 0, alt ? 0 : A.y + hy * ah / 2 - D.C.y);
       setPos(L, D.rotA ? +(q0.x0 + v.x / W()).toFixed(4) : null, +(q0.y0 + v.y / H()).toFixed(4));
@@ -5642,7 +6002,7 @@ function cvDown(ev) {
   if (ev.button === 1) { panStage(ev); return; }
   if (ev.button === 2) return; // botão direito abre o menu (contextmenu)
   let pt = stagePt(ev), hd = handleAt(pt);
-  if (hd) { hd.rot ? startRotate(ev, pt) : hd.rad ? startRadius(ev, pt, hd) : startResize(ev, pt, hd); return; }
+  if (hd) { hd.rot ? startRotate(ev, pt) : hd.rad ? startRadius(ev, pt, hd) : hd.tp ? tpSlideStart(ev, pt, selL()) : startResize(ev, pt, hd); return; }
   const gp = flowGapAt(pt); if (gp) { startGapDrag(ev, pt, gp); return; } // espaço do layout automático
   const L = hitTest(pt) || ghostAt(pt) || frameHit(pt); // sem nada na tela ali, a seleção que está fora da tela também pega; no fundo de um frame pintado, o frame
   // fundo escolhido com imagem/vídeo: Alt + arrastar no vazio move a imagem dentro do quadro
@@ -5668,6 +6028,7 @@ function cvDown(ev) {
   // Alt + arrastar: a imagem dentro da máscara, ou a imagem/vídeo do preenchimento dentro da forma
   const pan = ev.altKey && !L.locked && L._bounds && (L.type === 'image' || mediaFill(L)), cm = camOf(L, pan ? null : new Set([L, ...freePicked()].map(o => o.id)));
   pt = camInv(cm, pt);
+  if (!pan && !L.locked && tpLink(L) && freePicked().length === 1 && freePicked()[0] === L && tpSlideStart(ev, stagePt(ev), L, false)) return; // texto que segue uma forma: arrastar desliza pelo caminho
   if (pan && L.type === 'image') { const pn = panOf(L); RT.drag = { L, cm, mode:'pan', pt0:pt, ix0:pn.ix, iy0:pn.iy, bw:L._bounds.w, bh:L._bounds.h }; }
   else if (pan) RT.drag = { L, cm, mode:'fpan', pt0:pt, x0:L.fix || 0, y0:L.fiy || 0, bw:L._bounds.w, bh:L._bounds.h, ra:rotOf(L) };
   else { const p = posOf(L); RT.drag = { L, cm, mode:'move', tap:grp, pxy:[ev.clientX, ev.clientY], ox:pt.x - p.x * W(), oy:pt.y - p.y * H(), others:freePicked().filter(o => o !== L).map(o => { const q = posOf(o); return { o, x0:q.x, y0:q.y }; }), x0:p.x, y0:p.y, ...snapSetup() }; RT.drag.fb = marginHold([L, ...RT.drag.others.map(q => q.o)]); flowGrab(RT.drag); }
@@ -5718,7 +6079,7 @@ cv.addEventListener('pointermove', ev => {
   if (!RT.drag) {
     if (RT.marq) return;
     const hd = handleAt(pt), gp = !hd && flowGapAt(pt), ht = !gp && (hitTest(pt) || ghostAt(pt) || frameHit(pt));
-    cv.style.cursor = hd ? (hd.rot ? ROT_CUR : hd.rad ? 'default' : HCUR[hd.k]) : gp ? (gp.v ? 'row-resize' : 'col-resize') : ht ? (ev.altKey && (ht.type === 'image' || mediaFill(ht)) ? 'all-scroll' : 'move') : '';
+    cv.style.cursor = hd ? (hd.rot ? ROT_CUR : hd.rad ? 'default' : hd.tp ? 'grab' : HCUR[hd.k]) : gp ? (gp.v ? 'row-resize' : 'col-resize') : ht ? (ev.altKey && (ht.type === 'image' || mediaFill(ht)) ? 'all-scroll' : 'move') : '';
     setHover(hd || gp ? null : ht && ht.id);
     const gk = gp && !gp.gid ? gapKey(gp) : null; if (RT.gapHot !== gk) { RT.gapHot = gk; needsOv = true; } // espaço do quadro só aparece com o mouse em cima
     return;
@@ -5730,6 +6091,7 @@ cv.addEventListener('pointermove', ev => {
   // como no Figma: só arrasta depois de 3 px; senão o tremido do clique, com o ímã das guias, puxava a seleção para a guia mais perto
   if (D.mode === 'move' && !D.go) { if (Math.hypot(ev.clientX - D.pxy[0], ev.clientY - D.pxy[1]) <= 3) return; D.go = true; }
   if (D.mode === 'gap') gapDrag(D, pt);
+  else if (D.mode === 'tpslide') tpSlideTo(D, pt, ev);
   else if (D.mode === 'rot') rotateTo(D, pt, ev);
   else if (D.mode === 'rs') resizeTo(D, pt, ev); // largura de quebra do texto ('tw'): parte da largura real do bloco (não da máx.), senão o começo do arrasto não faz nada; +1 px para não quebrar no empate
   else if (D.mode === 'pan') setPan(L, clamp(D.ix0 + (pt.x - D.pt0.x) / D.bw, -2, 2), clamp(D.iy0 + (pt.y - D.pt0.y) / D.bh, -2, 2));
@@ -5806,7 +6168,7 @@ function drillSelect(L) {
 }
 cv.addEventListener('dblclick', ev => {
   if (RT.pen || RT.vec) return; // caneta e edição de pontos tratam o clique sozinhas
-  const hd0 = handleAt(stagePt(ev)); if (hd0 && hd0.rad) return; // bolinha do canto: não entra na edição de pontos
+  const hd0 = handleAt(stagePt(ev)); if (hd0 && (hd0.rad || hd0.tp)) return; // bolinha do canto (ou de apoio do texto em curva): não entra na edição
   const L = hitTest(stagePt(ev)); if (!L) return;
   if (ev.shiftKey || ev.ctrlKey || ev.metaKey) return; // Shift/Ctrl + clique duplo só soma o item, não sobe para o grupo
   const pk0 = pickedLayers();
@@ -5907,7 +6269,7 @@ function vecApply(L, M) {
   L.d = L.vecD = d; if (CUST.size > 400) CUST.clear();
   const b = customBox(d), bx = b.x + b.w / 2, by = b.y + b.h / 2, u = (bx - M.bx) * M.s, v = (by - M.by) * M.s;
   M.ax += u * M.co - v * M.si; M.ay += u * M.si + v * M.co; M.bx = bx; M.by = by;
-  L.size = b.w * M.s / (M.k || 1) / W();
+  L.size = b.w * M.s / (M.k || 1) / SU;
   // fora do principal, gravar a posição daria ao item um fpos só dele e ele sairia da fila do layout automático (e da adaptação) dos outros
   const p0 = posOf(L), nx = M.ax / W(), ny = M.ay / H();
   if (!(fmtOwn() && !ownPos(L) && (S.flow || inFlow(L))) && Math.hypot((nx - p0.x) * W(), (ny - p0.y) * H()) > .01) setPos(L, nx, ny);
@@ -5927,7 +6289,7 @@ function penToolFinish(close) {
   const sp = { pts:P.pts, closed:!!close }, d = vecD([sp]), b = customBox(d);
   // estilo, preenchimento e entrada vêm do padrão "Desenho (caneta)" (lápis no botão Caneta): por fábrica, fechada preenche e aberta
   // fica só no traço, entrando com "Desenhar traço"
-  const L = penStyle(Object.assign(mkComp('pen'), { name:'Vetor', kind:'custom', d, vec:[sp], vecD:d, size:b.w / W(), penFill:compProps('pen').penFill }), close);
+  const L = penStyle(Object.assign(mkComp('pen'), { name:'Vetor', kind:'custom', d, vec:[sp], vecD:d, size:b.w / SU, penFill:compProps('pen').penFill }), close);
   addLayer(L, { x:(b.x + b.w / 2) / W(), y:(b.y + b.h / 2) / H() });
 }
 // clique = ponto de canto; arrastar = curva (alças simétricas; Alt solta a de entrada); Shift = 45°.
@@ -6474,7 +6836,7 @@ const DB = {
     if (DISK.dir && DISK.route(k)) { const v = await DISK.read(k); if (v !== undefined || !k.startsWith('media:')) return v; }
     return this._get(k);
   },
-  async set(k, v) { return DISK.dir && DISK.route(k) ? DISK.write(k, v) : this._set(k, v); },
+  async set(k, v) { const r = await (DISK.dir && DISK.route(k) ? DISK.write(k, v) : this._set(k, v)); if (k === 'files' || k === 'projects') ABAS.ping(k); return r; }, // avisa as outras abas (janela Arquivos)
   async del(k) { if (DISK.dir && DISK.route(k)) { await this._del(k); return DISK.remove(k); } return this._del(k); },
   async keys() {
     const ks = await this._keys();
@@ -6506,17 +6868,22 @@ async function flushSave() {
   saving = true;
   const id = FILES.id, ok = await DB.set('file:' + id, JSON.stringify(S));
   if (FILES.project) await DB.set('pbrand:' + FILES.project, JSON.stringify(S.brand)); // a marca é do projeto: vale para todos os arquivos dele
-  const list = (await DB.get('files')) || [];
-  let rec = list.find(f => f.id === id);
-  if (!rec) { rec = { id, name:FILES.name, createdAt:Date.now() }; if (FILES.project) rec.project = FILES.project; list.unshift(rec); }
-  rec.name = FILES.name; rec.updatedAt = Date.now(); rec.thumb = fileThumb() || rec.thumb;
-  const ok2 = await DB.set('files', list);
+  const thumb = fileThumb(), name = FILES.name;
+  const ok2 = await ABAS.idx(async () => { // o índice é lido, mudado e gravado sem outra aba no meio (senão uma perdia o nome/miniatura da outra)
+    const list = (await DB.get('files')) || [];
+    let rec = list.find(f => f.id === id);
+    if (!rec) { rec = { id, name, createdAt:Date.now() }; if (FILES.project) rec.project = FILES.project; list.unshift(rec); }
+    rec.name = name; rec.updatedAt = Date.now(); rec.thumb = thumb || rec.thumb;
+    return DB.set('files', list);
+  });
   saving = false;
   setSaveState(ok && ok2 ? 'Salvo' : 'Não salvou');
   if (!(ok && ok2)) toast(DISK.dir ? `Não consegui gravar na pasta "${DISK.name}". Confira se ela ainda existe e se o acesso está liberado.` : 'Este navegador bloqueou o armazenamento. Use Exportar .json.', 4200);
   if (!$('#files').hidden) renderFiles();
 }
 function changed(opts = {}) {
+  linkSync();
+  tpSync(); // texto que segue uma forma
   flowBake();
   RT.rev++; needs = true; autosave();
   refreshBars();
@@ -6525,18 +6892,19 @@ function changed(opts = {}) {
   if (opts.marks) renderMarks();
 }
 function newFileId() { return 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
-function showFileName() { const el = $('#fileName'); if (el && document.activeElement !== el) el.value = FILES.name; document.title = `${FILES.name} · Mola Studio`; }
+function showFileName() { const el = $('#fileName'); if (el && document.activeElement !== el) el.value = FILES.name; document.title = `${FILES.name} · Mola Studio`; ABAS.report(); }
 // abre um estado como arquivo (novo ou existente)
 async function openState(st, id, name, project = FILES.project) {
   if (saveT) await flushSave();
   if (!st || !st.layers || !st.brand) { toast('Arquivo de projeto inválido'); return false; }
+  if (!(await ABAS.claim(id))) { toast('Esse arquivo está aberto em outra aba.'); return false; } // um arquivo só abre numa aba
   if (project) try { const pb = JSON.parse(await DB.get('pbrand:' + project) || 'null'); if (pb) st.brand = pb; } catch (e) {} // marca do projeto
   await internImages(st); // foto em dataURL (arquivo antigo ou .json importado) vai para fora do JSON
   fixTornGroups(st);
   const pjChanged = (project || null) !== FILES.project;
   FILES.id = id; FILES.name = name; FILES.project = project || null; showFileName(); showProject();
   if (pjChanged) loadElements();
-  DB.set('currentId', id);
+  DB.set('currentId', id); ABAS.setCur(id);
   undoStack.length = 0; redoStack.length = 0; redoBase = null; HIST_STR.clear(); HIST_ID.clear(); syncHist();
   FC.pre = FC.suf = null; FC.sigs = null; LCACHE.clear(); LCACHE_PX = 0; // o cache do palco era do arquivo de antes
   S = st; RT.layout.clear(); RT.slide = 0; RT.slidePicks = null;
@@ -6551,6 +6919,7 @@ async function openState(st, id, name, project = FILES.project) {
   return true;
 }
 async function openFile(id) {
+  if (await ABAS.busy(id)) { await ABAS.openBusy(id); return; } // já está aberto em outra aba
   const list = (await DB.get('files')) || [], rec = list.find(f => f.id === id);
   let st = null; try { st = JSON.parse(await DB.get('file:' + id)); } catch (e) {}
   if (!rec || !st) { toast('Não consegui abrir esse arquivo'); return; }
@@ -6572,14 +6941,25 @@ async function newFile(project) {
   await openState(S, newFileId(), n === 1 ? 'Sem título' : `Sem título ${n}`, project);
   await flushSave(); closeFiles(); toast('Arquivo novo criado' + (project ? ` em "${(await projGet(project) || {}).name || 'projeto'}"` : ''));
 }
+// "Novo arquivo" pelos botões: abre numa aba nova em vez de trocar o arquivo desta (pedido do usuário). Rascunhos não têm marca de projeto,
+// então a marca do arquivo aberto vai junto; com projeto, a aba nova usa a marca dele
+function newFileTab(project) {
+  if (project === undefined) project = !$('#files').hidden && FVIEW !== '*' ? FVIEW || null : FILES.project;
+  closeFiles(); closeMenu();
+  ABAS.add({ novo:true, project, brand:!project && S && S.brand ? JSON.stringify(S.brand) : null });
+}
 async function duplicateFile(id) {
   if (id === FILES.id && saveT) await flushSave();
-  const list = (await DB.get('files')) || [], rec = list.find(f => f.id === id), data = await DB.get('file:' + id);
-  if (!rec || !data) return;
+  const data = await DB.get('file:' + id); if (!data) return;
   const nid = newFileId();
   await DB.set('file:' + nid, data);
-  list.unshift({ ...rec, id:nid, name:`${rec.name} (cópia)`, createdAt:Date.now(), updatedAt:Date.now() });
-  await DB.set('files', list); renderFiles();
+  const ok = await ABAS.idx(async () => {
+    const list = (await DB.get('files')) || [], rec = list.find(f => f.id === id); if (!rec) return false;
+    list.unshift({ ...rec, id:nid, name:`${rec.name} (cópia)`, createdAt:Date.now(), updatedAt:Date.now() });
+    await DB.set('files', list); return true;
+  });
+  renderFiles();
+  return ok ? nid : null;
 }
 // "Salvar como": o arquivo aberto fica como está e você passa a trabalhar na cópia
 async function saveAsCopy() {
@@ -6591,14 +6971,21 @@ async function saveAsCopy() {
 }
 async function renameFile(id, name) {
   name = name.trim(); if (!name) return;
+  if (await ABAS.busy(id)) { toast('Esse arquivo está aberto em outra aba. Renomeie por lá.'); renderFiles(); return; } // a outra aba regravaria o nome antigo
   if (id === FILES.id) { FILES.name = name; showFileName(); }
-  const list = (await DB.get('files')) || [], rec = list.find(f => f.id === id); if (!rec) return;
-  rec.name = name; await DB.set('files', list); renderFiles();
+  await ABAS.idx(async () => {
+    const list = (await DB.get('files')) || [], rec = list.find(f => f.id === id); if (!rec) return;
+    rec.name = name; await DB.set('files', list);
+  });
+  renderFiles();
 }
 async function deleteFile(id) {
-  const list = (await DB.get('files')) || [], i = list.findIndex(f => f.id === id); if (i < 0) return;
-  if (!(await askConfirm(`Apagar "${list[i].name}"?`, "O arquivo some de vez. Não dá para desfazer.", "Apagar arquivo", true))) return;
-  list.splice(i, 1); await DB.set('files', list); await DB.del('file:' + id);
+  if (await ABAS.busy(id)) { toast('Esse arquivo está aberto em outra aba. Feche a aba ou troque de arquivo lá antes de apagar.'); return; } // senão a outra aba o recriaria ao salvar
+  const cur = (await DB.get('files')) || [], i0 = cur.findIndex(f => f.id === id); if (i0 < 0) return;
+  if (!(await askConfirm(`Apagar "${cur[i0].name}"?`, "O arquivo some de vez. Não dá para desfazer.", "Apagar arquivo", true))) return;
+  let list = cur;
+  await ABAS.idx(async () => { list = (await DB.get('files')) || []; const i = list.findIndex(f => f.id === id); if (i >= 0) { list.splice(i, 1); await DB.set('files', list); } });
+  await DB.del('file:' + id);
   if (id === FILES.id) { FILES.id = null; const nx = list.find(f => (f.project || null) === FILES.project) || list[0]; if (nx) await openFile(nx.id); else await newFile(FILES.project); }
   renderFiles();
 }
@@ -6646,10 +7033,15 @@ async function projDelete(id) {
 }
 async function moveFile(id, project) {
   if (saveT && id === FILES.id) await flushSave();
-  const list = (await DB.get('files')) || [], rec = list.find(f => f.id === id); if (!rec) return;
-  if ((rec.project || null) === (project || null)) return;
-  if (project) rec.project = project; else delete rec.project;
-  await DB.set('files', list);
+  if (await ABAS.busy(id)) { toast('Esse arquivo está aberto em outra aba. Mude o projeto dele por lá.'); return; }
+  let rec = null;
+  await ABAS.idx(async () => {
+    const list = (await DB.get('files')) || []; rec = list.find(f => f.id === id); if (!rec) return;
+    if ((rec.project || null) === (project || null)) { rec = null; return; }
+    if (project) rec.project = project; else delete rec.project;
+    await DB.set('files', list);
+  });
+  if (!rec) return;
   if (id === FILES.id) {
     FILES.project = project || null; showProject(); loadElements();
     // entrou num projeto: passa a usar a marca dele (projeto sem marca ainda fica com a deste arquivo)
@@ -6686,7 +7078,7 @@ function projMenu() {
   const m = document.querySelector('.ctx'); m.classList.add('projmenu');
   m.prepend(h('button', { onclick:() => { closeMenu(); openFiles('*'); } }, [h('span', { text:'Todos os arquivos' })]),
     h('button', { onclick:() => { closeMenu(); openFiles(FILES.project || ''); } }, [h('span', { text:FILES.project ? `Arquivos de "${PROJ_NAMES.get(FILES.project) || 'Projeto'}"` : 'Ver rascunhos' })]),
-    h('button', { onclick:() => { closeMenu(); newFile(FILES.project); } }, [h('span', { text:'Novo arquivo aqui' })]), h('hr'));
+    h('button', { onclick:() => { closeMenu(); newFileTab(FILES.project); } }, [h('span', { text:'Novo arquivo aqui' })]), h('hr'));
 }
 /* ------------ pasta de salvamento (js/pasta.js) ------------ */
 function showDisk() {
@@ -6694,7 +7086,7 @@ function showDisk() {
   b.title = DISK.dir ? `Salvando na pasta "${DISK.name}". Clique para trocar` : 'Salvando só no navegador. Clique para escolher uma pasta';
   if (s) s.title = DISK.dir ? `Os arquivos ficam na pasta "${DISK.name}"` : 'Os arquivos ficam no navegador';
 }
-async function diskApply(go) { if (!(await go())) return; toast('Pasta pronta. Reabrindo o editor…', 1600); setTimeout(() => location.reload(), 500); }
+async function diskApply(go) { if (!(await go())) return; toast('Pasta pronta. Reabrindo o editor…', 1600); setTimeout(() => ABAS.reloadAll(), 500); } // todas as abas recarregam: uma só gravaria no lugar antigo
 function diskMenu() {
   const b = $('#diskBtn');
   if (document.querySelector('.ctx.diskmenu')) { closeMenu(); return; }
@@ -6707,7 +7099,7 @@ function diskMenu() {
     if (DISK.dir) kids.push(item('Voltar a salvar no navegador', async () => {
       if (!(await askConfirm('Voltar a salvar no navegador?', `Os arquivos continuam na pasta "${DISK.name}", mas o editor deixa de abri-los e de salvar neles. O navegador abre com o que ele já tinha.`, 'Voltar ao navegador'))) return;
       if (saveT) await flushSave();
-      await DISK.disconnect(); showDisk(); toast('Reabrindo o editor…', 1600); setTimeout(() => location.reload(), 500);
+      await DISK.disconnect(); showDisk(); toast('Reabrindo o editor…', 1600); setTimeout(() => ABAS.reloadAll(), 500);
     }));
   }
   const m = h('div', { class:'ctx diskmenu', role:'menu' }, kids);
@@ -6753,7 +7145,7 @@ function renderSide(list, ps) {
   side.append(h('button', { class:'btn small ghost fp-new', text:'+ Novo projeto', onclick:async () => { const p = await projCreate(); FVIEW = p.id; await renderFiles(); renameProjInline(p.id); } }));
 }
 async function renderFiles() {
-  const all = ((await DB.get('files')) || []).slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)), ps = await projSync();
+  const all = ((await DB.get('files')) || []).slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)), ps = await projSync(), openElse = await ABAS.openIds();
   if (FVIEW && FVIEW !== '*' && !ps.some(p => p.id === FVIEW)) FVIEW = '*';
   renderSide(all, ps);
   const q = ($('#fileSearch').value || '').trim().toLowerCase();
@@ -6761,7 +7153,7 @@ async function renderFiles() {
   $('#filesTitle').textContent = q ? 'Busca' : FVIEW === '*' ? 'Todos os arquivos' : FVIEW === '' ? 'Rascunhos' : PROJ_NAMES.get(FVIEW);
   const dest = FVIEW === '*' ? FILES.project : FVIEW || null;
   const grid = $('#fgrid'); grid.innerHTML = '';
-  grid.append(h('button', { class:'fcard new', onclick:() => newFile(dest) }, [h('div', { class:'fthumb' }, [h('span', { text:'+' })]), h('b', { text:'Novo arquivo' }),
+  grid.append(h('button', { class:'fcard new', onclick:() => newFileTab(dest) }, [h('div', { class:'fthumb' }, [h('span', { text:'+' })]), h('b', { text:'Novo arquivo' }),
     h('small', { text:dest ? `Em "${PROJ_NAMES.get(dest)}"` : 'Em Rascunhos' })]));
   for (const f of list) {
     if (q && !f.name.toLowerCase().includes(q)) continue;
@@ -6776,12 +7168,13 @@ async function renderFiles() {
     });
     const where = FVIEW === '*' || q ? (f.project ? PROJ_NAMES.get(f.project) : 'Rascunhos') + ' · ' : '';
     const card = h('div', { class:'fcard' + (f.id === FILES.id ? ' cur' : ''), role:'button', tabindex:'0', draggable:'true', title:`Abrir ${f.name}`,
-      onclick:() => f.id === FILES.id ? closeFiles() : openFile(f.id),
+      onclick:e => f.id === FILES.id ? closeFiles() : e.ctrlKey || e.metaKey ? (closeFiles(), ABAS.add({ file:f.id })) : openFile(f.id),
       onkeydown:e => { if (e.key === 'Enter' && e.target === card) card.click(); } }, [
-      h('div', { class:'fthumb' }, [f.thumb ? h('img', { src:f.thumb, alt:'', draggable:'false' }) : null, f.id === FILES.id ? h('em', { text:'Aberto' }) : null]),
+      h('div', { class:'fthumb' }, [f.thumb ? h('img', { src:f.thumb, alt:'', draggable:'false' }) : null, f.id === FILES.id ? h('em', { text:'Aberto' }) : openElse.has(f.id) ? h('em', { text:'Em outra aba' }) : null]),
       nm,
       h('small', { text:`${where}Editado ${ago(f.updatedAt || f.createdAt)}` }),
       h('div', { class:'facts' }, [
+        f.id === FILES.id || openElse.has(f.id) ? null : h('button', { class:'icon-btn', title:'Abrir em nova aba (Ctrl + clique no arquivo)', 'aria-label':`Abrir ${f.name} em nova aba`, html:ICON_TAB, onclick:e => { e.stopPropagation(); closeFiles(); ABAS.add({ file:f.id }); } }),
         h('button', { class:'icon-btn', title:'Mover para um projeto', 'aria-label':`Mover ${f.name}`, html:ICON_FOLDER, onclick:e => { e.stopPropagation(); moveMenu(e.currentTarget, f.id, f.project || null); } }),
         h('button', { class:'icon-btn', title:'Duplicar', 'aria-label':`Duplicar ${f.name}`, html:ICONS.copy, onclick:e => { e.stopPropagation(); duplicateFile(f.id); } }),
         h('button', { class:'icon-btn', title:'Apagar', 'aria-label':`Apagar ${f.name}`, html:ICONS.trash, onclick:e => { e.stopPropagation(); deleteFile(f.id); } }),
@@ -6935,11 +7328,11 @@ async function renderVideo(prog, sl = [0]) {
   // trilha: uma mistura por duração (o fade de saída cai no fim de cada slide)
   const mixes = sl.map(() => null);
   if (hasAudio()) {
-    const byD = new Map();
+    const byD = new Map(), per = n > 1 && audLayers().length > 0; // som de vídeo no carrossel: cada slide com o seu
     for (let k = 0; k < sl.length; k++) {
-      const d = slideDur(sl[k]);
-      if (!byD.has(d)) { let m = null; try { m = await buildMix(48000, d); } catch (e) { console.warn('trilha falhou', e); } byD.set(d, m); }
-      mixes[k] = byD.get(d);
+      const d = slideDur(sl[k]), key = per ? d + '|' + sl[k] : d;
+      if (!byD.has(key)) { let m = null; try { m = await buildMix(48000, d, per ? sl[k] : null); } catch (e) { console.warn('trilha falhou', e); } byD.set(key, m); }
+      mixes[k] = byD.get(key);
     }
   }
   let res = null;
@@ -7208,6 +7601,7 @@ async function portableState() {
 // mídia que nenhum arquivo usa mais (arquivo apagado, recorte refeito) sai do navegador. Roda uma vez, depois de abrir
 async function gcMedia() {
   try {
+    if (await ABAS.othersOpen()) return; // outra aba aberta: o desfazer e o que ela ainda não salvou não estão aqui, então não dá para saber o que sobra
     const keys = await DB.keys();
     const ids = keys.filter(k => typeof k === 'string' && k.startsWith('media:')).map(k => k.slice(6)); if (!ids.length) return;
     let txt = JSON.stringify(S) + undoStack.join('') + redoStack.join('') + JSON.stringify((await DB.get('elements')) || []);
@@ -7218,7 +7612,7 @@ async function gcMedia() {
 }
 
 /* ------------ vídeo dentro da camada de imagem: L.video = id da mídia, L.src = pôster (1º quadro).
-   Mudo, repete se for mais curto que a camada. Um elemento <video> por camada ------------ */
+   O <video> é mudo (o som vai numa camada de Áudio, addVideoAudio), repete se for mais curto que a camada. Um elemento <video> por camada ------------ */
 const VIDS = new Map(); // id da camada → { el, ok, media }
 function videoEl(L) {
   let v = VIDS.get(L.id);
@@ -7252,14 +7646,23 @@ function vidTime(L, t, el) {
 }
 // a camada dura o trecho (como um clipe num editor de vídeo): o fim da barra acompanha o corte
 function vidFitEnd(o) {
-  if (o.type !== 'image') return; // preenchimento com vídeo (fundo, forma) repete dentro da barra que já existe
+  if (o.type !== 'image' && o.type !== 'audio') return; // preenchimento com vídeo (fundo, forma) repete dentro da barra que já existe
   const { a, b } = vidCut(o); o.end = +Math.min(S.duration, o.start + b - a).toFixed(3);
+}
+// borda esquerda: começo do trecho com o vídeo parado no tempo. Barra repetindo e corte além da primeira passada (corte longo,
+// reclamação do usuário: "quebra"): o começo grudava no fim do trecho e sobrava 0,1 s repetindo e piscando na barra toda. Ali o
+// trecho começa no quadro que estava no lugar (resto da divisão pelo trecho); perto da volta, o trecho inteiro de novo
+function vidHead(v, start) {
+  const len = v.b - v.a, dt = start - v.s;
+  if (dt < len - .3 || v.e - v.s <= len + .05) return clamp(v.a + dt, 0, v.b - .1);
+  const off = dt % len;
+  return v.a + (len - off < .3 ? 0 : off);
 }
 // borda da barra na timeline = corte. v = estado no começo do arrasto ({ a, b, d, s, e } de vidCut + barra).
 // Esquerda: o vídeo fica parado no tempo e o começo do trecho anda junto. Direita: o fim do trecho segue a barra;
 // passou do fim do vídeo = trecho até o fim, repetindo. Se a camada já era mais longa que o trecho (repetindo), a direita não corta.
 function vidTrim(o, v, mode) {
-  if (mode === 'l') { const a = clamp(v.a + o.start - v.s, 0, v.b - .1); if (a > 1e-3) o.vIn = +a.toFixed(3); else delete o.vIn; }
+  if (mode === 'l') { const a = vidHead(v, o.start); if (a > 1e-3) o.vIn = +a.toFixed(3); else delete o.vIn; }
   else if (mode === 'r' && v.e - v.s <= v.b - v.a + .05) { const b = v.a + (o.end ?? S.duration) - o.start; if (b < v.d - 1e-3) o.vOut = +b.toFixed(3); else delete o.vOut; }
 }
 // prévia: toca junto quando o palco toca; pausado, fica no quadro da agulha.
@@ -7505,7 +7908,9 @@ async function vdecFrame(v, vt) {
   while (lo < hi) { const m = (lo + hi + 1) >> 1; if (P[m] <= x) lo = m; else hi = m - 1; }
   const T = P[Math.max(0, hi)]; // o quadro que está na tela em vt (antes do primeiro: o primeiro)
   let d = v.dec;
-  if (d && d.cur && d.cur.timestamp === T) return true; // vídeo com menos quadros por segundo que o projeto: repete
+  // vídeo com menos quadros por segundo que o projeto (ou a agulha andou dentro do mesmo quadro): repete. Marca o tempo pedido,
+  // senão a prévia (pvDec) pedia de novo a cada tick e o palco redesenhava sem parar
+  if (d && d.cur && d.cur.timestamp === T) { if (v.gOk && v.grab) { v.gAt = vt; v.grab.currentTime = vt; } return true; }
   if (!d || d.err || d.dec.state === 'closed') { vdecFree(d); d = v.dec = vdecNew(dm); }
   while (d.out.length && d.out[0].timestamp < T) d.out.shift().close();
   if (!d.out.some(f => f.timestamp === T)) {
@@ -7616,12 +8021,14 @@ async function addVideoFile(f, pos) {
   if (!f) return;
   toast('Abrindo o vídeo…');
   try {
-    const id = await putMedia(f), p = await videoPoster(await mediaUrl(id)), size = .8;
+    const id = await putMedia(f), u = await mediaUrl(id), [p, an] = await Promise.all([videoPoster(u), videoSound(id)]), size = .8;
     const L = mkImage({ name:f.name ? f.name.replace(/\.[^.]+$/, '') : 'Vídeo', video:id, src:p.src, vdur:p.dur, mask:'rect', radius:24, size, mh:+(size * p.h / p.w).toFixed(4), in:'fade', inDur:BP.fade.dur, y:.5 });
     await getImage(L.src);
     addLayer(L, pos || {});
-    const e0 = L.end ?? S.duration; vidFitEnd(L); L.end = Math.min(L.end, e0); changed({ layers:true, props:true }); // a barra do vídeo começa do tamanho dele (dentro de um frame, no máximo a dele)
-    toast(p.dur > S.duration - L.start + .05 ? `Vídeo adicionado. Ele tem ${fmtSec(p.dur)} e passa do fim: puxe a borda da barra para cortar` : 'Vídeo adicionado');
+    const e0 = L.end ?? S.duration; vidFitEnd(L); L.end = Math.min(L.end, e0); // a barra do vídeo começa do tamanho dele (dentro de um frame, no máximo a dele)
+    if (an) { addVideoAudio(L, an); select(L.id, true); } // o som: camada separada no grupo do vídeo (o mesmo desfazer do vídeo)
+    changed({ layers:true, props:true }); if (an) renderTimeline();
+    toast((p.dur > S.duration - L.start + .05 ? `Vídeo adicionado. Ele tem ${fmtSec(p.dur)} e passa do fim: puxe a borda da barra para cortar` : 'Vídeo adicionado') + (an ? '. O som ficou numa camada separada, no grupo dele' : ''), an ? 5000 : undefined);
   } catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
 }
 
@@ -7764,8 +8171,10 @@ function playSfx(ctx, out, noise, e) {
     env(.02, .28, 1.1);
   }
 }
-const hasAudio = () => !!(S.audio && S.audio.id) || (!!S.sfx && S.sfx !== 'off');
-async function buildMix(sr = 48000, d = S.duration) {
+const audLayers = () => S.layers.filter(l => l.type === 'audio' && l.visible && l.aud && (l.vol ?? 1) > 0);
+const hasAudio = () => !!(S.audio && S.audio.id) || (!!S.sfx && S.sfx !== 'off') || audLayers().length > 0;
+// sl = slide (carrossel: cada arquivo leva só o som dos vídeos do próprio slide); null = todos
+async function buildMix(sr = 48000, d = S.duration, sl = null) {
   const off = new OfflineAudioContext(2, Math.ceil(d * sr), sr), A = S.audio;
   if (A && A.id) {
     const buf = await musicBuffer(A.id);
@@ -7776,6 +8185,19 @@ async function buildMix(sr = 48000, d = S.duration) {
       g.gain.setValueAtTime(0, 0); g.gain.linearRampToValueAtTime(v, .04); g.gain.setValueAtTime(v, Math.max(.05, d - fo)); g.gain.linearRampToValueAtTime(0, d);
       s.connect(g); g.connect(off.destination); s.start(0, sk);
     }
+  }
+  // som dos vídeos: cada camada de Áudio no tempo dela, com o corte (vIn/vOut) repetindo como o vídeo (vidTime)
+  for (const A of audLayers()) {
+    if (sl != null && slideOfL(A) !== sl) continue;
+    const V = linkOf(A); if (V && !vidOn(V)) continue; // preenchimento que deixou de ser vídeo
+    const t0 = A.start, t1 = Math.min(A.end ?? S.duration, d); if (t1 <= t0 + .01) continue;
+    let buf = null; try { buf = await musicBuffer(A.aud); } catch (e) {} if (!buf) continue;
+    const { a } = vidCut(A), b = Math.min(vidCut(A).b, buf.duration), len = b - a; if (len < .02) continue;
+    const s = off.createBufferSource(), g = off.createGain(), v = A.vol ?? 1, loop = t1 - t0 > len + .01, stop = loop ? t1 : Math.min(t1, t0 + len);
+    s.buffer = buf; if (loop) { s.loop = true; s.loopStart = a; s.loopEnd = b; }
+    // rampas de 10 ms nas pontas: sem estalo no corte
+    g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(v, t0 + .01); g.gain.setValueAtTime(v, Math.max(t0 + .01, stop - .01)); g.gain.linearRampToValueAtTime(0, stop);
+    s.connect(g); g.connect(off.destination); s.start(t0, a); s.stop(stop);
   }
   if (S.sfx && S.sfx !== 'off') {
     const out = off.createGain(), comp = off.createDynamicsCompressor(), noise = sfxNoise(off);
@@ -7812,7 +8234,7 @@ async function encodeAudio(buf, pick) {
 const AUD = { ctx:null, src:null, buf:null, sig:'', chk:0, building:false, c0:0, t0:0 };
 function audioSig() {
   const A = S.audio, fx = S.sfx && S.sfx !== 'off';
-  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from] : 0, S.sfx || 'off', fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
+  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from] : 0, S.sfx || 'off', audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol]), fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
 }
 async function rebuildMix(sig) {
   AUD.building = true;
@@ -7841,6 +8263,83 @@ function syncMedia() { syncVideos(); syncAudio(); }
 // o navegador só libera o som depois de um clique ou tecla
 const unlockAudio = () => { if (!hasAudio()) return; if (!AUD.ctx) AUD.ctx = new AudioContext(); if (AUD.ctx.state !== 'running') AUD.ctx.resume().catch(() => {}); };
 addEventListener('pointerdown', unlockAudio, true); addEventListener('keydown', unlockAudio, true);
+
+/* ------------ som do vídeo (pedido do usuário): o vídeo importado com som ganha uma camada de Áudio separada, no grupo dele
+   (apagar a camada = vídeo mudo). L = { type:'audio', aud:mídia (o próprio arquivo do vídeo), vdur, vIn/vOut (corte, igual ao vídeo),
+   vol, link:id do vídeo, sync, peaks (um caractere de PK_CH a cada pkS s, a onda na timeline) }. Com sync entra, sai e corta junto
+   com o vídeo (linkSync em changed; tlDrag arrasta os dois). Toca pela mesma mistura da trilha (buildMix): prévia e MP4 iguais.
+   Peso: o som decodificado fica na memória (MUSIC, ~23 MB por minuto) e o vídeo é lido inteiro uma vez ao importar ------------ */
+const PK_CH = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_';
+const linkOf = A => A && A.type === 'audio' && A.sync && A.link ? S.layers.find(l => l.id === A.link && l.video === A.aud) || null : null;
+const linkPeers = L => { const V = L.type === 'audio' ? linkOf(L) : L.video ? L : null; return V ? [V, ...S.layers.filter(a => a !== V && linkOf(a) === V)].filter(o => o !== L) : []; };
+function linkSync() {
+  if (!S) return;
+  for (const A of S.layers) {
+    const V = linkOf(A); if (!V) continue;
+    A.start = V.start; A.end = V.end; A.vdur = V.vdur; A.x = V.x; A.y = V.y; // x: o slide do som é o do vídeo (carrossel)
+    for (const k of ['vIn', 'vOut']) if (V[k] != null) A[k] = V[k]; else delete A[k];
+  }
+}
+// onda do som do arquivo; null se não tem faixa de áudio (o navegador recusa) ou é só silêncio
+async function videoSound(id) {
+  let buf; try { buf = await musicBuffer(id); } catch (e) { return null; }
+  if (!buf || buf.duration < .05) { MUSIC.delete(id); return null; }
+  const chs = []; for (let c = 0; c < buf.numberOfChannels; c++) chs.push(buf.getChannelData(c));
+  const hop = Math.max(1, Math.round(Math.max(.1, buf.duration / 1000) * buf.sampleRate)), n = Math.ceil(buf.length / hop), rms = new Float32Array(n);
+  let mx = 0;
+  for (let b = 0; b < n; b++) {
+    let s = 0, k = 0;
+    for (let i = b * hop, e = Math.min(buf.length, i + hop); i < e; i += 4) { for (const c of chs) s += c[i] * c[i]; k += chs.length; }
+    rms[b] = Math.sqrt(s / Math.max(1, k)); if (rms[b] > mx) mx = rms[b];
+  }
+  if (mx < 1e-4) { MUSIC.delete(id); return null; }
+  let pk = ''; for (const v of rms) pk += PK_CH[Math.min(63, Math.round(v / mx * 63))];
+  return { peaks:pk, pkS:+(hop / buf.sampleRate).toFixed(5) };
+}
+// a camada de som entra logo abaixo do vídeo, no grupo dele (vídeo solto: grupo novo com os dois). Quem chama já fez pushUndo
+function addVideoAudio(V, an) {
+  const A = base('audio', 'audio', { name:'Som de ' + V.name, aud:V.video, vdur:V.vdur, vol:1, link:V.id, sync:true, peaks:an.peaks, pkS:an.pkS,
+    in:'cut', out:'cut', inDur:0, outDur:0 }, { start:V.start, end:V.end, x:V.x, y:V.y });
+  if (V.vIn) A.vIn = V.vIn; if (V.vOut != null) A.vOut = V.vOut;
+  S.layers.splice(S.layers.indexOf(V) + (V.type === 'bg' ? 1 : 0), 0, A);
+  if (V.grp) A.grp = V.grp;
+  else if (V.type !== 'bg') { /* o fundo não entra em grupo */ const g = 'g' + Math.random().toString(36).slice(2, 7); (S.groups ||= {})[g] = { open:true, name:V.name, av:true }; V.grp = A.grp = g; }
+  return A;
+}
+async function extractSound(V) {
+  toast('Lendo o som do vídeo…', 10000);
+  const an = await videoSound(V.video); if (!an) { toast('Esse vídeo não tem som'); return; }
+  pushUndo(); const A = addVideoAudio(V, an);
+  select(V.id, true); changed({ layers:true, props:true }); renderTimeline();
+  toast(`O som entrou como "${A.name}", no grupo do vídeo`, 4000, UNDO_ACT);
+}
+// painel do vídeo: onde está o som dele (ou o botão para trazer de volta)
+function soundNote(V) {
+  const A = S.layers.find(a => linkOf(a) === V) || S.layers.find(a => a.type === 'audio' && a.aud === V.video);
+  if (A) return [h('p', { class:'hint', text:`O som está na camada "${A.name}"${A.grp && A.grp === V.grp ? ', no mesmo grupo' : ''}. Começa quando a camada entra.` })];
+  return [h('p', { class:'hint', text:'Vídeo sem som. Começa quando a camada entra.' }),
+    h('div', { class:'row' }, [h('button', { class:'btn small', text:'Usar o som do vídeo', title:'Põe o som do arquivo numa camada de Áudio, no grupo do vídeo', onclick:() => extractSound(V) })])];
+}
+function audioProps(L) {
+  const V = L.link && S.layers.find(l => l.id === L.link && l.video === L.aud), t = h('section', { class:'sec' }, [h('h3', { text:'Tempo' })]);
+  if (V) t.append(checkF(L, 'sync', 'Seguir o vídeo'));
+  if (V && L.sync) t.append(h('p', { class:'hint', text:`Entra, sai e corta junto com "${V.name}". Desmarque para cortar o som sozinho.` }));
+  else t.append(...vidCutFields(L));
+  return [h('section', { class:'sec' }, [h('h3', { text:'Som' }),
+    rangeF(L, 'vol', 'Volume', 0, 1.5, .01, v => Math.round((v ?? 1) * 100) + '%'),
+    h('p', { class:'hint', text:'Toca na prévia (espaço) e sai no MP4. Apagar esta camada deixa o vídeo mudo.' })]), t];
+}
+// onda na barra da timeline: o trecho cortado, repetindo se a barra for mais longa
+function drawAudBar(bar, L) {
+  const c = bar.querySelector('.tl-awave'), r = bar.getBoundingClientRect(), dpr = devicePixelRatio || 1; if (!c || !L.peaks || !r.width) return;
+  c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
+  const x = c.getContext('2d'), { a, b } = vidCut(L), len = Math.max(.05, b - a), span = (L.end ?? S.duration) - L.start, st = L.pkS || .1;
+  x.fillStyle = getComputedStyle(c).color;
+  for (let px = 0; px < c.width; px++) {
+    const ts = a + (px / c.width * span) % len, v = PK_CH.indexOf(L.peaks[Math.floor(ts / st)] || '0') / 63, hh = Math.max(dpr, v * c.height * .8);
+    x.fillRect(px, (c.height - hh) / 2, 1, hh);
+  }
+}
 
 /* ============================================================
    Interface
@@ -7875,6 +8374,8 @@ function gview(gid) {
 }
 function select(id, only) {
   RT.selected = id; const L = S.layers.find(l => l.id === id);
+  // grupo do vídeo com o som (av): só o vídeo aparece no palco, então o clique escolhe ele (o grupo inteiro vem pelo cabeçalho na lista/timeline)
+  if (!only && L && L.grp && !NOBOX(L) && (S.groups && S.groups[gtop(L.grp)] || {}).av && groupOf(L).filter(l => !NOBOX(l)).length === 1) only = true;
   RT.picks = new Set(!only && L && L.grp ? groupOf(L).map(l => l.id) : [id]);
   RT.itemPicks = only && L && L.grp ? RT.picks : null;
   renderLayers(); renderProps(); needs = true;
@@ -8100,7 +8601,7 @@ function pathfinder(op) {
   const b = customBox(d), cx = (b.x + b.w / 2) / W(), cy = (b.y + b.h / 2) / H();
   const src = order.find(l => l.kind !== 'line') || order[0], n = JSON.parse(JSON.stringify(src)), ring = op !== 'flatten' && pfStrokeOnly(src);
   for (const k of ['_bounds', 'fpos', 'fsz', 'flowFree', 'radius', 'radSep', 'rTL', 'rTR', 'rBR', 'rBL', 'points', 'inner', 'fillRule']) delete n[k];
-  Object.assign(n, { id:uid(), name:def[1], kind:'custom', d, vec, vecD:d, size:b.w / W(), mh:null, rot:0, x:cx, y:cy, fill:src.kind === 'line' ? true : src.fill });
+  Object.assign(n, { id:uid(), name:def[1], kind:'custom', d, vec, vecD:d, size:b.w / SU, mh:null, rot:0, x:cx, y:cy, fill:src.kind === 'line' ? true : src.fill });
   if (ring) Object.assign(n, { fill:true, stroke:false, mode:'solid', c1:skC(src), c2:skC(src), c3:skC(src), c4:skC(src) }); // o contorno virou o corpo da forma: leva a cor dele
   const tAll = Math.max(...order.map(restTime)); // a agulha para onde todas as formas de antes já assentaram: ao desfazer, nenhuma fica no meio da entrada
   pushUndo();
@@ -8163,8 +8664,8 @@ function alignBar() {
   const oneGrp = ls.every(l => l.grp && l.grp === ls[0].grp);
   // grupo inteiro: só alinhar (a posição é a dos itens); o resto ganha os campos de posição e, foto/forma, "Manter dentro da margem"
   const L = selL(), pos = L && !wholeGroup() ? posFields(L) : [];
-  const keep = pos.length && ls.every(l => l.type === L.type) && (L.type === 'image' || L.type === 'shape')
-    ? [checkF(L, 'keepIn', 'Manter dentro da margem'), h('p', { class:'hint', text:`Precisa da margem ligada. Se ${L.type === 'image' ? 'a imagem' : 'a forma'} não couber, ela encolhe.` })] : [];
+  const keep = pos.length && ls.every(l => l.type === L.type) && (L.type === 'image' || L.type === 'shape' || (tpFree(L) && !tpLink(L)))
+    ? [checkF(L, 'keepIn', 'Manter dentro da margem'), h('p', { class:'hint', text:`Precisa da margem ligada. Se ${L.type === 'image' ? 'a imagem' : L.type === 'text' ? 'o texto' : 'a forma'} não couber, ${L.type === 'text' ? 'ele encolhe' : 'ela encolhe'}.` })] : [];
   // frame (grupo com layout) inteiro: todo frame nasce dentro da margem; desmarcar solta (a regra é do frame de cima, frameKeep)
   const wg = wholeGroup();
   if (wg && chainFlow(wg)) {
@@ -8659,8 +9160,8 @@ function makeBase(k) {
     const p = snap.get(k).get(L.id), f = (L.fpos && L.fpos[k]) || {};
     L.x = +p.x.toFixed(5); L.y = +p.y.toFixed(5);
     if (Math.abs(p.k - 1) > 1e-3) scaleLayer(L, size0(L), p.k);
-    if (p.ww != null && (L.type === 'image' || L.type === 'shape')) L.size = +clamp(p.ww / W(), SZ_MIN, SZ_MAX).toFixed(4);
-    if (p.hh != null && (L.type === 'image' || L.type === 'shape')) L.mh = +clamp(p.hh / W(), SZ_MIN, MH_MAX).toFixed(4);
+    if (p.ww != null && (L.type === 'image' || L.type === 'shape')) L.size = +clamp(p.ww / SU, SZ_MIN, SZ_MAX).toFixed(4);
+    if (p.hh != null && (L.type === 'image' || L.type === 'shape')) L.mh = +clamp(p.hh / SU, SZ_MIN, MH_MAX).toFixed(4);
     for (const key of ['ix', 'iy', 'zoom']) if (f[key] != null) L[key] = f[key];
     if (L.fpos) { delete L.fpos[k]; if (!Object.keys(L.fpos).length) delete L.fpos; }
   }
@@ -9065,9 +9566,9 @@ function duplicateLayer(L) {
   const src = isPicked(L.id) && L.type !== 'bg' ? pickedLayers() : [L];
   const covered_ = g => gleaves(g).every(l => src.includes(l));
   const gmap = groupMapper(gmeta, covered_, true); // o frame de fora que não veio inteiro continua o mesmo
-  pushUndo(); let last = null;
+  pushUndo(); let last = null; const idm = new Map(), cs = [];
   for (const o of src) {
-    const c = JSON.parse(JSON.stringify(o)); c.id = uid(); c.name = o.name + ' (cópia)';
+    const c = JSON.parse(JSON.stringify(o)); c.id = uid(); c.name = o.name + ' (cópia)'; idm.set(o.id, c.id); cs.push(c);
     // item de um frame com layout: a cópia fica na fila, logo depois do original (a ordem da fila é a posição, então 1 px basta; o layout põe no lugar);
     // fora de layout desce um pouco para não cair em cima do original
     const lay = inFlow(o), dy = lay ? 1 / H() : .06;
@@ -9077,14 +9578,24 @@ function duplicateLayer(L) {
     if (o.grp) c.grp = covered_(o.grp) ? gmap(o.grp) : o.grp;
     S.layers.splice(S.layers.indexOf(o) + 1, 0, c); last = c;
   }
+  for (const c of cs) if (c.link && idm.has(c.link)) c.link = idm.get(c.link); // som copiado junto com o vídeo segue a cópia
+  for (const c of cs) if (c.tpRef && idm.has(c.tpRef)) c.tpRef = idm.get(c.tpRef); // texto copiado junto com a forma segue a cópia
   select(last.id); changed({ layers:true });
 }
 function deleteLayer(L, msg) {
   if (!L || L.type === 'bg') return;
   const grp = isPicked(L.id) ? pickedLayers() : [L];
   if (grp.some(g => g.locked)) { lockedNote(grp); return; }
+  for (const o of [...grp]) if (o.video) for (const a of S.layers) if (linkOf(a) === o && !grp.includes(a)) grp.push(a); // apagar o vídeo leva o som dele
   pushUndo(); const i = S.layers.indexOf(L);
   grp.forEach(g => S.layers.splice(S.layers.indexOf(g), 1));
+  // apagou o som do vídeo: o grupo que só existia para os dois (sem nome, animação ou estilo próprios) se desfaz
+  for (const g of new Set(grp.map(o => o.grp).filter(Boolean))) {
+    const m = S.groups && S.groups[g], lv = m && m.av ? gleaves(g) : [];
+    if (m && m.av && !lv.length && !gkids(g).length) delete S.groups[g];
+    else if (lv.length === 1 && lv[0].grp === g && !gkids(g).length && !m.flow && (m.in || 'cut') === 'cut' && (m.out || 'cut') === 'cut' && (m.idle || 'none') === 'none'
+      && !(m.shadow && m.shadow !== 'none') && (m.opacity ?? 1) >= 1 && !m.rot && !blendOf(m) && !blurOn(m)) { delete lv[0].grp; delete S.groups[g]; }
+  }
   RT.selected = (S.layers[Math.min(i, S.layers.length - 1)] || S.layers[0])?.id; RT.picks = new Set([RT.selected]); RT.hover = null;
   changed({ layers:true, props:true }); toast(msg || (grp.length > 1 ? `${grp.length} camadas apagadas` : `"${L.name}" apagada`), 5000, UNDO_ACT);
 }
@@ -9175,6 +9686,7 @@ function pasteLayers(p) {
     out.push(c);
   }
   S.layers.splice(at < 0 ? S.layers.length : at + 1, 0, ...out);
+  const idm = new Map(src.map((o, i) => [o.id, out[i].id])); out.forEach(c => { if (c.link && idm.has(c.link)) c.link = idm.get(c.link); if (c.tpRef && idm.has(c.tpRef)) c.tpRef = idm.get(c.tpRef); }); // som colado junto com o vídeo (e texto com a forma que ele segue) vai com a cópia
   // carrossel: Meus elementos entram no slide atual; colado que cairia depois do último slide (veio de um carrossel maior) também
   if (!fr) { const s0 = Math.floor(clamp(Math.min(...out.map(l => +l.x || 0)), 0, 1e3)); if (slides() > 1) toSlide(out, s0, curSlide()); }
   if (fr) intoFrame(fr, out);
@@ -9226,6 +9738,8 @@ function openMenu(ev, L) {
     ...(L.type === 'image' ? [
       item('Virar na horizontal', () => { pushUndo(); L.flipX ? delete L.flipX : (L.flipX = true); changed({ layers:true }); renderProps(); }),
       item('Virar na vertical', () => { pushUndo(); L.flipY ? delete L.flipY : (L.flipY = true); changed({ layers:true }); renderProps(); })] : []),
+    ...(tpPair() ? [item('Pôr o texto na forma', () => { const p = tpPair(); tpAttach(p.t, p.s); select(p.t.id); })] : []),
+    ...(tpKind(L) ? [item('Voltar ao texto reto', () => { pushUndo(); for (const o of peersOf(L)) if (o.type === 'text') tpSetKind(o, ''); RT.layout.clear(); changed({ props:true }); }, { off:!!L.locked })] : []),
     h('hr'),
     item('Converter em vetor', vectorize, { off:isBg || !(L.type === 'text' || canOutline(L)), kbd:'Ctrl+Shift+O' }),
     item('Salvar seleção (PNG)', () => saveFramePng(), { off:isBg }),
@@ -9249,6 +9763,7 @@ cv.addEventListener('contextmenu', ev => { const L = hitTest(stagePt(ev)) || S.l
 const tlLabel = L => {
   if (L.type === 'camera') return (CAMS[L.cam] || {}).label || '';
   if (L.type === 'fx') return (FXS[L.fx] || {}).label || '';
+  if (L.type === 'audio') return '';
   const m = L.type === 'text' ? TP : BP; return (m[L.in] || {}).label || '';
 };
 function tlGeom() { const tl = $('#tl'), lane = tl.querySelector('.tl-scale'); if (!lane) return null; const r = lane.getBoundingClientRect(); return { x0:r.left, w:r.width, tl }; }
@@ -9266,6 +9781,8 @@ function placeBar(bar, L) {
   bar.style.left = (L.start / d * 100) + '%'; bar.style.width = (span / d * 100) + '%';
   bar.querySelector('.seg.in').style.width = (ph.inD / span * 100) + '%';
   bar.querySelector('.seg.out').style.width = (ph.outD / span * 100) + '%';
+  // a onda acompanha o corte: sem refazer, o desenho de antes esticava junto com a barra
+  if (L.type === 'audio' && bar.querySelector('.tl-awave')) drawAudBar(bar, L);
 }
 // reposiciona as barras existentes (velocidade, duração de entrada/saída etc.) sem refazer a timeline
 function refreshBars() {
@@ -9324,6 +9841,7 @@ function renderTimeline() {
     const bar = h('div', { class:'tl-bar', style:`--c:${TYPE_COLOR[typeKey(L)]}`, title:`${L.name}: entra em ${L.start.toFixed(1)}s, sai em ${(L.end ?? d).toFixed(1)}s. Arraste para cima ou para baixo para mudar a ordem. Clique duplo leva a agulha até ele. I e O marcam entrada e saída na agulha` }, [
       h('div', { class:'seg in' }), h('div', { class:'seg out' }), h('em', { text:tlLabel(L) }), h('div', { class:'h l' }), h('div', { class:'h r' })]);
     placeBar(bar, L);
+    if (L.type === 'audio') { bar.prepend(h('canvas', { class:'tl-awave' })); requestAnimationFrame(() => drawAudBar(bar, L)); }
     if (layerStill(L)) { bar.classList.add('still'); bar.title = `${L.name} está num slide-imagem: aparece parado o tempo todo e o tempo da barra não conta (fica guardado para se o slide voltar a ser vídeo)`; }
     const lane = h('div', { class:'tl-lane' }, [bar]);
     // a faixa inteira decide: perto da borda (dentro ou fora da barra) redimensiona, no meio move, no vazio leva a agulha
@@ -9470,6 +9988,22 @@ function tlDragGroup(e, gid, bar, mode) {
   const d = S.duration, o = mem.map(l => ({ l, s:l.start, e:l.end })), s0 = Math.min(...o.map(x => x.s)), e0 = Math.max(...o.map(x => x.e ?? d));
   const x0 = e.clientX, y0 = e.clientY, grid = v => Math.round(v * 10) / 10, r3 = v => Math.round(v * 1000) / 1000, MIN = .3;
   const pts = [0, d, T, ...extraSnaps()]; for (const q of S.layers) if (!mem.includes(q) && q.type !== 'bg') pts.push(q.start, q.end ?? d);
+  // vídeo (e som de vídeo) no grupo: as bordas do grupo cortam o vídeo como as da barra dele (vidTrim), em vez de só esticar o
+  // tempo (a barra passava do trecho e o vídeo voltava ao começo no fim, reclamação do usuário). Quem começa junto com o grupo
+  // anda o começo do trecho (o vídeo fica parado no tempo, sem passar do começo do vídeo); o fim do trecho segue o fim da barra.
+  // Se já repetia, o fim do trecho fica (igual à borda direita da barra)
+  const vid0 = new Map(mem.filter(l => (l.type === 'image' && l.video) || l.type === 'audio').map(l => [l, { ...vidCut(l), rIn:l.vIn, rOut:l.vOut, s:l.start, e:l.end ?? d }]));
+  const vidClip = () => {
+    for (const [l, v] of vid0) {
+      const lead = mode === 'l' && Math.abs(v.s - s0) < 1e-3;
+      if (lead && l.start < v.s - v.a) l.start = r3(v.s - v.a);
+      const a = lead ? vidHead(v, l.start) : v.a;
+      if (a > 1e-3) l.vIn = +a.toFixed(3); else delete l.vIn;
+      if (v.e - v.s > v.b - v.a + .05) continue;
+      const b = Math.max(a + .1, a + (l.end ?? d) - l.start);
+      if (b < v.d - 1e-3) l.vOut = +b.toFixed(3); else delete l.vOut;
+    }
+  };
   const tol = 7 / g.w * d;
   const near = v => { let b = null; for (const p of pts) if (Math.abs(p - v) <= tol && (b === null || Math.abs(p - v) < Math.abs(b - v))) b = p; return b; };
   const lane = bar.parentElement, tip = h('div', { class:'tl-tip' }), guide = h('div', { class:'tl-snap', hidden:true });
@@ -9503,6 +10037,7 @@ function tlDragGroup(e, gid, bar, mode) {
       for (const x of o) { x.l.start = r3(x.s + ds); if (x.e != null) x.l.end = r3(x.e + ds); }
     } else if (mode === 'l') { const f = fit(s0 + dt); s = clamp(f.v, 0, e0 - MIN); hit = s === f.v ? f.hit : null; apply(s, en); }
     else { const f = fit(e0 + dt); en = clamp(f.v, s0 + MIN, d); hit = en === f.v ? f.hit : null; apply(s, en); }
+    if (mode !== 'm') { vidClip(); for (const l of vid0.keys()) { const b = g.tl.querySelector(`.tl-row[data-id="${l.id}"] .tl-bar`); if (b) placeBar(b, l); } }
     placeBar(bar, gpseudo(gid));
     tip.textContent = `${fmtS(s)} – ${fmtS(en)}`;
     const at = (mode === 'r' ? en : s) / d * g.w, tw = tip.offsetWidth + 8;
@@ -9515,7 +10050,7 @@ function tlDragGroup(e, gid, bar, mode) {
     bar.classList.remove('drag', 'hl', 'hr'); tip.remove(); guide.remove(); if (stk) stk.end();
   };
   const up = () => { done(); if (stk) stk.drop(); else if (moved) changed({ layers:true, props:true }); };
-  const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); o.forEach(x => { x.l.start = x.s; x.l.end = x.e; }); placeBar(bar, gpseudo(gid)); done(); needs = true; };
+  const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); o.forEach(x => { x.l.start = x.s; x.l.end = x.e; }); vid0.forEach((v, l) => { l.vIn = v.rIn; l.vOut = v.rOut; if (l.vIn == null) delete l.vIn; if (l.vOut == null) delete l.vOut; }); placeBar(bar, gpseudo(gid)); done(); needs = true; };
   bar.classList.add('drag'); if (mode !== 'm') bar.classList.add('h' + mode);
   addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up); addEventListener('keydown', key, true);
 }
@@ -9531,9 +10066,11 @@ function tlDrag(e, L, bar, mode) {
   }
   pushUndo(); pause();
   const grp = isPicked(L.id) ? freePicked().filter(o => o !== L).map(o => ({ o, s:o.start, e:o.end })) : [];
+  const linked = linkPeers(L).filter(o => !grp.some(q => q.o === o)); // vídeo e o som dele andam e cortam juntos (na ordem, não)
+  for (const o of linked) grp.push({ o, s:o.start, e:o.end });
   const d = S.duration, s0 = L.start, e0 = L.end ?? d, end0 = L.end, x0 = e.clientX, y0 = e.clientY, grid = v => Math.round(v * 10) / 10, MIN = .3;
-  // vídeo: as bordas cortam o vídeo (vidTrim); a esquerda não passa do começo do vídeo
-  const vid0 = new Map([L, ...grp.map(q => q.o)].filter(o => o.type === 'image' && o.video).map(o => [o, { ...vidCut(o), rIn:o.vIn, rOut:o.vOut, s:o.start, e:o.end ?? d }]));
+  // vídeo (e som de vídeo): as bordas cortam o vídeo (vidTrim); a esquerda não passa do começo do vídeo
+  const vid0 = new Map([L, ...grp.map(q => q.o)].filter(o => (o.type === 'image' && o.video) || o.type === 'audio').map(o => [o, { ...vidCut(o), rIn:o.vIn, rOut:o.vOut, s:o.start, e:o.end ?? d }]));
   const sMin = o => { const v = vid0.get(o); return v ? Math.max(0, v.s - v.a) : 0; };
   // ímã: início, fim, agulha e as bordas das outras camadas (Shift desliga)
   const pts = [0, d, T, ...extraSnaps(L)]; // + batidas da música e o meio das transições
@@ -9563,7 +10100,7 @@ function tlDrag(e, L, bar, mode) {
     if (!axis) {
       const ax = Math.abs(ev.clientX - x0), ay = Math.abs(ev.clientY - y0); if (Math.max(ax, ay) <= 3) return;
       axis = mode === 'm' && ay > ax ? 'y' : 'x';
-      if (axis === 'y') { tip.remove(); stk = tlStack(g.tl, bar, [L, ...grp.map(q => q.o)], y0); }
+      if (axis === 'y') { tip.remove(); stk = tlStack(g.tl, bar, [L, ...grp.map(q => q.o).filter(o => !linked.includes(o))], y0); }
     }
     if (stk) { stk.move(ev.clientY); return; }
     const dt = (ev.clientX - x0) / g.w * d; moved = true;
@@ -9590,6 +10127,7 @@ function tlDrag(e, L, bar, mode) {
       else { const ne = r3(clamp((q.e ?? d) + (L.end ?? d) - e0, q.s + MIN, d)); if (q.e != null || ne < d - .01) q.o.end = ne; }
     }
     if (mode !== 'm') for (const [o, v] of vid0) vidTrim(o, v, mode);
+    for (const o of linked) { const b = g.tl.querySelector(`.tl-row[data-id="${o.id}"] .tl-bar`); if (b) placeBar(b, o); }
     show(hit);
     needs = true; // a agulha fica onde está
   };
@@ -9707,14 +10245,14 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
   return field(label, h('div', { class:'rng' }, [inp, out]), id);
 }
 // largura/altura guardadas em fração da largura do quadro; o painel mostra sempre em px do vídeo (pedido do usuário: tamanho em pixel, nada em %)
-const pxF = (L, k, label, min, max, opts = {}) => rangeF(L, k, label, min, max, 1 / W(), v => Math.round(v * W()) + 'px', { ...opts, scale:W(), dec:0 });
+const pxF = (L, k, label, min, max, opts = {}) => rangeF(L, k, label, min, max, 1 / SU, v => Math.round(v * SU) + 'px', { ...opts, scale:SU, dec:0 });
 function sizeF(L, k, label, min, max, step, opts = {}) {
   // fora do formato principal a máscara tem tamanho próprio (fpos ww/hh, px do bloco) e escala k: o campo mostra e grava o que está na tela
   if (fmtOwn() && (k === 'mh' || (k === 'size' && (L.type === 'image' || L.type === 'shape'))) && L.type !== 'text') {
     const wd = k === 'size', own = () => { const G = blockGeom(L); return G ? { G, k:placeOf(L).k || 1 } : null; };
     opts = { ...opts,
-      get: () => { const o = own(); return o ? (wd ? geomNow(L).w : geomNow(L).h) * o.k / W() : L[k]; },
-      put: v => { const o = own(); if (!o) { L[k] = v; return; } for (const q of peersOf(L)) { const g = blockGeom(q); if (g) setFmt(q, wd ? { ww:+(v * W() / o.k).toFixed(2) } : { hh:+(v * W() / o.k).toFixed(2) }); } RT.layout.clear(); } };
+      get: () => { const o = own(); return o ? (wd ? geomNow(L).w : geomNow(L).h) * o.k / SU : L[k]; },
+      put: v => { const o = own(); if (!o) { L[k] = v; return; } for (const q of peersOf(L)) { const g = blockGeom(q); if (g) setFmt(q, wd ? { ww:+(v * SU / o.k).toFixed(2) } : { hh:+(v * SU / o.k).toFixed(2) }); } RT.layout.clear(); } };
   }
   return pxF(L, k, label, min, max, opts);
 }
@@ -10006,6 +10544,17 @@ Object.assign(ICONS, {
   fix_w:SI('<path d="M2.5 3v10M13.5 3v10M2.5 8h11"/>'),
   fill_w:SI('<path d="M2.5 3v10M13.5 3v10M7 5.5L4.5 8 7 10.5M9 5.5l2.5 2.5L9 10.5"/>'),
 });
+// texto em curva: o caminho apagado e as letras (tracinhos) de pé sobre ele; tpv_ = onde as letras ficam no caminho
+Object.assign(ICONS, {
+  tp_none:SI(`<path d="M1.5 12h13" ${SI_BAND}/><path d="M3.5 10V5.5M6.5 10V5.5M9.5 10V5.5M12.5 10V5.5"/>`),
+  tp_circle:SI(`<circle cx="8" cy="9.5" r="4.5" ${SI_BAND}/><path d="M3.2 6.6 1.6 5.6M6.1 4.3 5.5 2.4M9.9 4.3l.6-1.9M12.8 6.6l1.6-1"/>`),
+  tp_arc:SI(`<path d="M2 12Q8 3 14 12" ${SI_BAND}/><path d="M3.9 8.5 2.2 6.7M6.6 6.9l-.7-2.4M9.4 6.9l.7-2.4M12.1 8.5l1.7-1.8"/>`),
+  tp_wave:SI(`<path d="M1.5 10q1.63-3 3.25 0t3.25 0 3.25 0 3.25 0" ${SI_BAND}/><path d="M3.1 7.4V5M6.4 10.4V8M9.6 7.4V5M12.9 10.4V8"/>`),
+  tp_shape:SI(`<rect x="2.5" y="5.5" width="10" height="8.5" rx="1.5" ${SI_BAND}/><path d="M4.5 4V1.8M7.5 4V1.8M10.5 4V1.8M13.6 4.4l1.5-1.5"/>`),
+  tpv_base:SI(`<path d="M1.5 12.5h13" ${SI_BAND}/><path d="M5 11l3-7 3 7M6.3 8.5h3.4"/>`),
+  tpv_mid:SI(`<path d="M1.5 8h13" ${SI_BAND}/><path d="M5 11.5l3-7 3 7M6.3 9h3.4"/>`),
+  tpv_top:SI(`<path d="M1.5 3.5h13" ${SI_BAND}/><path d="M5 12.5l3-7 3 7M6.3 10h3.4"/>`),
+});
 for (const k of ['hug', 'fix', 'fill']) ICONS[k + '_h'] = ICONS[k + '_w'].replace(/(<path[\s\S]*<\/path>|<path[^>]*\/>)/, m => `<g transform="rotate(90 8 8)">${m}</g>`);
 // segmento só de ícones: opts = [valor, nome, ícone]; on(v) diz qual está marcado (várias = botões que ligam/desligam sozinhos)
 function icoSeg(label, opts, on, pick) {
@@ -10055,7 +10604,7 @@ function cornersF(L, fmt) {
 }function checkF(L, k, label) {
   const id = fid(L, k);
   const inp = h('input', { type:'checkbox', id, checked:!!L[k] });
-  inp.addEventListener('change', () => { pushUndo(); for (const o of peersOf(L)) o[k] = inp.checked; RT.layout.clear(); changed(); if (k === 'stroke' || k === 'tint' || k === 'fill' || k === 'wave') renderProps(); });
+  inp.addEventListener('change', () => { pushUndo(); for (const o of peersOf(L)) o[k] = inp.checked; RT.layout.clear(); changed(); if (k === 'stroke' || k === 'tint' || k === 'fill' || k === 'wave' || k === 'sync') renderProps(); });
   return h('label', { class:'check', for:id }, [inp, label]);
 }
 function textF(L, k, label, multi) {
@@ -10340,9 +10889,10 @@ function idleGrid(L) {
 let propTab = 'anim';
 function renderProps() {
   const box = $('#props'); box.innerHTML = '';
-  const L = selL();
+  let L = selL();
   if (!L) { box.append(h('div', { class:'props-empty', text:'Selecione uma camada.' })); return; }
   const gid = wholeGroup(); // grupo inteiro selecionado: a aba Animação é a do grupo
+  if (gid && NOBOX(L)) { const v = gleaves(gid).filter(l => !NOBOX(l)).pop(); if (v) { RT.selected = v.id; L = v; } } // grupo do vídeo com o som: o painel fala do que aparece
   const head = h('section', { class:'sec sec-head', style:`--tc:${gid ? 'var(--c-group)' : TYPE_COLOR[typeKey(L)]}` }, [
     h('div', { class:'lhead' }, [
       h('span', { class:'type-chip', style:`color:${gid ? 'var(--c-group)' : TYPE_COLOR[typeKey(L)]}`, text:gid ? 'Grupo' : TYPE_LABEL[typeKey(L)] }),
@@ -10355,7 +10905,8 @@ function renderProps() {
   box.append(head);
 
   if (L.type === 'bg') { box.append(frameFlowSec(), bgProps(L)); return; }
-  if (NOBOX(L)) { box.append(...camFxProps(L)); return; } // câmera e transição: só preset, ritmo e tempo
+  if (L.type === 'audio' && !gid) { box.append(...audioProps(L)); return; }
+  if (NOBOX(L) && !gid) { box.append(...camFxProps(L)); return; } // câmera e transição: só preset, ritmo e tempo
 
   const tabs = h('div', { class:'tabs', role:'tablist' }, [['anim', 'Animação'], ['style', 'Conteúdo e estilo']].map(([k, t]) =>
     h('button', { role:'tab', 'aria-selected':String(propTab === k), text:t, onclick:() => { propTab = k; renderProps(); } })));
@@ -10456,6 +11007,7 @@ function syncPosFields(L) {
   const n = document.getElementById(fid(L, 'fpos')), nn = posNote(L); if (n && nn) n.replaceWith(nn);
 }
 function posFields(L) {
+  { const sh = tpLink(L); if (sh) return [h('p', { class:'hint', text:`Segue a forma "${sh.name || 'Forma'}": mova a forma para mover o texto. Arrastar o texto desliza pelo caminho.` })]; }
   const pos = { low:POS_LO, cap:POS_HI }, posX = { low:POS_LO, cap:posHi() }; // digitado pode ir além da barra (elemento fora do palco)
   return [rangeF(L, 'x', 'Horizontal', 0, slides(), .005, v => Math.round(v * 100) + '%', posX), rangeF(L, 'y', 'Vertical', 0, 1, .005, v => Math.round(v * 100) + '%', pos), posNote(L)];
 }
@@ -10472,6 +11024,9 @@ function styleProps(L) {
   const px = v => Math.round(v) + 'px';
   // tipos misturados: só o que todos têm em comum (opacidade, mesclagem, sombra e desfoque; a posição fica em Posição, no topo)
   if (peersAny(L).some(o => o.type !== L.type)) {
+    const tw = tpPair(); // texto + forma: o texto passa a seguir o contorno da forma
+    if (tw) put(h('h3', { text:'Texto na forma' }), h('div', { class:'row' }, [h('button', { class:'btn small', text:'Pôr o texto na forma', title:'O texto segue o contorno da forma (como o texto no caminho do Illustrator)', onclick:() => { tpAttach(tw.t, tw.s); select(tw.t.id); } })]),
+      h('p', { class:'hint', text:'O texto passa a correr pelo contorno da forma e acompanha quando ela muda.' }));
     put(h('h3', { text:'Aparência' }),
       h('p', { class:'hint', text:`${peersAny(L).length} elementos de tipos diferentes: aqui ficam só as opções em comum. Escolha um tipo só para ver as demais.` }),
       ...lookFields(L));
@@ -10487,14 +11042,16 @@ function styleProps(L) {
       rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true }),
       rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
       rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
-      // largura: abraça o texto (quebra na largura máx.) ou fixa (a caixa tem essa largura; alça lateral no palco)
-      modeF('Caixa', [['hug', 'Abraçar', 'A caixa fica do tamanho da linha mais longa', 'hug_w'], ['fix', 'Largura fixa', 'A caixa tem a largura abaixo (ou puxe a lateral no palco)', 'fix_w']], L.fixW ? 'fix' : 'hug',
+      // largura: abraça o texto (quebra na largura máx.) ou fixa (a caixa tem essa largura; alça lateral no palco). Em curva não quebra
+      tpKind(L) ? null : modeF('Caixa', [['hug', 'Abraçar', 'A caixa fica do tamanho da linha mais longa', 'hug_w'], ['fix', 'Largura fixa', 'A caixa tem a largura abaixo (ou puxe a lateral no palco)', 'fix_w']], L.fixW ? 'fix' : 'hug',
         v => { pushUndo(); for (const o of peersOf(L)) o.fixW = v === 'fix' || undefined; RT.layout.clear(); changed({ props:true }); }),
-      pxF(L, 'maxW', L.fixW ? 'Largura' : 'Largura máx.', .1, 1, { layout:true }),
+      tpKind(L) ? null : pxF(L, 'maxW', L.fixW ? 'Largura' : 'Largura máx.', .1, 1, { layout:true }),
       segF(L, 'align', 'Alinhamento', ALIGN_OPTS),
       togF(L, 'Letras', CASE_OPTS),
+      rotF(L),
       ...textBgFields(L),
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Converter em vetor', title:'Texto em curvas (Ctrl+Shift+O). Vira forma Vetor: não edita mais as letras, e a animação passa a ser do bloco', onclick:() => textToVector(peersOf(L).filter(o => o.type === 'text')) })]),
+      ...tpFields(L),
       ...strokeSecs(L),
       ...look());
   } else if (L.type === 'cta') {
@@ -10558,16 +11115,18 @@ function styleProps(L) {
   } else if (L.type === 'image') {
     const pct = v => Math.round(v * 100) + '%';
     L.mask = L.mask || 'fit'; if (L.zoom == null) L.zoom = 1; if (L.ix == null) L.ix = 0; if (L.iy == null) L.iy = 0;
-    if (masked(L) && L.mh == null) { const G = blockGeom(L); if (G) L.mh = G.h / W(); }
+    if (masked(L) && L.mh == null) { const G = blockGeom(L); if (G) L.mh = G.h / SU; }
     const maskSeg = h('div', { class:'segs ico', role:'group', 'aria-label':'Máscara' }, [['fit', 'Sem máscara: a forma da própria imagem'], ['rect', 'Retângulo'], ['circle', 'Círculo']].map(([v, t]) =>
       h('button', { type:'button', 'aria-pressed':String(L.mask === v), html:ICONS['mk_' + v], title:t, 'aria-label':t, onclick:() => {
         pushUndo();
-        if (v !== 'fit' && L.mh == null) { const G = blockGeom(L); L.mh = G ? G.h / W() : L.size * .75; }
+        if (v !== 'fit' && L.mh == null) { const G = blockGeom(L); L.mh = G ? G.h / SU : L.size * .75; }
         L.mask = v; changed({ props:true });
       } })));
     put(
       h('h3', { text:L.video ? 'Vídeo' : 'Imagem' }),
       ...mediaFields(L),
+      adjRange(L, 'aExp', 'Exposição'),
+      adjRange(L, 'aCon', 'Contraste'),
       h('h3', { text:'Máscara' }),
       field('Forma', maskSeg, null),
       sizeF(L, 'size', masked(L) ? 'Largura' : 'Tamanho', 0, 1.6, .005, { low:SZ_MIN, cap:SZ_MAX }),
@@ -10599,6 +11158,71 @@ function textBgFields(L) {
     on ? em('hlPadY', 'Espaço ↕', -.3, 1, 0) : null,
     on ? em('hlRad', 'Cantos', 0, 1, 0) : null,
     on ? segF(L, 'hlBox', 'Caixa', TBG_OPTS) : null].filter(Boolean);
+}
+// Texto em curva (seção "Caminho" do texto): o tipo do caminho e, conforme ele, raio, posição, lado, curvatura, onda ou a forma seguida
+const TP_TIPS = { '':'O texto em linha reta', circle:'Em volta de um círculo (selo, carimbo, logo redondo)', arc:'Uma curva suave, para cima ou para baixo',
+  wave:'Sobe e desce em ondas', shape:'Segue o contorno de uma forma do palco: retângulo, estrela, um desenho da caneta…' };
+// tipo novo com valores que já ficam bonitos: o círculo cobre meia volta, a onda tem ~1,5 ondas na largura do texto
+function tpSetKind(o, v) {
+  if (!v) { delete o.tpath; delete o.tpRef; return; }
+  o.tpath = v;
+  const lay0 = layoutText(o, caseTxt(o, o.text)), w = Math.max(...lay0.lines.map(l => l.width), o.size); // em curva a linha não quebra: a largura de verdade
+  if (v === 'circle' && o.tpR == null) o.tpR = +clamp(Math.max(w / Math.PI, o.size * 1.2) / SU, .01, 2).toFixed(4);
+  if (v === 'arc' && o.tpBend == null) o.tpBend = .3;
+  if (v === 'wave') { if (o.tpAmp == null) o.tpAmp = +(o.size * .25 / SU).toFixed(4); if (o.tpLen == null) o.tpLen = +(Math.max(w / 1.5, o.size * 3) / SU).toFixed(4); }
+  if (v === 'shape' && !tpLink(o) && !o.tpPts) { // a forma mais perto do texto
+    const c = o._bounds ? boxC(o._bounds) : { x:o.x * W(), y:o.y * H() }, d = s => s._bounds ? Math.hypot(boxC(s._bounds).x - c.x, boxC(s._bounds).y - c.y) : 1e9;
+    const sh = S.layers.filter(s => s.type === 'shape').sort((a, b) => d(a) - d(b))[0];
+    if (sh) { o.tpRef = sh.id; delete o.tpOff; }
+  }
+}
+// por dentro: o ponto de apoio vira o espelho em cima/embaixo (o texto de cima vai para baixo, lendo da esquerda para a direita)
+function tpSetFlip(o, on) {
+  if (!!o.tpFlip === on) return;
+  const closed = o.tpath === 'circle' || (o.tpath === 'shape' && (tpSource(o) || {}).closed);
+  if (closed) o.tpOff = +((((.5 - (o.tpOff ?? 0)) % 1) + 1) % 1).toFixed(4);
+  if (on) o.tpFlip = true; else delete o.tpFlip;
+}
+function tpFields(L) {
+  const k = tpKind(L), ts = peersOf(L).filter(o => o.type === 'text');
+  const set = fn => { pushUndo(); for (const o of ts) fn(o); RT.layout.clear(); tpSync(); changed({ props:true, layers:true }); };
+  const out = [h('h3', { text:'Caminho', 'data-sum':(TP_KINDS.find(t => t[0] === (k || '')) || TP_KINDS[0])[1] }),
+    modeF('Forma', TP_KINDS.map(([v, t, ic]) => [v, t, TP_TIPS[v], ic]), k || '', v => set(o => tpSetKind(o, v)))];
+  if (!k) return out;
+  const px = v => Math.round((v || 0) * SU) + 'px', sh = tpLink(L), src = k === 'shape' ? tpSource(L) : null, closed = k === 'circle' || !!(src && src.closed);
+  const side = modeF('Lado', [['out', 'Por fora', 'Lê no sentido horário (o texto de cima de um selo)'], ['in', 'Por dentro', 'Lê no sentido anti-horário: embaixo, fica de pé e da esquerda para a direita']],
+    L.tpFlip ? 'in' : 'out', v => set(o => tpSetFlip(o, v === 'in')));
+  const onLine = modeF('Na linha', [['base', 'Sobre o caminho', 'As letras ficam em cima do caminho', 'tpv_base'], ['mid', 'No meio', 'O caminho passa no meio das letras', 'tpv_mid'], ['top', 'Sob o caminho', 'As letras ficam penduradas no caminho', 'tpv_top']],
+    L.tpV || 'base', v => set(o => { if (v === 'base') delete o.tpV; else o.tpV = v; }));
+  const dist = pxF(L, 'tpDist', 'Distância', -.05, .1, { get:() => L.tpDist || 0, low:-1, cap:1, layout:true });
+  const pos = rangeF(L, 'tpOff', 'Posição', 0, 1, k === 'circle' ? 1 / 360 : .001, k === 'circle' ? v => Math.round((v ?? 0) * 360) % 360 + '°' : v => Math.round((v ?? (closed ? 0 : .5)) * 100) + '%',
+    { get:() => L.tpOff ?? (closed ? 0 : .5), scale:k === 'circle' ? 360 : 100, dec:0, layout:true });
+  const fit = closed ? checkF(L, 'tpFit', 'Espalhar pela volta inteira') : null;
+  const hint = h('p', { class:'hint', text:k === 'circle' || k === 'shape'
+    ? 'O Alinhamento diz se o texto começa, fica no meio ou termina na bolinha. No palco, arraste a bolinha para deslizar o texto pelo caminho (Shift = de 15 em 15°).'
+    : 'Enter quebra a linha: as outras linhas acompanham a curva.' });
+  if (k === 'circle') out.push(pxF(L, 'tpR', 'Raio', .02, .6, { low:.003, cap:4, layout:true }), pos, side, onLine, fit, dist, hint);
+  else if (k === 'arc') out.push(rangeF(L, 'tpBend', 'Curvatura', -1, 1, .01, v => Math.round((v ?? .3) * 100) + '%', { get:() => L.tpBend ?? .3, layout:true }), onLine,
+    h('p', { class:'hint', text:'Positiva: arco para cima. Negativa: sorriso. 100% dá a volta inteira.' }));
+  else if (k === 'wave') out.push(pxF(L, 'tpAmp', 'Altura da onda', 0, .12, { get:() => L.tpAmp ?? .03, cap:1, layout:true }), pxF(L, 'tpLen', 'Comprimento', .02, 1, { get:() => L.tpLen ?? .3, low:.005, cap:4, layout:true }),
+    rangeF(L, 'tpPh', 'Fase', 0, 360, 1, v => Math.round(v || 0) + '°', { get:() => L.tpPh || 0, layout:true }), onLine);
+  else {
+    const shapes = S.layers.filter(o => o.type === 'shape');
+    const sel = h('select', { id:fid(L, 'tpRef') }, [h('option', { value:'', text:shapes.length ? 'Escolha a forma' : 'Nenhuma forma no arquivo', selected:!sh }),
+      ...shapes.map(o => h('option', { value:o.id, text:o.name || 'Forma', selected:sh === o }))]);
+    sel.addEventListener('change', () => { const o = S.layers.find(x => x.id === sel.value); if (o) tpAttach(L, o); });
+    out.push(field('Seguir', sel, fid(L, 'tpRef')));
+    if (sh) { // mostrar ou esconder a forma sem tirar o texto dela
+      const id = fid(L, 'tpShow'), inp = h('input', { type:'checkbox', id, checked:!!sh.visible });
+      inp.addEventListener('change', () => { pushUndo(); sh.visible = inp.checked; changed({ layers:true }); renderTimeline(); });
+      out.push(h('label', { class:'check', for:id, title:'Escondida, a forma continua guiando o texto' }, [inp, 'Mostrar a forma']));
+    }
+    if (src) out.push(pos, side, onLine, fit, dist);
+    out.push(h('p', { class:'hint', text:sh ? 'O texto acompanha a forma: mover, girar, mudar o tamanho ou os pontos dela leva o texto junto. Arraste o texto (ou a bolinha) para deslizar pelo caminho.'
+      : src ? 'A forma foi apagada: o texto ficou com o caminho dela. Escolha outra forma acima para seguir.'
+      : 'Escolha uma forma acima, ou escolha o texto e a forma juntos e use "Pôr o texto na forma". Para um caminho livre, desenhe com a Caneta (P).' }));
+  }
+  return out.filter(Boolean);
 }
 function bgProps(L) {
   const sec = h('section', { class:'sec' }, [h('h3', { text:'Fundo' })]);
@@ -10660,13 +11284,14 @@ function fillProps(L, sec) {
     sec.append(uploadF(L.src ? 'Trocar imagem' : bg ? 'Enviar imagem de fundo' : 'Enviar imagem', 'image/*', async f => { const src = await imageSrc(f); pushUndo(); L.src = src; await getImage(L.src); changed({ props:true }); }));
   }
   if (L.mode === 'video') {
-    if (L.video) sec.append(h('p', { class:'hint', text:'Vídeo sem som. Repete enquanto a camada estiver na tela.' }), ...vidCutFields(L));
+    if (L.video) sec.append(...soundNote(L), h('p', { class:'hint', text:'Repete enquanto a camada estiver na tela.' }), ...vidCutFields(L));
     sec.append(uploadF(L.video ? 'Trocar vídeo' : bg ? 'Enviar vídeo de fundo' : 'Enviar vídeo', 'video/*', async f => {
       toast('Abrindo o vídeo…');
       try {
-        const id = await putMedia(f), p = await videoPoster(await mediaUrl(id)); pushUndo();
-        L.video = id; L.vsrc = p.src; L.vdur = p.dur; delete L.vIn; delete L.vOut; await getImage(L.vsrc);
-        changed({ props:true }); toast('Vídeo no preenchimento');
+        const id = await putMedia(f), u = await mediaUrl(id), [p, an] = await Promise.all([videoPoster(u), videoSound(id)]); pushUndo();
+        const olds = S.layers.filter(a => linkOf(a) === L); if (olds.length) S.layers = S.layers.filter(a => !olds.includes(a)); // o som do vídeo antigo sai junto
+        L.video = id; L.vsrc = p.src; L.vdur = p.dur; delete L.vIn; delete L.vOut; if (an) addVideoAudio(L, an); await getImage(L.vsrc);
+        changed({ layers:true, props:true }); renderTimeline(); toast(an ? 'Vídeo no preenchimento, com o som numa camada separada' : 'Vídeo no preenchimento');
       } catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
     }));
   }
@@ -10924,7 +11549,7 @@ function setCustom(k, v) {
   if (now === was) { S.custom[k] = was; renderFormats(); return; }
   S.custom[k] = was; pushUndo(); S.custom[k] = now;
   RT.layout.clear(); renderFormats(); zoomFit(); changed({ props:true });
-  if (now !== n) toast(now === CUSTOM_MAX ? `No máximo ${CUSTOM_MAX} px` : now === CUSTOM_MIN ? `No mínimo ${CUSTOM_MIN} px` : `Ficou ${now} px: o vídeo pede medida par`);
+  if (now !== n) toast(now === CUSTOM_MIN ? `No mínimo ${CUSTOM_MIN} px` : `Ficou ${now} px: o vídeo pede medida par`);
 }
 $('#cW').addEventListener('change', e => setCustom('w', e.target.value));
 $('#cH').addEventListener('change', e => setCustom('h', e.target.value));
@@ -10934,6 +11559,7 @@ let nudgeT = null;
 function nudge(dx, dy) {
   const all = pickedLayers(), ls = all.filter(l => !l.locked), L = ls.includes(selL()) ? selL() : ls[0];
   if (!L) { if (all.length && !nudgeT) lockedNote(all); return; }
+  if (ls.length === 1 && tpLink(L)) { tpNudge(L, dx || dy); return; } // texto que segue uma forma: desliza pelo caminho
   if (ls.length === 1 && inFlow(L) && flowOf(L.grp) && !flowWhole(L.grp, ls)) { flowStep(L, dx, dy); return; } // item na fila: troca de lugar
   if (dy && !dx && frameStep(ls, dy)) return; // bloco na coluna do quadro: troca de lugar
   if (!nudgeT) pushUndo();
@@ -11048,7 +11674,7 @@ const KEYS = [
   ['Caneta e pontos', [['P', 'Caneta (modos Caneta, Curvas e Mão livre no topo do palco)'], ['Shift + P', 'Caneta à mão livre'], ['Clique duplo na forma', 'Edita os pontos (qualquer forma vira vetor)'], ['Arrastar a linha', 'Curva o trecho (na edição de pontos)'], ['Clique duplo no ponto', 'Curva / canto']]],
   ['Editar', [['Ctrl + Z', 'Desfazer'], ['Ctrl + Shift + Z', 'Refazer'], ['Ctrl + C / X / V', 'Copiar, recortar, colar (vale entre arquivos)'], ['Ctrl + D', 'Duplicar'], ['Delete', 'Apagar'], ['Ctrl + A', 'Selecionar tudo'], ['Esc', 'Tirar a seleção / sair do texto'], ['/', 'Buscar animação']]],
   ['Organizar', [['Ctrl + G', 'Agrupar'], ['Ctrl + Shift + G', 'Desagrupar'], ['Alt + Shift + U S I E', 'Pathfinder: unir, subtrair, interseção, excluir (formas)'], ['Ctrl + E', 'Pathfinder: achatar as formas em um vetor'], ['Ctrl + Shift + O', 'Converter em vetor: texto em curvas e contorno em forma'], ['Shift + A', 'Layout automático (sem nada selecionado: o quadro todo)'], ['Arrastar o espaço rosa', 'Muda o espaço do layout'], ['Ctrl + ] [', 'Para frente / para trás'], ['Ctrl + Shift + ] [', 'Na frente de tudo / no fundo'], ['Ctrl + Shift + H', 'Mostrar ou ocultar'], ['Ctrl + Shift + L', 'Bloquear ou desbloquear'], ['Shift + clique em "Slide N"', 'Escolhe tudo do slide (Shift de novo soma outros slides; o que mudar vale para todos)'], ['Ctrl + Shift + A', 'Escolhe tudo de todos os slides']]],
-  ['Arquivo', [['Ctrl + S', 'Salvar agora (já salva sozinho)'], ['Ctrl + Shift + S', 'Salvar cópia'], ['Ctrl + Shift + E', 'Exportar (MP4, ou PNG com Duração 0)'], ['Exportar PNG / SVG', 'No transporte. Com algo selecionado salva só a seleção; sem seleção, o quadro da agulha (SVG parado, com o texto em curvas)'], ['Ctrl + V', 'Colar imagem ou SVG'], ['?', 'Este painel']]],
+  ['Arquivo', [['Alt + 1…9', 'Ir para a aba (botão de nova aba ao lado do nome do arquivo)'], ['Ctrl + S', 'Salvar agora (já salva sozinho)'], ['Ctrl + Shift + S', 'Salvar cópia'], ['Ctrl + Shift + E', 'Exportar (MP4, ou PNG com Duração 0)'], ['Exportar PNG / SVG', 'No transporte. Com algo selecionado salva só a seleção; sem seleção, o quadro da agulha (SVG parado, com o texto em curvas)'], ['Ctrl + V', 'Colar imagem ou SVG'], ['?', 'Este painel']]],
 ];
 function showKeys(on) {
   const box = $('#keys');
@@ -11066,6 +11692,7 @@ function showKeys(on) {
 }
 $('#keysBtn').onclick = () => showKeys(true);
 /* ------------ adicionar elementos prontos ------------ */
+const ICON_TAB = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M8 6.2v3.6M6.2 8h3.6" stroke-linecap="round"/></svg>';
 const ICON_FOLDER = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M1.8 4.2c0-.8.6-1.4 1.4-1.4h3l1.5 1.6h5.1c.8 0 1.4.6 1.4 1.4v6.4c0 .8-.6 1.4-1.4 1.4H3.2c-.8 0-1.4-.6-1.4-1.4z"/></svg>';
 const ICON_FILES = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>';
 const ICON_DRAFT = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M4 1.8h5.5L12.5 5v9.2H4z"/><path d="M9.3 1.8V5h3.2"/></svg>';
@@ -11453,7 +12080,7 @@ $('#filesOpen').onclick = () => openFiles();
 $('#projBtn').onclick = projMenu;
 $('#diskBtn').onclick = diskMenu;
 $('#filesClose').onclick = closeFiles;
-$('#fileNew').onclick = () => newFile();
+$('#fileNew').onclick = () => newFileTab();
 $('#files').addEventListener('pointerdown', e => { if (e.target.id === 'files') closeFiles(); });
 $('#files').addEventListener('keydown', e => { if (e.key === 'Escape') closeFiles(); });
 $('#fileSearch').addEventListener('input', renderFiles);
@@ -11521,12 +12148,23 @@ function camFxProps(L) {
 }
 function animExtras(L) {
   const out = [];
-  if (L.type === 'text') {
+  if (L.type === 'text' && tpKind(L)) out.push(h('section', { class:'sec' }, [h('h3', { text:'Marca à mão', 'data-sum':'não vale em curva' }),
+    h('p', { class:'hint', text:'Sublinhar, circular e riscar não valem no texto em curva. Volte o Caminho para Reto para usar.' })]));
+  else if (L.type === 'text') {
     const B = S.brand.colors;
     const sec = h('section', { class:'sec' }, [h('h3', { text:'Marca à mão' }),
       chipPick(L, 'mark', Object.entries(MARKS), (v, o) => { if (v !== 'none' && !o.markColor) o.markColor = (o.color || '').toLowerCase() === B[2].toLowerCase() ? B[1] : B[2]; },
-        v => { pause(); const ph = phase(L, L.start) || { inD:0 }; T = clamp(L.start + ph.inD + (v === 'none' ? .05 : 1 / (spdOf(L, 'in') || 1)), 0, (L.end ?? S.duration) - .02); needs = true; })]);
-    if (L.mark && L.mark !== 'none') sec.append(colorF(L, 'markColor', 'Cor da marca'), h('p', { class:'hint', text:'Se desenha logo depois da entrada e some na saída.' }));
+        v => { pause(); const ph = phase(L, L.start) || { inD:0 }; T = clamp(L.start + ph.inD + (v === 'none' ? .05 : 1 / (markSpd(L, 'in') || 1)), 0, (L.end ?? S.duration) - .02); needs = true; })]);
+    if (L.mark && L.mark !== 'none') {
+      // entrada: agulha logo depois de a marca terminar de se desenhar; saída: no meio da saída do texto
+      const seekIn = () => { pause(); const ph = phase(L, L.start) || { inD:0 }; T = clamp(L.start + ph.inD * .8 + .9 / (markSpd(L, 'in') || 1), 0, (L.end ?? S.duration) - .02); needs = true; };
+      const rhy = (m, after) => { const [sk, ik] = MARK_RHY[m]; for (const o of peersAny(L)) { o[sk] = markSpd(o, m); o[ik] = markInt(o, m); }
+        return [rangeF(L, sk, 'Velocidade', .3, 4, .05, v => v.toFixed(2) + '×', { after }), rangeF(L, ik, 'Intensidade', 0, 1, .01, v => Math.round(v * 100) + '%', { after })]; };
+      sec.append(colorF(L, 'markColor', 'Cor da marca'),
+        h('h3', { class:'sub', text:'Entrada da marca' }), ...rhy('in', seekIn),
+        h('h3', { class:'sub', text:'Saída da marca' }), ...rhy('out', () => seekKeep(L, true)),
+        h('p', { class:'hint', text:'Se desenha logo depois da entrada e some na saída.' }));
+    }
     out.push(sec);
   }
   if (L.type === 'image') out.push(h('section', { class:'sec' }, [h('h3', { text:'Movimento dentro da imagem' }),
@@ -11541,6 +12179,12 @@ function autoShadowHex(L, key) {
   if (key === 'glow') return own || B[2];
   return '#000000';
 }
+// barra de um ajuste da foto (−100..100); clique duplo volta ao zero. Usada em Ajustes e nas barras rápidas da Imagem
+function adjRange(L, k, label, min = -1) {
+  const f = rangeF(L, k, label, min, 1, .01, v => Math.round((v || 0) * 100));
+  f.querySelector('input[type=range]').addEventListener('dblclick', () => { pushUndo(); for (const o of peersOf(L)) o[k] = 0; changed({ props:true }); });
+  return f;
+}
 // ajustes da foto (exposição, cor…): filtros prontos + barras; vale para todas as imagens selecionadas
 function adjSec(L) {
   const peers = peersOf(L);
@@ -11549,15 +12193,9 @@ function adjSec(L) {
   const set = vals => { pushUndo(); for (const o of peers) for (const k of ADJ_K) o[k] = vals[k] || 0; changed({ props:true }); };
   const sec = h('section', { class:'sec' }, [h('h3', { text:'Ajustes' }),
     h('div', { class:'chips' }, Object.entries(LOOKS).map(([v, [t, vals]]) => h('button', { class:'chip', 'aria-pressed':String(same(vals)), title:t, onclick:() => set(vals) }, [h('span', { text:t })])))]);
-  const num = v => Math.round((v || 0) * 100);
   for (const [g, list] of ADJ) {
     sec.append(h('h3', { class:'sub', text:g })); // abre e fecha dentro de Ajustes
-    for (const [k, label, min = -1] of list) {
-      const f = rangeF(L, k, label, min, 1, .01, num);
-      // clique duplo na barra volta ao zero
-      f.querySelector('input[type=range]').addEventListener('dblclick', () => { pushUndo(); for (const o of peers) o[k] = 0; changed({ props:true }); });
-      sec.append(f);
-    }
+    for (const [k, label, min = -1] of list) sec.append(adjRange(L, k, label, min));
   }
   sec.append(h('div', { class:'row' }, [h('button', { class:'btn small', text:'Redefinir ajustes', disabled:same({}), onclick:() => set({}) })]),
     h('p', { class:'hint', text:adjGL() ? 'Clique duplo numa barra volta ao zero. Vale também para vídeo.' : 'Este navegador não tem WebGL2: os ajustes não aparecem.' }));
@@ -11587,7 +12225,7 @@ function vidCutFields(L) {
     T = clamp(edge ? s + (b - a) - 1 / fps() : restTime(L), s, e); needs = true;
   };
   const len = () => { const { a, b } = vidCut(L); return b - a; };
-  const edit = edge => { peersOf(L).filter(o => o.video).forEach(fix); look(edge); upd(); renderTimeline(); };
+  const edit = edge => { peersOf(L).filter(o => o.video || o.type === 'audio').forEach(fix); look(edge); upd(); renderTimeline(); };
   const inF = rangeF(L, 'vIn', 'Começa em', 0, d, step, v => fmtSec(v || 0), { onInput:() => edit(0) });
   const outF = rangeF(L, 'vOut', 'Termina em', 0, d, step, v => fmtSec(v ?? d), { onInput:() => edit(1) });
   const inR = inF.querySelector('input[type=range]'), outR = outF.querySelector('input[type=range]'), nums = [inF, outF].map(f => f.querySelector('.num'));
@@ -11605,19 +12243,23 @@ function vidCutFields(L) {
 // topo da seção Imagem/Vídeo: trocar o arquivo, remover fundo, moldura
 function mediaFields(L) {
   return [
-    L.video ? h('p', { class:'hint', text:'Vídeo sem som. Começa quando a camada entra.' }) : null,
+    ...(L.video ? soundNote(L) : []),
     ...(L.video ? vidCutFields(L) : []),
     L.video ? uploadF('Trocar vídeo', 'video/*', async f => {
       toast('Abrindo o vídeo…');
-      try { const id = await putMedia(f), p = await videoPoster(await mediaUrl(id)); pushUndo(); L.video = id; L.src = p.src; L.vdur = p.dur; delete L.vIn; delete L.vOut; vidFitEnd(L); await getImage(L.src); changed({ layers:true, props:true }); toast('Vídeo trocado'); }
+      try {
+        const id = await putMedia(f), u = await mediaUrl(id), [p, an] = await Promise.all([videoPoster(u), videoSound(id)]);
+        pushUndo(); const olds = S.layers.filter(a => linkOf(a) === L); if (olds.length) S.layers = S.layers.filter(a => !olds.includes(a)); // o som do vídeo antigo sai junto
+        L.video = id; L.src = p.src; L.vdur = p.dur; delete L.vIn; delete L.vOut; vidFitEnd(L); if (an) addVideoAudio(L, an);
+        await getImage(L.src); changed({ layers:true, props:true }); renderTimeline(); toast(an ? 'Vídeo trocado, com o som numa camada separada' : 'Vídeo trocado'); }
       catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
     }) : uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem', 'image/*', async f => { const src = await imageSrc(f); pushUndo(); L.src = src; delete L.cut; await getImage(L.src); changed({ props:true }); }),
     cutoutF(L),
     field('Virar', h('div', { class:'segs ico', role:'group', 'aria-label':'Virar' }, [['flipX', 'Espelhar na horizontal'], ['flipY', 'Espelhar na vertical']].map(([k, tip]) =>
       h('button', { type:'button', 'aria-pressed':String(!!L[k]), html:ICONS[k], title:tip, 'aria-label':tip, onclick:() => { pushUndo(); const on = !L[k]; for (const o of peersOf(L)) { if (on) o[k] = true; else delete o[k]; } changed({ layers:true }); renderProps(); } })))),
     field('Moldura', segPick(L, 'device', Object.entries(DEVICES), (v, o) => {
-      if (v === 'phone') { o.mask = 'rect'; o.mh = +(o.size * 2.05).toFixed(4); o.radius = Math.round(o.size * W() * .12); o.zoom = 1; o.ix = 0; o.iy = 0; }
-      if (v === 'browser') { o.mask = 'rect'; if (o.mh == null) { const G = blockGeom(o); o.mh = +((G ? G.h / W() : o.size * .62)).toFixed(4); } o.radius = 0; }
+      if (v === 'phone') { o.mask = 'rect'; o.mh = +(o.size * 2.05).toFixed(4); o.radius = Math.round(o.size * SU * .12); o.zoom = 1; o.ix = 0; o.iy = 0; }
+      if (v === 'browser') { o.mask = 'rect'; if (o.mh == null) { const G = blockGeom(o); o.mh = +((G ? G.h / SU : o.size * .62)).toFixed(4); } o.radius = 0; }
     }, () => seekLayer(L)), null, true),
     L.device === 'phone' ? h('p', { class:'hint', text:'Print comprido de app ou site: use "Rolar a tela" em Movimento dentro da imagem, na aba Animação.' }) : null];
 }
@@ -11879,16 +12521,23 @@ $('#varBtn').onclick = openVars;
   await DISK.init(); // pasta de salvamento escolhida (js/pasta.js): tem que vir antes de ler qualquer arquivo
   showDisk();
   const list = await migrateFiles();
-  let id = await DB.get('currentId'); if (!list.some(f => f.id === id)) id = list[0]?.id;
+  const pk = await ABAS.pick(list), id = pk.id; // cada aba tem o próprio arquivo e a trava dele (js/abas.js)
   let saved = null;
   if (id) try { saved = JSON.parse(await DB.get('file:' + id)); } catch (e) {}
   const fresh = !(saved && saved.layers && saved.brand);
   if (!fresh) { const pj = list.find(f => f.id === id).project; if (pj) try { const pb = JSON.parse(await DB.get('pbrand:' + pj) || 'null'); if (pb) saved.brand = pb; } catch (e) {}
     S = saved; FILES.id = id; FILES.name = list.find(f => f.id === id).name; FILES.project = list.find(f => f.id === id).project || null; }
-  else { newProject(); FILES.id = newFileId(); FILES.name = 'Sem título'; }
+  else {
+    newProject(); FILES.id = newFileId(); FILES.name = ABAS.freshName(list);
+    const np = ABAS.newProject(); // "Nova aba": arquivo novo no projeto do arquivo que abriu a aba, com a marca dele
+    const nb = ABAS.takeBrand(); if (nb) try { S.brand = JSON.parse(nb); } catch (e) {} // Rascunho novo numa aba: a marca do arquivo que a abriu
+    if (np) { FILES.project = np; try { const pb = JSON.parse(await DB.get('pbrand:' + np) || 'null'); if (pb) S.brand = pb; } catch (e) {} }
+    await ABAS.claim(FILES.id);
+    if (pk.busy) toast('Esse arquivo já estava aberto em outra aba. Abri um arquivo novo aqui.', 4200);
+  }
   const interned = !fresh && await internImages(S);
   const torn = !fresh && fixTornGroups(S);
-  DB.set('currentId', FILES.id); showFileName(); projSync(); setSaveState('Salvo');
+  DB.set('currentId', FILES.id); ABAS.setCur(FILES.id); showFileName(); projSync(); setSaveState('Salvo');
   RT.selected = S.layers.find(l => l.type === 'logo')?.id || S.layers[1]?.id || S.layers[0]?.id;
   renderAll(); updPlay(); fitStage();
   requestAnimationFrame(tick);

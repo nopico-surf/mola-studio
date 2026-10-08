@@ -375,6 +375,8 @@ details.adv > div{display:flex;flex-direction:column;gap:10px;margin-top:10px}
 .filebox{display:flex;align-items:center;gap:4px;min-width:0;flex-shrink:1;overflow:hidden} /* janela estreita: encolhe o nome e o projeto em vez de passar por baixo do formato */
 .filebox > *{flex:none}
 .filebox .slash{color:var(--faint)}
+.filebox .icon-btn{border:1px solid var(--line-2);background:var(--raised);color:var(--fg)} /* três botões lado a lado: quadrado com borda, para separar um do outro */
+.filebox .icon-btn:hover{background:var(--raised-2)}
 .top #fileName{width:180px;flex:0 1 180px;min-width:72px;background:transparent;border-color:transparent;font-weight:600;padding:4px 6px}
 .top #fileName:hover{border-color:var(--line-2)}
 .top #fileName:focus{background:var(--bg);border-color:var(--accent)}
@@ -571,7 +573,8 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .colorctl.is-none .hexwrap{opacity:.5}
 
 /* ===== Recursos novos: câmera, transição, trilha, variações, exportar, meus elementos ===== */
-:root{--c-camera:#7FD4E8;--c-fx:#FF8F6B;--c-video:#B8E05C;--c-svg:#E6EAF2}
+:root{--c-camera:#7FD4E8;--c-fx:#FF8F6B;--c-video:#B8E05C;--c-svg:#E6EAF2;--c-audio:#E8D36B}
+.tl-bar .tl-awave{position:absolute;inset:0;width:100%;height:100%;color:var(--c);opacity:.75;pointer-events:none}
 .adds-sub{grid-column:1/-1;font-size:10px;font-weight:600;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;padding:8px 2px 1px}
 .add.my{position:relative;cursor:pointer}
 .add.my img.gl{width:auto;max-width:100%;height:24px;object-fit:contain}
@@ -628,10 +631,10 @@ input[type=range].bi::-webkit-slider-thumb{border-image:linear-gradient(var(--mu
 input[type=range]:disabled{opacity:.5}
 ::placeholder{color:color-mix(in srgb,var(--muted) 55%,var(--faint));opacity:1}
 /* toggle (todo input[type=checkbox]): desligado = trilho Elevado com bolinha apagada; ligado = trilho do acento com bolinha escura (--accent-ink), para ler de longe */
-input[type=checkbox]{-webkit-appearance:none;appearance:none;flex:none;position:relative;box-sizing:border-box;width:28px;height:16px;margin:0;border:1.5px solid var(--line-2);border-radius:999px;background:var(--raised-2);cursor:pointer;transition:background-color .15s,border-color .15s}
-input[type=checkbox]::after{content:"";position:absolute;top:1.5px;left:1.5px;width:10px;height:10px;border-radius:50%;background:var(--muted);transition:transform .15s,background-color .15s}
-input[type=checkbox]:hover{border-color:var(--faint)}
-input[type=checkbox]:checked{background:var(--accent);border-color:var(--accent)}
+input[type=checkbox]{-webkit-appearance:none;appearance:none;flex:none;position:relative;box-sizing:border-box;width:32px;height:20px;margin:0;border:0;box-shadow:inset 0 0 0 1px var(--line-2);border-radius:999px;background:var(--raised-2);cursor:pointer;transition:background-color .15s,box-shadow .15s}
+input[type=checkbox]::after{content:"";position:absolute;top:4px;left:4px;width:12px;height:12px;border-radius:50%;background:var(--muted);transition:transform .15s,background-color .15s}
+input[type=checkbox]:hover{box-shadow:inset 0 0 0 1px var(--faint)}
+input[type=checkbox]:checked{background:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 input[type=checkbox]:checked::after{transform:translateX(12px);background:var(--accent-ink)}
 input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 input[type=checkbox]:disabled{opacity:.45;cursor:default}

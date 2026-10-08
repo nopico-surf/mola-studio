@@ -167,6 +167,17 @@
       "port": 3083
     },
     {
+      "name": "mola-marca",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3093"
+      ],
+      "port": 3093
+    },
+    {
       "name": "mola-colar",
       "runtimeExecutable": "npx",
       "runtimeArgs": [

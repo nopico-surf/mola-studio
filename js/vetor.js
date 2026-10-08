@@ -303,7 +303,7 @@ const VEC_KEEP = ['name', 'visible', 'locked', 'grp', 'start', 'end', 'in', 'out
 function vecLayerFrom(src, subs, over = {}) {
   const d0 = vecD(subs), vec0 = d0 && vecParse(d0); if (!vec0) return null;
   const d = vecD(vec0), b = customBox(d);
-  const n = mkShape({ kind:'custom', d, vec:vec0, vecD:d, size:b.w / W(), mh:null, rot:0, fill:true, stroke:false, mode:'solid' });
+  const n = mkShape({ kind:'custom', d, vec:vec0, vecD:d, size:b.w / SU, mh:null, rot:0, fill:true, stroke:false, mode:'solid' });
   for (const k of VEC_KEEP) if (src[k] !== undefined) n[k] = JSON.parse(JSON.stringify(src[k]));
   if (!BLOCK_IN.shape.includes(n.in)) n.in = 'fade';
   if (!BLOCK_OUT.shape.includes(n.out)) n.out = 'cut';
@@ -480,7 +480,8 @@ async function glyphsD(family, size, items, T0) {
     if (!id) { missing++; continue; }
     const g = face.font.getGlyph(id); if (!g) { missing++; continue; }
     const sc = size / face.upm, sk = face.synth ? .25 : 0; // itálico falso: inclinação de 1/4, como o canvas
-    const P = (x, y) => `${vr2(T0.ax + (it.x + (x + sk * y) * sc) * T0.k)} ${vr2(T0.ay + (it.y - y * sc) * T0.k)}`;
+    const co = it.r ? Math.cos(it.r) : 1, si = it.r ? Math.sin(it.r) : 0; // it.r = giro da letra (texto em curva), em volta da origem dela
+    const P = (x, y) => { const lx = (x + sk * y) * sc, ly = -y * sc; return `${vr2(T0.ax + (it.x + lx * co - ly * si) * T0.k)} ${vr2(T0.ay + (it.y + lx * si + ly * co) * T0.k)}`; };
     let d = '';
     for (const c of g.path.commands) {
       const a = c.args;
@@ -501,7 +502,11 @@ async function textVecs(L) {
   const lay = layoutText(L, caseTxt(L, L.text)), fk = bd.k || bd.w / lay.blockW || 1;
   const T0 = { ax:bd.x + bd.w / 2, ay:bd.y + bd.h / 2, k:fk }, byCol = new Map(); let missing = 0;
   for (const line of lay.lines) {
-    const items = line.glyphs.filter(g => !g.space).map(g => { const m = /^(italic )?(\d+)/.exec(g.f) || []; return { ch:g.ch, x:line.x0 + g.x, y:line.baseline, w:+m[2] || L.weight, it:!!m[1], c:g.c || L.color }; });
+    const items = line.glyphs.filter(g => !g.space).map(g => {
+      const m = /^(italic )?(\d+)/.exec(g.f) || [], it = { ch:g.ch, x:line.x0 + g.x, y:line.baseline, w:+m[2] || L.weight, it:!!m[1], c:g.c || L.color };
+      if (lay.tp) { const q = g.tp; it.x = q.x - Math.cos(q.a) * g.w / 2; it.y = q.y - Math.sin(q.a) * g.w / 2; it.r = q.a; } // texto em curva: a letra no caminho
+      return it;
+    });
     const r = await glyphsD(L.font, lay.size, items, T0); missing += r.missing;
     for (const [c, d] of r.map) byCol.set(c, (byCol.get(c) || '') + d);
   }
@@ -518,6 +523,13 @@ function textBgBoxes(L) {
   if (!ls.length) return [];
   if (bg.block) return [P(-lay.innerW / 2 - bg.px, mid(ls[0]) - hh, lay.innerW + 2 * bg.px, mid(ls[ls.length - 1]) - mid(ls[0]) + 2 * hh)];
   return ls.map(l => P(l.x0 - bg.px, mid(l) - hh, l.width + 2 * bg.px, 2 * hh));
+}
+// o mesmo fundo como paths (d); no texto em curva, a faixa de cada linha dobrada pelo caminho (tpBandPts, a mesma do desenho)
+function textBgDs(L) {
+  const bg = textBg(L), bd = L._bounds; if (!bg || !bd) return [];
+  const lay = layoutText(L, caseTxt(L, L.text)); if (!lay.tp) return textBgBoxes(L).map(rrD);
+  const fk = bd.k || bd.w / lay.blockW || 1, ax = bd.x + bd.w / 2, ay = bd.y + bd.h / 2;
+  return lay.lines.filter(l => l.text.trim()).map(l => 'M' + tpBandPts(lay, l, bg).map(([x, y]) => `${sn(ax + x * fk)} ${sn(ay + y * fk)}`).join('L') + 'Z');
 }
 // retângulo arredondado como path só de retas e cúbicas (vecParse recusa arco)
 function rrD(b) {
@@ -544,7 +556,7 @@ async function textToVector(list) {
     const r = res[i]; if (!r.parts.length) return;
     missing += r.missing;
     // fundo atrás do texto: vira mais uma forma, por baixo das letras
-    const boxes = textBgBoxes(L), bgVec = boxes.length ? vecParse(boxes.map(rrD).join('')) : null;
+    const bds = textBgDs(L), bgVec = bds.length ? vecParse(bds.join('')) : null;
     const gid = r.parts.length + (bgVec ? 1 : 0) > 1 && !L.grp ? 'g' + Math.random().toString(36).slice(2, 7) : null, see = strokeSee(L);
     const items = r.parts.map((p, j) => {
       const it = vecLayerFrom(L, p.vec, { name:r.parts.length > 1 ? `${L.name} ${j + 1}` : L.name, ...solidOver(p.color),
@@ -708,7 +720,7 @@ async function svgShape(L, X) {
 async function svgText(L, X) {
   let r = null;
   try { r = await textVecs(L); } catch (e) { console.warn(e); }
-  const bgs = textBgBoxes(L).map(b => `<path d="${rrD(b)}" ${svgFill(L.hl || '#D98E4A')}/>`).join(''); // fundo atrás do texto, por baixo
+  const bgs = textBgDs(L).map(d => `<path d="${d}" ${svgFill(L.hl || '#D98E4A')}/>`).join(''); // fundo atrás do texto, por baixo (em curva: a faixa)
   if (r && r.parts.length) {
     const see = strokeSee(L), out = r.parts.map(p => {
       const el = a => `<path d="${p.d}" ${a}/>`;
@@ -718,6 +730,11 @@ async function svgText(L, X) {
   }
   const b = L._bounds; if (!b) return '';
   const lay = layoutText(L, caseTxt(L, L.text)), fk = b.k || 1, ax = b.x + b.w / 2, ay = b.y + b.h / 2;
+  if (lay.tp) { // texto em curva sem o arquivo da fonte: uma letra por <text>, girada no caminho
+    const fa = `font-family="${svgEsc(L.font)}" font-size="${sn(lay.size * fk)}" font-weight="${L.weight}"${L.italic ? ' font-style="italic"' : ''} ${svgFill(L.color)}`;
+    return svgWrap(L, bgs + lay.lines.flatMap(line => line.glyphs.filter(g => !g.space).map(g => { const q = g.tp, x = ax + (q.x - Math.cos(q.a) * g.w / 2) * fk, y = ay + (q.y - Math.sin(q.a) * g.w / 2) * fk;
+      return `<text transform="translate(${sn(x)} ${sn(y)}) rotate(${sn(q.a * 180 / Math.PI)})" ${fa}>${svgEsc(g.ch)}</text>`; })).join(''), X);
+  }
   const out = bgs + lay.lines.map(line => `<text x="${sn(ax + line.x0 * fk)}" y="${sn(ay + line.baseline * fk)}" font-family="${svgEsc(L.font)}" font-size="${sn(lay.size * fk)}" font-weight="${L.weight}"${L.italic ? ' font-style="italic"' : ''} letter-spacing="${sn((L.ls || 0) * lay.size * fk)}" ${svgFill(L.color)} xml:space="preserve">${svgEsc(line.text)}</text>`).join('');
   return svgWrap(L, out, X);
 }

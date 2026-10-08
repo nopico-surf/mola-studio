@@ -42,7 +42,9 @@ const FONT_SLOTS = ['Título', 'Texto', 'Impacto'];
 const ROLE_COMP = { title:'title', brand:'title', sub:'sub', kicker:'kicker', tag:'kicker', big:'big', offer:'hl', k1:'impact', k2:'impact', k3:'impact', cta:'cta', logo:'logo', logoSmall:'logo', image:'image', shape:'shape' };
 // o que é do elemento e não do estilo: não entra no padrão
 const COMP_SKIP = new Set(['id', 'type', 'role', 'name', 'comp', 'start', 'end', 'x', 'y', 'fpos', 'grp', 'locked', 'visible', 'flowFree', 'fsz',
-  'text', 'runs', 'src', 'video', 'vdur', 'vIn', 'vOut', 'cut', 'svg', 'zoom', 'ix', 'iy']);
+  'text', 'runs', 'src', 'video', 'vdur', 'vIn', 'vOut', 'cut', 'svg', 'zoom', 'ix', 'iy',
+  // texto em curva: o caminho é do elemento (raio, forma seguida…), não do estilo
+  'tpath', 'tpR', 'tpOff', 'tpFlip', 'tpV', 'tpDist', 'tpFit', 'tpBend', 'tpAmp', 'tpLen', 'tpPh', 'tpRef', 'tpPts', 'tpClosed']);
 
 const compsOf = () => (S.brand.comps ||= {});
 const compCustom = id => !!(S.brand.comps && S.brand.comps[id] && Object.keys(S.brand.comps[id]).length);
