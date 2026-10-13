@@ -19,7 +19,10 @@ const COMP_DEF = {
   // sizeA/sizeS = largura do logo sozinho no quadro / com outros elementos (fração da largura); viram L.size ao inserir
   logo:   { type:'logo', label:'Logo', p:{ sizeA:.36, sizeS:.14, drawColor:'@c2', lineColor:'@c2', tintColor:'@c1', idle:'shine' } },
   image:  { type:'image', label:'Imagem', y:.42, p:{ idle:'float', lineColor:'@c2' } },
-  shape:  { type:'shape', label:'Forma', y:.5, p:{ c1:'@c2', c2:'@c0', c3:'@c3', c4:'@c4', strokeColor:'@c1' } },
+  // vídeo (pedido do usuário: o padrão de como entra e anima, como o da imagem). `base` = o que o vídeo já tinha antes de existir o padrão:
+  // fica fora de `p` para "Aplicar nos vídeos que já existem" só mexer no que foi editado (um vídeo de arquivo cortado, em tela cheia, não vira cartão)
+  video:  { type:'image', label:'Vídeo', y:.5, base:{ mask:'rect', radius:24, size:.8, in:'fade' }, p:{ lineColor:'@c2' } },
+  shape: { type:'shape', label:'Forma', y:.5, p:{ c1:'@c2', c2:'@c0', c3:'@c3', c4:'@c4', strokeColor:'@c1' } },
   // o que a caneta (P) cria ao terminar um desenho (pedido do usuário: escolher se entra só com o traço, preenchido etc.).
   // penFill: auto = fechado preenche e aberto fica só no traço; fill = sempre preenchido; line = sempre só o traço (penStyle)
   pen:    { type:'shape', label:'Desenho (caneta)', name:'Vetor', pl:'desenhos', p:{ kind:'custom', penFill:'auto', c1:'@c2', c2:'@c0', c3:'@c3', c4:'@c4', strokeColor:'@c1', in:'draw' } },
@@ -34,7 +37,8 @@ COMP_DEF.cta.pl = 'botões'; COMP_DEF.image.pl = 'imagens'; COMP_DEF.title.pl = 
 const compPl = id => COMP_DEF[id].pl || COMP_DEF[id].label.toLowerCase() + 's';
 // não são camadas: só o arquivo (margem, formato/tempo)
 const COMP_FILE = new Set(['margin', 'file']);
-const compSkip = (id, k) => (COMP_SKIP.has(k) && !(id === 'bg' && k === 'src')) || (id === 'pen' && PEN_GEOM.has(k)); // imagem do fundo entra no padrão (é mídia, não pesa)
+// imagem do fundo entra no padrão (é mídia, não pesa); a altura do vídeo é a da proporção dele (mkVideo), não do estilo
+const compSkip = (id, k) => (COMP_SKIP.has(k) && !(id === 'bg' && k === 'src')) || (id === 'pen' && PEN_GEOM.has(k)) || (id === 'video' && k === 'mh');
 // o desenho é de cada traço: do padrão da caneta só vem o estilo (preencher ou não sai de penFill)
 const PEN_GEOM = new Set(['d', 'vec', 'vecD', 'kind', 'size', 'mh', 'rot', 'fill', 'radius', 'radSep', 'rTL', 'rTR', 'rBR', 'rBL', 'points', 'inner']);
 const FONT_SLOTS = ['Título', 'Texto', 'Impacto'];
@@ -42,7 +46,8 @@ const FONT_SLOTS = ['Título', 'Texto', 'Impacto'];
 const ROLE_COMP = { title:'title', brand:'title', sub:'sub', kicker:'kicker', tag:'kicker', big:'big', offer:'hl', k1:'impact', k2:'impact', k3:'impact', cta:'cta', logo:'logo', logoSmall:'logo', image:'image', shape:'shape' };
 // o que é do elemento e não do estilo: não entra no padrão
 const COMP_SKIP = new Set(['id', 'type', 'role', 'name', 'comp', 'start', 'end', 'x', 'y', 'fpos', 'grp', 'locked', 'visible', 'flowFree', 'fsz',
-  'text', 'runs', 'src', 'video', 'vdur', 'vIn', 'vOut', 'cut', 'svg', 'zoom', 'ix', 'iy',
+  'text', 'runs', 'src', 'video', 'vdur', 'vIn', 'vOut', 'vPause', 'vSkip', 'vSpeed', 'cut', 'svg', 'zoom', 'ix', 'iy',
+  'xin', // transição do clipe anterior: é do par de clipes na timeline, não do estilo
   // texto em curva: o caminho é do elemento (raio, forma seguida…), não do estilo
   'tpath', 'tpR', 'tpOff', 'tpFlip', 'tpV', 'tpDist', 'tpFit', 'tpBend', 'tpAmp', 'tpLen', 'tpPh', 'tpRef', 'tpPts', 'tpClosed']);
 
@@ -69,14 +74,17 @@ function toBrandRef(k, v, hint) {
   const rgb = x => (parseHex(x) || '').slice(0, 7);
   const idx = B.colors.map((x, i) => rgb(x) === c.slice(0, 7) ? i : -1).filter(i => i >= 0);
   if (!idx.length) return v;
-  const i = hm && hint[1] === 'c' && idx.includes(+hm[1]) ? +hm[1] : idx[0];
+  // várias cores iguais na paleta (uma com opacidade, outra sem): a que tem a mesma opacidade vence
+  const ex = idx.filter(j => Math.abs(colA(B.colors[j]) - colA(c)) < .003), pool = ex.length ? ex : idx;
+  const i = hm && hint[1] === 'c' && pool.includes(+hm[1]) ? +hm[1] : pool[0];
   return Math.abs(colA(B.colors[i]) - colA(c)) < .003 ? '@c' + i : '@c' + i + ':' + Math.round(colA(c) * 255).toString(16).padStart(2, '0');
 }
 // que componente esse elemento é (para "Usar como padrão" e "Aplicar o padrão")
 function compKindOf(L) {
-  if (!L || (L.type === 'image' && L.video) || (L.type === 'logo' && L.svg)) return null;
+  if (!L || (L.type === 'logo' && L.svg)) return null;
   if (L.type === 'bg' || L.type === 'fx' || L.type === 'camera') return L.type;
-  const id = COMP_DEF[L.comp] ? L.comp : ROLE_COMP[L.role];
+  let id = COMP_DEF[L.comp] ? L.comp : ROLE_COMP[L.role];
+  if (L.type === 'image') id = L.video ? 'video' : id === 'video' ? 'image' : id; // vídeo e imagem são camadas do mesmo tipo, componentes diferentes
   return id && COMP_DEF[id].type === L.type ? id : null;
 }
 // o elemento novo, já com o padrão (marca resolvida)
@@ -95,9 +103,28 @@ function mkComp(id) {
   const p = compProps(id);
   if (d.type === 'logo') { o.size = role === 'logo' ? p.sizeA : p.sizeS; delete p.sizeA; delete p.sizeS; }
   if (p.in && p.inDur == null) delete o.inDur; // preset trocado no padrão: duração do preset
-  Object.assign(o, p);
+  Object.assign(o, d.base, p);
   if (id === 'pen') { const L = mkShape(o); penStyle(L, false); return L; } // a prévia do padrão é um traço aberto
   return d.type === 'text' ? mkText(role, o) : d.type === 'cta' ? mkCta(o) : d.type === 'logo' ? mkLogo(role, o) : d.type === 'image' ? mkImage(o) : mkShape(o);
+}
+// a imagem de mentira da prévia do padrão (Imagem e Vídeo): degradê com as cores da marca, ▶ no vídeo. Uma por kind e paleta
+const PV_PH = new Map();
+function pvPlaceholder(video) {
+  const c = S.brand.colors, key = (video ? 'v' : 'i') + c[2] + c[3] + c[4];
+  if (PV_PH.has(key)) return PV_PH.get(key);
+  const cv = document.createElement('canvas'); cv.width = 640; cv.height = 480; const x = cv.getContext('2d');
+  const g = x.createLinearGradient(0, 0, 640, 480); g.addColorStop(0, c[2]); g.addColorStop(.6, c[3]); g.addColorStop(1, c[4]);
+  x.fillStyle = g; x.fillRect(0, 0, 640, 480);
+  x.fillStyle = 'rgba(255,255,255,.85)';
+  if (video) { x.beginPath(); x.moveTo(270, 170); x.lineTo(270, 310); x.lineTo(390, 240); x.closePath(); x.fill(); }
+  else { x.beginPath(); x.arc(470, 150, 46, 0, 7); x.fill(); x.beginPath(); x.moveTo(0, 480); x.lineTo(190, 250); x.lineTo(330, 400); x.lineTo(450, 300); x.lineTo(640, 480); x.closePath(); x.globalAlpha = .55; x.fill(); }
+  const u = cv.toDataURL('image/jpeg', .8); PV_PH.set(key, u); return u;
+}
+// vídeo novo: o padrão do componente Vídeo + o que é do arquivo (mídia, pôster, duração) e a altura pela proporção dele
+function mkVideo(media, name, p) {
+  const L = Object.assign(mkComp('video'), { name, video:media, src:p.src, vdur:p.dur });
+  L.mh = L.mask === 'rect' || L.mask === 'circle' ? +(L.size * p.h / p.w).toFixed(4) : null; // 'fit' segue a proporção do pôster
+  return L;
 }
 // preencher ou não o desenho da caneta (padrão "Desenho"): sem preenchimento fica só o traço (fill:false, como o caminho aberto de sempre)
 function penStyle(L, closed) {
@@ -168,8 +195,10 @@ function compApply(ls, id, D = S.duration) { // D = duração do arquivo dessas 
   const M = COMP_DEF[id].type === 'text' ? TP : BP, sz = COMP_DEF[id].type === 'logo' && { A:p.sizeA, S:p.sizeS };
   if (sz) { delete p.sizeA; delete p.sizeS; }
   for (const L of ls) {
-    const fx0 = L.fx;
+    const fx0 = L.fx, s0 = L.size;
     Object.assign(L, p);
+    // largura nova: a altura da máscara acompanha, senão o vídeo/foto muda de proporção
+    if (L.type === 'image' && p.size != null && L.mh != null && s0 > 0 && L.size !== s0) L.mh = +clamp(L.mh * L.size / s0, SZ_MIN, MH_MAX).toFixed(4);
     if (sz) L.size = L.role === 'logo' ? sz.A : sz.S; // logo grande (sozinho) ou pequeno (com outros)
     if (p.in && compRaw(id).inDur == null && M[p.in]) L.inDur = M[p.in].dur;
     // outra transição: mantém o meio e usa a duração dela (como no painel)
@@ -211,6 +240,7 @@ function compMeta(id, p = compProps(id)) {
   if (t === 'fx') return (FXS[p.fx] || {}).label || '';
   if (t === 'camera') return (CAMS[p.cam] || {}).label || '';
   if (t === 'logo') return `${Math.round(p.sizeA * W())} px · ${Math.round(p.sizeS * W())} px`;
+  if (t === 'image') return (BP[mkComp(id).in] || {}).label || ''; // como entra
   return '';
 }
 
@@ -249,9 +279,15 @@ function openComps(id = 'title') {
     if (COMP_DEF[cur].grp) { x.clearRect(0, 0, cw, ch); drawScene(x, L, t, cw, ch); return; }
     x.fillStyle = S.brand.colors[0]; x.fillRect(0, 0, cw, ch);
     if (L.type === 'image') {
-      x.fillStyle = S.brand.colors[1]; x.globalAlpha = .5; x.font = '500 40px ' + getComputedStyle(document.body).fontFamily; x.textAlign = 'center';
-      x.fillText('A foto entra com essa animação e moldura', cw / 2, ch / 2); x.globalAlpha = 1;
-      return;
+      // foto de mentira (degradê da marca; no vídeo, com o ▶) no lugar da mídia, para ver a entrada e a moldura
+      if (!L.src) L.src = pvPlaceholder(cur === 'video');
+      if (!RT.images.get(L.src)) { // ainda carregando (um dataURL local, é rápido): aviso e redesenha quando chegar
+        x.fillStyle = S.brand.colors[1]; x.globalAlpha = .5; x.font = '500 40px ' + getComputedStyle(document.body).fontFamily; x.textAlign = 'center';
+        x.fillText(cur === 'video' ? 'O vídeo entra com essa animação e moldura' : 'A foto entra com essa animação e moldura', cw / 2, ch / 2); x.globalAlpha = 1;
+        const src = L.src, wait = n => { if (!COMPWIN) return; if (RT.images.get(src)) drawPrev(); else if (n < 40) setTimeout(() => wait(n + 1), 50); };
+        getImage(src); wait(0);
+        return;
+      }
     }
     L.x = .5; L.y = .5; L.start = 0; L.end = 9999;
     const R = { rs:1, export:true }, tt = t ?? restTime(L);
@@ -342,7 +378,7 @@ function openComps(id = 'title') {
   const refresh = () => {
     prevL = null; sceneTitle = null; cancelAnimationFrame(prevRaf);
     const t = COMP_DEF[cur].type;
-    playB.hidden = t === 'margin' || t === 'file' || t === 'image';
+    playB.hidden = t === 'margin' || t === 'file';
     // quadro em pé precisa de mais altura que um elemento solto
     const ph = COMP_DEF[cur].grp ? 900 : 600; if (pv.height !== ph) { pv.height = ph; pv.style.aspectRatio = `${pv.width} / ${ph}`; }
     playB.lastChild.textContent = t === 'bg' ? 'Ver movimento' : t === 'camera' ? 'Ver câmera' : t === 'fx' ? 'Ver transição' : 'Ver entrada';
@@ -515,7 +551,7 @@ function openComps(id = 'title') {
     if (!ov.contains(document.activeElement)) card.focus({ preventScroll:true });
   };
   const SHOWN = new Set(['text', 'font', 'weight', 'size', 'color', 'hl', 'ls', 'lh', 'align', 'upper', 'lower', 'cap', 'title', 'italic', 'bg', 'radius', 'padX', 'padY', 'kind', 'c1', 'c2', 'mh', 'sizeA', 'sizeS', 'drawColor', 'in', 'out', 'idle', 'inDur',
-    'tbg', 'hlPadX', 'hlPadY', 'hlRad', 'hlBox', 'stroke', 'strokeW', 'strokeColor', 'strokePos', 'mode', 'fill', 'penFill', 'c3', 'c4']);
+    'size', 'tbg', 'hlPadX', 'hlPadY', 'hlRad', 'hlBox', 'stroke', 'strokeW', 'strokeColor', 'strokePos', 'mode', 'fill', 'penFill', 'c3', 'c4']);
   const SHOWN_G = new Set(['mode', 'c1', 'c2', 'c3', 'c4', 'src', 'darken', 'angle', 'motion', 'grain', 'on', 'top', 'right', 'bottom', 'left',
     'format', 'duration', 'fps', 'slides', 'loop', 'fx', 'cam', 'intensity', 'speed', 'opacity']);
   const drawNav = () => {

@@ -178,6 +178,18 @@
       "port": 3093
     },
     {
+      "name": "mola-xf",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", ".", "-l", "3127"],
+      "port": 3127
+    },
+    {
+      "name": "mola-cortes",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", ".", "-l", "3117"],
+      "port": 3117
+    },
+    {
       "name": "mola-colar",
       "runtimeExecutable": "npx",
       "runtimeArgs": [

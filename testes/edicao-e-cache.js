@@ -52,6 +52,19 @@ const confere = (nome, ok, info) => { if (!ok) falhas++; console.log((ok ? 'ok  
   confere('Caixa: frame pintado com caixa do layout', box.paint && box.fr && box.fr.w > 50, box);
   confere('Caixa: o fundo do frame pega o clique', box.hit, box);
 
+  // 3b) frame pintado com dois itens: mudar só o segundo não pode repintar o fundo do frame por cima do primeiro (bug: o outro sumia)
+  const duo = await p.evaluate(() => {
+    S.layers = S.layers.filter(l => l.type === 'bg'); RT.layout.clear(); selectBg();
+    const A = addBox(); select(A.id); const B = addLayer(mkComp('title')); B.text = 'Sim'; pause(); T = A.start + 2; setView(viewFull());
+    const snap = () => pctx.getImageData(0, 0, cvr.width, cvr.height).data;
+    const draw = () => { renderFrame(pctx, T, RS, false); renderFrame(pctx, T, RS, false); };
+    FC.on = true; FC.pre = FC.suf = null; FC.sigs = null; draw();
+    (S.layers.indexOf(B) > S.layers.indexOf(A) ? B : A).color = '#ff0000'; draw(); const a = snap().slice();
+    FC.on = false; draw(); const c = snap(); FC.on = true;
+    let m = 0; for (let i = 0; i < a.length; i++) m = Math.max(m, Math.abs(a[i] - c[i])); return { diff:m, mesmoFrame:B.grp === A.grp };
+  });
+  confere('frame pintado: mudar o 2º item não cobre o 1º (cache = desenho completo)', duo.mesmoFrame && duo.diff <= 3, duo);
+
   // 4) forma escolhida que saiu inteira do quadro: arrastar na mesa traz de volta
   const fora = await p.evaluate(async () => {
     selectBg(); const s = addLayer(mkComp('shape')); s.in = 'cut'; setPos(s, 1.5, .5); select(s.id); needs = true; await new Promise(r => setTimeout(r, 300));

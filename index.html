@@ -27,9 +27,11 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Mona+Sans:wght@400;500;600;700;800&family=Inter:wght@400;450;500;600;700&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&display=swap">
-<link rel="stylesheet" href="css/app.css?v=24">
+<link rel="stylesheet" href="css/app.css?v=29">
 <link rel="stylesheet" href="css/cutout.css?v=22">
 <link rel="stylesheet" href="css/abas.css?v=1">
+<link rel="stylesheet" href="css/trecho.css?v=3">
+<link rel="stylesheet" href="css/legenda.css?v=1">
 <style>body{margin:0}</style>
 </head>
 <body>
@@ -52,7 +54,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
     <div class="seg" id="fmt" role="group" aria-label="Formato"></div>
     <div class="durbox cdims" id="cdims" hidden title="Formato livre: largura e altura do vídeo em px"><input id="cW" type="number" min="16" step="2" aria-label="Largura do formato livre (px)"><span aria-hidden="true">×</span><input id="cH" type="number" min="16" step="2" aria-label="Altura do formato livre (px)"> px</div>
     <label class="durbox" for="slides" title="Carrossel: slides lado a lado no palco. Os elementos podem atravessar de um para o outro e cada slide sai como um arquivo">Slides <input id="slides" type="number" min="1" max="10" step="1"></label>
-    <label class="durbox" for="dur" title="0 = imagem estática: sem animação, sem timeline, exporta PNG"><span id="durL">Duração</span> <input id="dur" type="number" min="0" max="60" step="0.5"> s</label>
+    <label class="durbox" for="dur" title="0 = imagem estática: sem animação, sem timeline, exporta PNG"><span id="durL">Duração</span> <input id="dur" type="text" inputmode="decimal" autocomplete="off" placeholder="00:00" aria-label="Duração em minutos e segundos"></label>
     <label class="durbox" for="fps">FPS <select id="fps"></select></label>
     <div class="mwrap">
       <button class="btn small ghost" id="mBtn" aria-expanded="false" aria-controls="mPop">Margem <span id="mSum"></span></button>
@@ -140,12 +142,13 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
     <div class="transport">
       <button class="play" id="play" aria-label="Tocar"></button>
       <div class="tc" id="tc">00:00 <span>/ 00:00</span></div>
+      <button type="button" class="btn small ghost split" id="splitBtn" title="Dividir o vídeo escolhido em dois no quadro da agulha (S). O som que segue o vídeo divide junto" aria-label="Dividir na agulha"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4" cy="4.2" r="1.8"/><circle cx="4" cy="11.8" r="1.8"/><path d="M5.5 5.4 13.5 11.6M5.5 10.6 13.5 4.4"/></svg>Dividir</button>
       <div class="scrub"><input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Posição"><div class="marks" id="marks"></div></div>
       <label class="tog" for="loop"><input type="checkbox" id="loop" checked> Repetir</label>
       <div class="zoom" role="group" aria-label="Zoom do palco">
-        <button type="button" id="zOut" title="Diminuir o zoom (-)" aria-label="Diminuir o zoom">−</button>
+        <button type="button" id="zOut" title="Diminuir o zoom (-)" aria-label="Diminuir o zoom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9"/></svg></button>
         <button type="button" id="zVal" title="Clique para alternar entre ajustar ao espaço (Shift + 1) e 100% (Shift + 0)">100%</button>
-        <button type="button" id="zIn" title="Aumentar o zoom (+). Ctrl + roda do mouse também" aria-label="Aumentar o zoom">+</button>
+        <button type="button" id="zIn" title="Aumentar o zoom (+). Ctrl + roda do mouse também" aria-label="Aumentar o zoom"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 8h9M8 3.5v9"/></svg></button>
       </div>
       <button class="btn small ghost" id="pngBtn"title="Salvar como imagem PNG: a seleção (fundo transparente) ou, sem seleção, o quadro da agulha (capa, post estático)">Exportar PNG</button>
       <button class="btn small ghost" id="svgBtn" title="Salvar como SVG (vetor): a seleção ou, sem seleção, o quadro da agulha. Sai parado, sem animação, com o texto em curvas">Exportar SVG</button>
@@ -202,9 +205,12 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 <script src="js/vetor.js?v=23"></script>
 <script src="js/svgimport.js?v=22"></script>
 <script src="js/marca-mola.js?v=1"></script>
-<script src="js/componentes.js?v=23"></script>
+<script src="js/componentes.js?v=28"></script>
 <script src="js/pasta.js?v=1"></script>
 <script src="js/abas.js?v=1"></script>
-<script src="js/app.js?v=27"></script>
+<script src="js/trecho.js?v=4"></script>
+<script src="js/legenda.js?v=2"></script>
+<script src="js/roteiro.js?v=1"></script>
+<script src="js/app.js?v=45"></script>
 </body>
 </html>

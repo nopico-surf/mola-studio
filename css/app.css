@@ -156,6 +156,7 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .zoom button+button{border-left:1px solid var(--line)}
 .zoom button:hover{background:var(--raised-2);color:var(--fg)}
 .zoom #zVal{min-width:54px}
+.zoom button svg{display:block;width:12px;height:12px;margin:auto}
 /* #cv = o quadro na tela (tamanho e cliques); o desenho fica em #cvr, por cima, que com zoom cobre só a parte vista (setView) */
 .stage-frame{position:relative;border-radius:4px;overflow:hidden;box-shadow:0 0 0 1px var(--line-2),0 30px 80px -20px rgba(0,0,0,.7)}
 #cv{display:block;background:#000;touch-action:none}
@@ -212,6 +213,9 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .tl-bar .h.r::after{right:2px}
 .tl-lane:hover .tl-bar .h::after,.tl-row.sel .tl-bar .h::after{opacity:.55}
 .tl-bar.hl .h.l::after,.tl-bar.hr .h.r::after{opacity:1;top:12%;bottom:12%;background:var(--fg)}
+/* transição entre clipes: a janela em que os dois aparecem misturados (só visual; o clique continua sendo da barra) */
+.tl-xf{position:absolute;top:2px;bottom:2px;z-index:2;pointer-events:none;border-radius:4px;border:1px solid color-mix(in srgb,var(--fg) 55%,transparent);background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--fg) 22%,transparent) 0 3px,transparent 3px 6px);min-width:4px}
+.tl-xf::after{content:"";position:absolute;left:50%;top:50%;width:10px;height:10px;margin:-5px 0 0 -5px;background:var(--fg);clip-path:polygon(0 0,50% 50%,100% 0,100% 100%,50% 50%,0 100%)}
 .tl-bar.drag{cursor:grabbing}
 .tl-tip{position:absolute;top:50%;transform:translateY(-50%);z-index:5;padding:2px 6px;border-radius:4px;background:var(--fg);color:var(--bg);font:600 10px var(--f-mono);white-space:nowrap;pointer-events:none}
 .tl-snap{position:absolute;top:0;bottom:0;width:0;border-left:1px dashed var(--fg);opacity:.6;pointer-events:none;z-index:4}
@@ -246,6 +250,14 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .tl-end{position:absolute;top:0;bottom:0;right:0;width:12px;cursor:ew-resize;z-index:2;border-right:3px solid var(--muted)}
 .tl-end:hover{background:rgba(255,255,255,.06)}
 .tl-empty{padding:12px 16px;color:var(--faint);font-size:12px}
+/* zoom da timeline (Ctrl + roda, tlZoom): as faixas ficam --tlz vezes mais largas e rolam para os lados; os nomes ficam parados */
+.tl.zoomed{overflow-x:auto}
+.tl.zoomed>.tl-row,.tl.zoomed>.tl-ruler{width:calc(var(--name) + (100% - var(--name)) * var(--tlz))}
+.tl.zoomed .tl-row>.tl-nm,.tl.zoomed .tl-ruler>.tl-nm{position:sticky;left:0;z-index:5;background:var(--panel)}
+.tl.zoomed .tl-row.sel>.tl-nm{background:color-mix(in srgb,var(--accent) 18%,var(--panel))}
+.tl.zoomed .tl-row.grp>.tl-nm{background:color-mix(in srgb,var(--accent) 6%,var(--panel))}
+.tl.zoomed .tl-row.grp.sel>.tl-nm{background:color-mix(in srgb,var(--accent) 22%,var(--panel))}
+.tl-ruler .tl-fit{margin-left:auto;flex:none}
 /* menu do botão direito */
 .ctx{position:fixed;z-index:60;min-width:196px;background:var(--raised);border:1px solid var(--line-2);border-radius:9px;padding:4px;box-shadow:0 16px 40px -8px rgba(0,0,0,.6);display:flex;flex-direction:column}
 .ctx button{border:0;background:transparent;text-align:left;padding:7px 10px;border-radius:6px;font-size:12.5px;display:flex;justify-content:space-between;gap:18px;color:var(--fg)}
@@ -518,6 +530,8 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 /* texto: grupos claros, alinhamento numa linha só, sem nada recolhido */
 .segs.tight{grid-template-columns:repeat(auto-fit,minmax(56px,1fr))}
 .segs.tight button{padding:0 4px}
+.segs.spd{grid-template-columns:repeat(5,1fr);gap:2px} /* velocidade do vídeo: os cinco atalhos numa linha */
+.segs.spd button{padding:0;min-width:0}
 .checks{display:flex;gap:16px;min-height:var(--ctl);align-items:center}
 .field:has(> .colorctl){padding-block:8px}
 .field.stack > .segs{width:100%}
@@ -528,6 +542,15 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .sec > .check{min-height:var(--ctl)}
 .sec > .hint{margin-top:-2px}
 .sec > .row{min-height:var(--ctl)}
+
+/* Tirar silêncios: modo + botão + resultado num cartão só (um depende do outro) */
+.sil-card{display:grid;gap:8px;padding:10px;border-radius:var(--r);background:var(--raised)}
+.sil-card .sil-head{font-size:12px;font-weight:600;color:var(--fg)}
+.sil-card .field .segs button{background:var(--raised-2)}
+.sil-card .field .segs button[aria-pressed="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 22%,var(--raised-2))}
+.sil-card .sil-go{width:100%;height:var(--ctl)}
+.sil-card .sil-res{display:grid;gap:8px;padding-top:8px;border-top:1px solid var(--line-2)}
+.sil-card .sil-res .btn{justify-self:start}
 
 .tl-row .tl-nm[draggable="true"]{cursor:grab}
 .tl-row .tl-nm[draggable="true"]:active{cursor:grabbing}
@@ -575,6 +598,10 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 /* ===== Recursos novos: câmera, transição, trilha, variações, exportar, meus elementos ===== */
 :root{--c-camera:#7FD4E8;--c-fx:#FF8F6B;--c-video:#B8E05C;--c-svg:#E6EAF2;--c-audio:#E8D36B}
 .tl-bar .tl-awave{position:absolute;inset:0;width:100%;height:100%;color:var(--c);opacity:.75;pointer-events:none}
+/* pausa do vídeo: o quadro fica parado nesse trecho da barra */
+.tl-bar .tl-vp{position:absolute;top:0;bottom:0;pointer-events:none;border-left:1px solid var(--c);background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--c) 45%,transparent) 0 2px,transparent 2px 6px)}
+/* corte seco (Tirar silêncios): risco no ponto em que o vídeo pula */
+.tl-bar .tl-vj{position:absolute;top:2px;bottom:2px;width:0;margin-left:-1px;pointer-events:none;border-left:2px solid var(--bg);opacity:.8}
 .adds-sub{grid-column:1/-1;font-size:10px;font-weight:600;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;padding:8px 2px 1px}
 .add.my{position:relative;cursor:pointer}
 .add.my img.gl{width:auto;max-width:100%;height:24px;object-fit:contain}
@@ -594,7 +621,8 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .aud-nm small{color:var(--muted);font:500 10.5px var(--f-mono)}
 .tl-ruler u.tl-beat{position:absolute;bottom:0;height:5px;border-left:1px solid var(--muted);text-decoration:none;pointer-events:none}
 /* carrossel: fim de cada slide mais curto que a timeline; barra de quem está num slide-imagem fica apagada */
-.tl-ruler s.tl-send{position:absolute;top:0;bottom:0;border-left:1px dashed var(--muted);text-decoration:none;pointer-events:none;padding:12px 0 0 3px;font:600 9px/1 var(--f-mono);color:var(--muted)}
+.tl-ruler s.tl-send{position:absolute;top:0;bottom:0;border-left:1px dashed var(--muted);text-decoration:none;pointer-events:none;}
+.tl-ruler s.tl-send::after{content:attr(data-n);position:absolute;left:3px;bottom:2px;padding:2px 4px;border-radius:3px;background:var(--raised-2);color:var(--fg);font:600 9px/1 var(--f-mono);white-space:nowrap}
 .tl-bar.still{opacity:.4}
 .tl-row.tl-audio{background:rgba(255,255,255,.02)}
 .tl-row.tl-audio .tl-lane{cursor:ew-resize}
@@ -693,7 +721,7 @@ button.chip-cat:hover{color:var(--fg)}
 /* janela estreita: o transporte quebra em duas linhas em vez de passar por cima da coluna da direita */
 .transport{flex-wrap:wrap;row-gap:6px}
 /* imagem estática (Duração 0): some o que é de vídeo (tocar, posição, repetir, timeline, FPS, trilha) */
-.app.still #play,.app.still #tc,.app.still .scrub,.app.still label[for="loop"],.app.still #tlToggle,.app.still .tl,.app.still .tl-grip,
+.app.still #play,.app.still #tc,.app.still #splitBtn,.app.still .scrub,.app.still label[for="loop"],.app.still #tlToggle,.app.still .tl,.app.still .tl-grip,
 .app.still label[for="fps"],.app.still .left .sec:has(#audioBox){display:none!important}
 .app.still .transport .zoom{margin-left:auto}
 /* cabeçalho fechado com resumo: o resumo vale mais que a dica ("no fim do vídeo" volta ao abrir); dica nunca quebra linha */

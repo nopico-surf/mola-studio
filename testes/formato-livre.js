@@ -1,6 +1,6 @@
 // Teste no navegador: formato livre (pedido do usuário: palco de qualquer tamanho, fora dos padrões do Instagram, que por enquanto
-// não se liga aos outros: nada se reorganiza). Botão "Livre", largura × altura no topo (par, com limites, desfazer), arrastar no
-// livre não mexe no principal, o principal não reorganiza o livre e vice-versa, nome do arquivo exportado, padrão de arquivo novo.
+// se reorganiza a partir do principal, como os outros). Botão "Livre", largura × altura no topo (par, com limites, desfazer), arrastar no
+// livre não mexe no principal, o livre se reorganiza a partir do principal (e o contrário), nome do arquivo exportado, padrão de arquivo novo.
 // Rodar: node testes/formato-livre.js   (SHOTS=pasta salva prints)
 const path = require('path');
 let pw; try { pw = require('playwright'); } catch (e) { pw = require(require('child_process').execSync('npm root -g').toString().trim() + '/playwright'); }
@@ -45,7 +45,7 @@ const near = (a, b, e = 1e-4) => Math.abs(a - b) < e;
   conf(await p.evaluate(() => $('#cW').value === '1200'), 'campo acompanha o desfazer');
   conf(await p.evaluate(() => outName().endsWith('-1200x802')), 'nome do arquivo exportado com 1200x802');
 
-  // título no livre (principal): mexer grava em x/y; no 1:1 nada se reorganiza
+  // título no livre (principal): mexer grava em x/y; o 1:1 se reorganiza a partir do livre
   const id1 = await p.evaluate(() => { const L = addLayer(ADD_KINDS.find(k => k.id === 'title').mk(S.brand, S.brand.fonts)); T = Math.max(T, L.start + 2); renderAll(); return L.id; });
   conf(await p.evaluate(() => baseFmt() === 'custom'), 'arquivo começado no livre: ele é o principal');
   await p.waitForTimeout(200);
@@ -54,30 +54,31 @@ const near = (a, b, e = 1e-4) => Math.abs(a - b) < e;
   const x1 = await p.evaluate(id => S.layers.find(l => l.id === id).x, id1);
   conf(x1 > x0 + .01, 'arrastar no livre (principal) muda x');
   await p.locator('#fmt button', { hasText:'1:1' }).click(); await p.waitForTimeout(150);
-  conf(await p.evaluate(id => { const L = S.layers.find(l => l.id === id), q = posOf(L); return Math.abs(q.x - L.x) < 1e-4 && Math.abs(q.y - L.y) < 1e-4; }, id1), '1:1 com o livre de principal: mesma posição, sem reorganizar');
+  conf(await p.evaluate(id => { const L = S.layers.find(l => l.id === id), q = posOf(L), r = restBoxIn(L, '1x1'); return q.y > 0 && q.y < 1 && r && r.l >= -1 && r.r <= 1081; }, id1), '1:1 com o livre de principal: reorganiza e o texto cabe no quadro');
   await p.locator('#fmt button', { hasText:'1:1' }).dblclick(); await p.waitForTimeout(150);
   conf(await p.evaluate(() => baseFmt() === 'custom'), 'clique duplo no 1:1 não troca o principal livre');
   await p.waitForTimeout(150);
   await drag(id1, 0, 40);
   conf(await p.evaluate(([id, x]) => { const L = S.layers.find(l => l.id === id); return Math.abs(L.x - x) < 1e-4 && L.fpos && L.fpos['1x1']; }, [id1, x1]), 'arrastar no 1:1 fica só no 1:1');
-  conf(!(await p.locator('#stageHint').textContent()).includes('presa'), 'pílula não avisa "posição presa" fora do livre ligado');
+  conf((await p.locator('#stageHint').textContent()).includes('presa'), 'pílula avisa "posição presa" depois de mexer no 1:1');
 
-  // 2) arquivo no 4:5 com conteúdo: abrir o livre não reorganiza e mexer no livre não muda o 4:5
+  // 2) arquivo no 4:5 com conteúdo: abrir o livre reorganiza (mesma largura de elemento, centro na mesma fração) e mexer no livre não muda o 4:5
   await fresh();
   const ids = await p.evaluate(() => { const a = addLayer(ADD_KINDS.find(k => k.id === 'title').mk(S.brand, S.brand.fonts)); const c = addLayer(ADD_KINDS.find(k => k.id === 'sub').mk(S.brand, S.brand.fonts));
     T = Math.max(a.start, c.start) + 2; renderAll(); return [a.id, c.id]; });
   const before = await p.evaluate(ids => ids.map(id => { const L = S.layers.find(l => l.id === id); return [L.x, L.y]; }), ids);
   await livre.click(); await p.waitForTimeout(200);
   conf(await p.evaluate(() => baseFmt() === '4x5' && S.format === 'custom'), '4:5 continua o principal ao abrir o livre');
-  conf(await p.evaluate(ids => ids.every(id => { const L = S.layers.find(l => l.id === id), q = posOf(L); return Math.abs(q.x - L.x) < 1e-4 && Math.abs(q.y - L.y) < 1e-4; }), ids), 'livre: mesma posição relativa do 4:5, sem reorganizar');
+  conf(await p.evaluate(ids => ids.every(id => { const L = S.layers.find(l => l.id === id), q = posOf(L); return Math.abs(q.x - L.x) < .02 && q.y > 0 && q.y < 1; }), ids), 'livre: centro na mesma fração na horizontal e dentro do quadro na vertical');
+  conf(await p.evaluate(() => { const ys = S.layers.filter(l => l.type === 'text').map(l => posOf(l).y).sort((a, b) => a - b); return ys.length < 2 || ys[1] - ys[0] > .05; }), 'livre: título e subtítulo não se sobrepõem');
   if (shots) await p.screenshot({ path:path.join(shots, 'livre.png') });
   await drag(ids[0], -80, 30);
   const after = await p.evaluate(ids => ids.map(id => { const L = S.layers.find(l => l.id === id); return [L.x, L.y]; }), ids);
   conf(after.every((q, i) => near(q[0], before[i][0]) && near(q[1], before[i][1])), 'arrastar no livre não muda o 4:5');
   conf(await p.evaluate(id => !!(S.layers.find(l => l.id === id).fpos || {}).custom, ids[0]), 'posição do livre fica só nele (fpos.custom)');
-  conf(!(await p.locator('#stageHint').textContent()).includes('presa'), 'livre: pílula não avisa "posição presa"');
+  conf((await p.locator('#stageHint').textContent()).includes('presa'), 'livre: pílula avisa "posição presa"');
   await p.evaluate(id => { select(id); renderProps(); }, ids[0]);
-  conf(await p.locator('#props .posnote button', { hasText:'Voltar à do 4:5' }).count() === 1, 'painel oferece "Voltar à do 4:5"');
+  conf(await p.locator('#props .posnote button', { hasText:'Voltar ao automático' }).count() === 1, 'painel oferece "Voltar ao automático"');
   await p.locator('#fmt button', { hasText:'4:5' }).click(); await p.waitForTimeout(150);
   conf(await p.evaluate(ids => ids.every(id => { const L = S.layers.find(l => l.id === id), q = posOf(L); return Math.abs(q.x - L.x) < 1e-4; }), ids), 'de volta ao 4:5, tudo onde estava');
 

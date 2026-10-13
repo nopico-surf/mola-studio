@@ -1,0 +1,18 @@
+/* Legendas (js/legenda.js): janela de progresso e lista de trechos no painel */
+.leg-win .modal-card{width:min(440px,100%)}
+.leg-bar{height:6px;border-radius:3px;background:var(--raised-2);overflow:hidden;margin:4px 0 2px;position:relative}
+.leg-bar i{display:block;height:100%;width:0;background:var(--fg);border-radius:inherit;transition:width .25s}
+.leg-bar.busy i{width:30%;animation:legSlide 1.3s ease-in-out infinite}
+@keyframes legSlide{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
+
+.leg-styles .chip{justify-content:center;text-align:center}
+.leg-list{display:flex;flex-direction:column;gap:2px;max-height:360px;overflow:auto;margin:2px -4px;padding:0 4px}
+.leg-row{display:grid;grid-template-columns:auto minmax(0,1fr) 24px;align-items:start;gap:6px;padding:3px 0;border-radius:var(--r)}
+.leg-t{border:0;background:transparent;color:var(--faint);font:11px/20px var(--f-mono);padding:2px 2px;border-radius:4px;min-width:44px;text-align:left}
+.leg-t:hover{color:var(--fg);background:var(--raised)}
+.leg-tx{min-height:24px;padding:2px 6px;border-radius:5px;background:transparent;border:1px solid transparent;font-size:12px;line-height:20px;outline:none;word-break:break-word}
+.leg-tx:hover{background:var(--raised)}
+.leg-tx:focus{background:var(--raised);border-color:var(--accent)}
+.leg-tx mark{background:transparent;color:inherit;text-decoration:underline wavy var(--danger);text-decoration-thickness:1px;text-underline-offset:3px}
+.leg-row .icon-btn{margin-top:0}
+.tl-bar .tl-cap{position:absolute;top:4px;bottom:4px;width:1px;background:color-mix(in srgb,var(--c) 75%,transparent);pointer-events:none}

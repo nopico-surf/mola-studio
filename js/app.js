@@ -116,7 +116,7 @@ const TP = { // texto
   slideWord: {label:'Desliza por palavra', unit:'word', s:.45, ease:'expoOut', dur:1.1, fn:({e,p,I,size,dir,sax,ssg})=>{ const m=(1-e)*size*(.6+1.2*I)*(ssg??1)*dir, o={a:clamp(p*2.5)}; if(sax==='y')o.dy=m; else o.dx=m; return o; }},
   slideAlt:  {label:'Linhas alternadas', unit:'line', s:.2, ease:'expoOut', dur:1.1, fn:({e,p,i,W,H,dir,I,sax,ssg})=>{ const m=(1-e)*(sax==='y'?H:W)*(.3+.5*I)*(i%2?1:-1)*(ssg??1)*dir, o={blur:(1-e)*12, a:clamp(p*2)}; if(sax==='y')o.dy=m; else o.dx=m; return o; }},
   counter:   {label:'Contador', unit:'all', s:0, ease:'expoOut', dur:1.3, counter:true, fn:({e,p})=>({count:e, a:clamp(p*4)})},
-  fade:      {label:'Fade', unit:'all', s:0, ease:'cubicOut', dur:.8, fn:({e})=>({a:e, dy:(1-e)*8})},
+  fade:      {label:'Fade', unit:'all', s:0, ease:'cubicOut', dur:.8, fn:({e, dir})=>(dir < 0 ? {a:e} : {a:e, dy:(1-e)*8})},
   cut:       {label:'Sem animação', unit:'all', s:0, ease:'linear', dur:0, fn:()=>({})},
 };
 const TEXT_IN  = ['cut','rise','springWord','lineMask','blurChar','wave','stamp','highlight','type','track','drop','elastic','flip','scramble','glitch','zoom','slideWord','slideAlt','counter','fade'];
@@ -149,7 +149,7 @@ const BP = { // blocos: logo, botão, imagem
   blur:    {label:'Desfoque', ease:'cubicOut', dur:1.0, fn:({e,p,I})=>({blur:(1-e)*(10+26*I), sc:1+(1-e)*.3*I, a:clamp(p*1.5)})},
   circle:  {label:'Revelação circular', ease:'cubicInOut', dur:1.1, fn:({e,I})=>({clip:'circle', ce:e, sc:1+(1-e)*.15*I})},
   wipe:    {label:'Cortina', ease:'cubicInOut', dur:1.0, fn:({e,dir})=>({clip:'wipe', ce:e, cdir:dir})},
-  fade:    {label:'Fade', ease:'cubicOut', dur:.8, fn:({e})=>({a:e, sc:1+(1-e)*.04})},
+  fade:    {label:'Fade', ease:'cubicOut', dur:.8, fn:({e, dir})=>(dir < 0 ? {a:e} : {a:e, sc:1+(1-e)*.04})},
   cut:     {label:'Sem animação', ease:'linear', dur:0, fn:()=>({})},
 };
 const BLOCK_IN = { logo:['cut','handwrite','draw','assemble','line','spring','pop','drop','spin','flip','slide','rise','blur','circle','wipe','fade'],
@@ -293,7 +293,6 @@ const CUSTOM_DEF = { w:1920, h:1080 }, CUSTOM_MIN = 16;
 const customDim = k => { const c = S && S.custom, v = Math.round(+(c && c[k]) || CUSTOM_DEF[k]); return Math.max(v + v % 2, CUSTOM_MIN); };
 FORMATS.custom = { get w() { return customDim('w'); }, get h() { return customDim('h'); }, get label() { return `${customDim('w')}×${customDim('h')}`; } };
 const SU = 1080; // unidade dos tamanhos (fração × SU = px): igual em todo formato, inclusive no livre de outra largura
-const linked = () => S.format !== 'custom' && baseFmt() !== 'custom';
 // conta "no principal" feita com a largura do formato aberto só vale se os dois têm a mesma largura (os do Instagram têm 1080)
 const sameW = () => FORMATS[baseFmt()].w === W();
 const FPS_OPTS = [24, 25, 30, 50, 60];
@@ -301,7 +300,7 @@ const fps = () => (S && FPS_OPTS.includes(S.fps) ? S.fps : 30);
 const TYPE_LABEL = { bg:'Fundo', text:'Texto', logo:'Logo', cta:'Botão', image:'Imagem', video:'Vídeo', svg:'SVG', shape:'Forma', camera:'Câmera', fx:'Transição', audio:'Áudio' };
 const typeKey = L => L.type === 'image' && L.video ? 'video' : L.type === 'logo' && L.svg ? 'svg' : L.type;
 const TYPE_COLOR = { bg:'var(--c-bg)', text:'var(--c-text)', logo:'var(--c-logo)', cta:'var(--c-cta)', image:'var(--c-image)', video:'var(--c-video)', svg:'var(--c-svg)', shape:'var(--c-shape)', camera:'var(--c-camera)', fx:'var(--c-fx)', audio:'var(--c-audio)' };
-const ROLE_NAME = { logo:'Logo', logoSmall:'Logo pequeno', brand:'Nome da marca', title:'Título', sub:'Subtítulo', cta:'Botão', big:'Número grande', offer:'Oferta', tag:'Etiqueta', kicker:'Chamada', k1:'Frase 1', k2:'Frase 2', k3:'Frase 3', image:'Imagem', bg:'Fundo' };
+const ROLE_NAME = { logo:'Logo', logoSmall:'Logo pequeno', brand:'Nome da marca', title:'Título', sub:'Subtítulo', cta:'Botão', big:'Número grande', offer:'Oferta', tag:'Etiqueta', kicker:'Chamada', k1:'Frase 1', k2:'Frase 2', k3:'Frase 3', image:'Imagem', bg:'Fundo', caption:'Legenda' };
 const ROLE_TEXT = { brand:'GRÃO LENTO', title:'Café de verdade,\nsem pressa.', sub:'Torra artesanal na sua porta em 24h', cta:'Peça agora  →', big:'-30%', offer:'na primeira assinatura', tag:'Só até domingo', kicker:'LANÇAMENTO', k1:'Moído na hora.', k2:'Torrado ontem.', k3:'Na sua porta amanhã.' };
 const GOOGLE_SUGGEST = ['Urbanist','Inter Tight','Roboto','Open Sans','Lato','Nunito','Nunito Sans','Raleway','Work Sans','Mulish','Karla','Barlow','Barlow Condensed','Josefin Sans','Quicksand','Kanit','Prompt','Jost','Albert Sans','Be Vietnam Pro','Public Sans','IBM Plex Sans','IBM Plex Serif','Libre Franklin','Merriweather','Lora','EB Garamond','Crimson Pro','Source Serif 4','Noto Sans','Noto Serif','Playfair','Abril Fatface','Alfa Slab One','Space Mono','JetBrains Mono','Fraunces','Manrope','Unbounded','Bricolage Grotesque','Syne','Sora','Outfit','Plus Jakarta Sans','DM Sans','DM Serif Display','Instrument Serif','Instrument Sans','Space Grotesk','Archivo','Archivo Black','Anton','Bebas Neue','Oswald','Montserrat','Poppins','Inter','Figtree','Onest','Rubik','Geist','Hanken Grotesk','Schibsted Grotesk','Familjen Grotesk','Big Shoulders Display','Bodoni Moda','Playfair Display','Cormorant Garamond','Gloock','Caveat','Permanent Marker','Lexend','Red Hat Display','Chivo','Darker Grotesque','Krona One','Dela Gothic One','Rethink Sans','Epilogue','Young Serif','Libre Caslon Display','Shrikhand','Righteous','Bowlby One','Lilita One'];
 
@@ -416,14 +415,20 @@ function restBoxIn(L, fmt) {
 }
 // Map id → { x, y (frações do formato aberto), k (escala), ww/hh (tamanho novo da máscara em px, ou null) }
 function adaptLayout() {
-  const bf = baseFmt(), Hb = FORMATS[bf].h, Ht = H(), dH = Ht - Hb, all = [], out = new Map();
-  for (const L of S.layers) {
-    if (L.type === 'bg' || NOBOX(L) || tpLink(L)) continue; // texto que segue uma forma fica onde a forma ficar
-    const r = restBoxIn(L, bf); if (!r) continue;
-    const up = freeType(L) && r.t <= 1, dn = freeType(L) && r.b >= Hb - 1; // só imagem e forma sangram
-    all.push({ L, ...r, hs:holdSpan(L), s0:slideAt(r.l + 1), s1:slideAt(r.r - 1), edge:up && dn ? 'cover' : up ? 'top' : dn ? 'bottom' : null,
-      stretch:!L.rot && ((L.type === 'image' && L.mask === 'rect') || (L.type === 'shape' && L.kind === 'rect')) });
-  }
+  const bf = baseFmt(), Hb = FORMATS[bf].h, Wb = FORMATS[bf].w, Ht = H(), Wt = W(), dH = Ht - Hb, dW = Wt - Wb, all = [], out = new Map();
+  if (RT.adapting) return out;
+  // as caixas do principal são medidas COMO o principal (largura, margem, slide e quebra de texto dele): com o formato livre de outra
+  // largura, medir com o formato aberto dava caixas erradas
+  const cur = S.format; RT.adapting = true; S.format = bf;
+  try {
+    for (const L of S.layers) {
+      if (L.type === 'bg' || NOBOX(L) || tpLink(L)) continue; // texto que segue uma forma fica onde a forma ficar
+      const r = restBoxIn(L, bf); if (!r) continue;
+      const up = freeType(L) && r.t <= 1, dn = freeType(L) && r.b >= Hb - 1; // só imagem e forma sangram
+      all.push({ L, ...r, hs:holdSpan(L), s0:slideAt(r.l + 1), s1:slideAt(r.r - 1), sl:slideAt(r.cx), M:areaAt(r.cx), edge:up && dn ? 'cover' : up ? 'top' : dn ? 'bottom' : null,
+        stretch:!L.rot && ((L.type === 'image' && L.mask === 'rect') || (L.type === 'shape' && L.kind === 'rect')) });
+    }
+  } finally { S.format = cur; RT.adapting = false; }
   // grupo (sem layout automático) = uma composição só: entra nas contas como um bloco rígido e os itens andam e escalam juntos.
   // Sem isso um SVG importado (disco, anéis, cada letra = uma forma) se desmontava: cada forma era tratada como foto,
   // encolhia e se apoiava na margem sozinha. Grupo com foto ou com algo que sangra pela borda segue item por item.
@@ -436,7 +441,7 @@ function adaptLayout() {
     if (ms.length < 2 || ms.some(i => i.edge || i.L.type === 'image' || i.s0 !== ms[0].s0 || i.s1 !== ms[0].s1)) { units.delete(gid); continue; }
     const t = Math.min(...ms.map(i => i.t)), b = Math.max(...ms.map(i => i.b)), l = Math.min(...ms.map(i => i.l)), r = Math.max(...ms.map(i => i.r));
     const U = { L:{ id:'g:' + gid, type:'group', visible:ms.some(i => i.L.visible), start:Math.min(...ms.map(i => i.L.start || 0)), end:Math.max(...ms.map(i => i.L.end ?? S.duration)) }, ms, t, b, l, r, cx:(l + r) / 2, cy:(t + b) / 2, hh:b - t, fk:1,
-      hs:[Math.min(...ms.map(i => i.hs[0])), Math.max(...ms.map(i => i.hs[1]))], s0:ms[0].s0, s1:ms[0].s1, edge:null, stretch:false };
+      hs:[Math.min(...ms.map(i => i.hs[0])), Math.max(...ms.map(i => i.hs[1]))], s0:ms[0].s0, s1:ms[0].s1, sl:ms[0].sl, M:ms[0].M, edge:null, stretch:false };
     for (const i of ms) all.splice(all.indexOf(i), 1);
     all.push(U); units.set(gid, U);
   }
@@ -595,17 +600,42 @@ function adaptLayout() {
   const edgeY = v => v <= A ? v : v >= B ? v + dH : F(v); // fora da faixa útil, fica presa à borda do quadro
   // com outra largura, fica apoiado na mesma borda: texto pelo alinhamento; o resto pela margem em que encosta
   // (a margem vem antes do alinhamento: texto "centro" encostado na margem esquerda continua na linha dos outros)
+  // tudo em px locais do slide: mx = margem do principal, tx = margem do formato aberto (px de margem iguais nos dois, então a
+  // borda esquerda coincide; a direita acompanha a largura). Com a mesma largura (os do Instagram) o resultado é o de sempre
+  const tx0 = M0.x0, tx1 = M0.x1;
+  const edgesOf = i => {
+    const off = i.sl * Wb, l0 = i.l - off, r0 = i.r - off, mx0 = i.M.x0 - off, mx1 = i.M.x1 - off;
+    return { off, l0, r0, c0:i.cx - off, mx0, mx1, bl:l0 <= 1, br:r0 >= Wb - 1 };
+  };
   const anchorX = (i, w2) => {
-    const M = areaAt(i.cx), lf = Math.abs(i.l - M.x0) < 16, rt = Math.abs(i.r - M.x1) < 16, own = i.L.type === 'text' ? i.L.align : 'center';
+    const e = edgesOf(i), { l0, r0, mx0, mx1 } = e;
+    const lf = Math.abs(l0 - mx0) < 16, rt = Math.abs(r0 - mx1) < 16, own = i.L.type === 'text' ? i.L.align : 'center';
     const al = lf && rt ? own : lf ? 'left' : rt ? 'right' : own;
-    let cx = al === 'left' ? i.l + w2 / 2 : al === 'right' ? i.r - w2 / 2 : i.cx;
-    if (i.l >= M.x0 - 1 && i.r <= M.x1 + 1 && w2 <= Mw) cx = clamp(cx, M.x0 + w2 / 2, M.x1 - w2 / 2);
-    return cx;
+    let cx = al === 'left' ? l0 + w2 / 2 : al === 'right' ? r0 - w2 / 2 : e.c0;
+    if (dW) { // outra largura: o que está colado numa borda fica colado nela; o resto mantém a proporção dentro da margem
+      const lM = lf || e.bl, rM = rt || e.br;
+      const eB0 = e.bl ? 0 : mx0, eT0 = e.bl ? 0 : tx0, eB1 = e.br ? Wb : mx1, eT1 = e.br ? Wt : tx1;
+      if (lM && rM) cx = (eT0 + eT1) / 2;
+      else if (lM) cx += eT0 - eB0;
+      else if (rM) cx += eT1 - eB1;
+      else cx = tx0 + (cx - mx0) * (tx1 - tx0) / Math.max(1, mx1 - mx0);
+    }
+    const tw = tx1 - tx0;
+    if (l0 >= mx0 - 1 && r0 <= mx1 + 1 && w2 <= tw) cx = clamp(cx, tx0 + w2 / 2, tx1 - w2 / 2);
+    return i.sl * Wt + cx;
+  };
+  // retângulo (foto ou forma) que ia de uma borda à outra (margem ou quadro) acompanha a largura nova: { w final, centro }
+  const stretchX = i => {
+    if (!dW || !i.stretch) return null;
+    const e = edgesOf(i), lf = Math.abs(e.l0 - e.mx0) < 16, rt = Math.abs(e.r0 - e.mx1) < 16;
+    if (!((lf || e.bl) && (rt || e.br))) return null;
+    const a = e.bl ? 0 : tx0, b = e.br ? Wt : tx1;
+    return { w:b - a, c:i.sl * Wt + (a + b) / 2 };
   };
   const picSeg = new Map(segs.filter(s => s.pic).flatMap(s => s.peers.map(p => [p, s])));
   for (const i of want) {
-    let cx = i.cx, cy = i.cy, k = 1, hh = null, ww = null;
     const w0 = i.r - i.l;
+    let cx = dW ? anchorX(i, w0) : i.cx, cy = i.cy, k = 1, hh = null, ww = null;
     if (!i.edge) {
       cy = F(i.cy); k = sc;
       const s = picSeg.get(i);
@@ -623,6 +653,8 @@ function adaptLayout() {
     else if (i.edge === 'cover') { cy = i.cy + dH / 2; if (i.stretch) hh = Math.max(40, i.hh + dH); else k = Math.max(1, (i.b - i.t + dH) / Math.max(1, i.b - i.t)); }
     else if (i.edge === 'top') { const d = edgeY(i.b) - i.b; if (i.stretch) { hh = Math.max(40, i.hh + d); cy = i.cy + (hh - i.hh) / 2; } }
     else { const d = edgeY(i.t) - i.t - dH; cy = i.cy + dH; if (i.stretch) { hh = Math.max(40, i.hh - d); cy -= (hh - i.hh) / 2; } }
+    const sx = stretchX(i);
+    if (sx) { ww = sx.w / (k || 1); cx = sx.c; }
     out.set(i.L.id, { x:cx / W(), y:cy / Ht, k, hh, ww });
   }
   }
@@ -630,7 +662,7 @@ function adaptLayout() {
 // uma conta por quadro (renderFrame avança RT.frameNo)
 function placement() {
   const key = `${RT.frameNo}|${S.format}|${baseFmt()}`;
-  if (RT.placeKey !== key) { RT.place = linked() ? adaptLayout() : new Map(); RT.placeKey = key; } // formato livre: sem reorganizar
+  if (RT.placeKey !== key) { RT.place = adaptLayout(); RT.placeKey = key; }
   return RT.place;
 }
 // onde a camada fica no formato aberto: no principal, x/y; nos outros, o ajuste feito ali ou a adaptação automática
@@ -680,6 +712,11 @@ function panOf(L) {
   if (L._pan) return L._pan; // movimento da imagem, durante o desenho (imageMotion)
   const f = fOf(L);
   return { ix:(f.ix ?? L.ix) || 0, iy:(f.iy ?? L.iy) || 0, zoom:(f.zoom ?? L.zoom) ?? 1 };
+}
+// escala que faz a imagem (girada por L.irot, graus) cobrir a máscara w×h: a máscara vista no quadro da imagem tem a caixa bw×bh
+function imgCover(L, w, h, iw, ih, zoom) {
+  const a = (L.irot || 0) * Math.PI / 180, c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+  return Math.max((w * c + h * s) / iw, (w * s + h * c) / ih) * zoom;
 }
 function setFrame(L, patch) { if (fmtOwn()) setFmt(L, patch); else Object.assign(L, patch); }
 const setPan = (L, ix, iy) => setFrame(L, { ix, iy });
@@ -1122,6 +1159,13 @@ function flowBake() {
   if (!S || RT.drag) return;
   try { flowBake1(); } catch (e) { console.error(e); }
 }
+// o tamanho que valeu na última conta de cada item e frame de dentro (fsz: a âncora do lado que fica parado)
+function flowSizes(R, byId) {
+  for (const [id, z] of R.sizes) {
+    if (id.startsWith('g:')) { const g = gmeta(id.slice(2)); if (g && (!g.fsz || Math.abs(g.fsz[0] - z[0]) > .05 || Math.abs(g.fsz[1] - z[1]) > .05)) g.fsz = z.map(n => +n.toFixed(2)); continue; }
+    const L = byId.get(id); if (L && (!L.fsz || Math.abs(L.fsz[0] - z[0]) > .05 || Math.abs(L.fsz[1] - z[1]) > .05)) L.fsz = z.map(n => +n.toFixed(2));
+  }
+}
 function flowBake1() {
   const on = S.flow || (S.groups && Object.values(S.groups).some(g => g && g.flow));
   const own = on && fmtOwn() ? flowLayout(false) : null; // antes de trocar o fsz (a âncora depende dele)
@@ -1143,9 +1187,7 @@ function flowBake1() {
     const gid = id.slice(2), g = gmeta(gid); if (!g) continue;
     if (gleaves(gid).every(l => !inFlow(l) || (l.fpos && l.fpos[S.format] && l.fpos[S.format].y != null))) (g.fszF ||= {})[S.format] = rz(z);
   }
-  if (R) for (const [id, z] of R.sizes) {
-    if (id.startsWith('g:')) { const g = gmeta(id.slice(2)); if (g && (!g.fsz || Math.abs(g.fsz[0] - z[0]) > .05 || Math.abs(g.fsz[1] - z[1]) > .05)) g.fsz = z.map(n => +n.toFixed(2)); continue; }
-    const L = byId.get(id); if (!L.fsz || Math.abs(L.fsz[0] - z[0]) > .05 || Math.abs(L.fsz[1] - z[1]) > .05) L.fsz = z.map(n => +n.toFixed(2)); }
+  if (R) flowSizes(R, byId);
   if (S.groups) for (const [k, g] of Object.entries(S.groups)) if (g && g.fsz && !(R && R.sizes.has('g:' + k))) delete g.fsz;
   for (const L of S.layers) if (L.fsz && !(R && R.sizes.has(L.id))) delete L.fsz;
   for (const L of S.layers) delete L.flowEnter;
@@ -2211,9 +2253,14 @@ function imgNow(src) { if (!src) return null; const i = RT.images.get(src); if (
 const STILL_PH = { mode:'hold', p:1, inD:0, outD:0 };
 function phase(L, t) {
   if (stillNow(L)) return STILL_PH;
-  const end = L.end ?? S.duration;
-  if (t < L.start || t > end + 1e-6) return null;
-  let inD = L.in === 'cut' ? 0 : L.inDur / (spdOf(L, 'in') || 1), outD = L.out === 'cut' ? 0 : L.outDur / (spdOf(L, 'out') || 1);
+  const end = L.end ?? S.duration, XM = xfPairs(), xi = XM.n && XM.inn.get(L.id), xo = XM.n && XM.out.get(L.id);
+  if (t < L.start || t > end + 1e-6) {
+    // transição entre clipes: o que entra começa antes do corte e o que sai continua depois do fim, em repouso
+    if ((xi && t >= xi.t0 && t < L.start) || (xo && t > end && t <= xo.t1)) return XF_PH;
+    return null;
+  }
+  // a transição substitui a entrada de quem entra e a saída de quem sai
+  let inD = xi || L.in === 'cut' ? 0 : L.inDur / (spdOf(L, 'in') || 1), outD = xo || L.out === 'cut' ? 0 : L.outDur / (spdOf(L, 'out') || 1);
   const span = end - L.start;
   if (inD + outD > span && span > 0) { const k = span / (inD + outD); inD *= k; outD *= k; }
   if (inD > 0 && t < L.start + inD) return { mode:'in', p:(t - L.start) / inD, inD, outD };
@@ -2878,11 +2925,11 @@ function textFit(L, lay, pl) {
   return inFlow(L) || freeType(L) ? { ax:pl.x * W(), ay:pl.y * H(), k:1 } : fitInMargin(pl.x * W(), pl.y * H(), lay.blockW * pl.k, lay.blockH * pl.k);
 }
 function layoutText(L, txt) {
-  const M = marginBox(), size = L.size, ls = (L.ls || 0) * size, bg = textBg(L), bpx = bg ? bg.px : 0, tk = tpKind(L);
+  const M = marginBox(), size = L.size, ls = (L.ls || 0) * size, wsp = (L.wsp || 0) * size, bg = textBg(L), bpx = bg ? bg.px : 0, tk = tpKind(L); // wsp = espaço a mais entre palavras (em; legenda)
   // texto em curva não quebra sozinho (só no Enter): a linha corre pelo caminho
   const mw0 = tk ? Infinity : Math.min((L.maxW || .84) * SU, M ? M.x1 - M.x0 : Infinity), maxW = bg && !tk ? Math.max(size, mw0 - 2 * bpx) : mw0; // com fundo, quebra antes para a caixa caber
   const font = fontStr(L, size), sty = charStyles(L, txt);
-  const key = [txt, font, ls, maxW, L.lh, L.align, L.fixW && !tk ? 1 : 0, sty ? sty.join(';') : '', bg ? [bg.px, bg.py].join() : '', tk ? tpSig(L) + (bg ? bg.r : '') : ''].join('|');
+  const key = [txt, font, ls, wsp, maxW, L.lh, L.align, L.fixW && !tk ? 1 : 0, sty ? sty.join(';') : '', bg ? [bg.px, bg.py].join() : '', tk ? tpSig(L) + (bg ? bg.r : '') : ''].join('|');
   let lay = RT.layout.get(key); if (lay) return lay;
   if (RT.layout.size > 400) RT.layout.clear();
   const all = [...txt].map((ch, i) => ({ ch, c:sty ? sty[i][2] : null, f:sty ? fontStr(L, size, sty[i][0], sty[i][1]) : font }));
@@ -2890,7 +2937,7 @@ function layoutText(L, txt) {
   const segs = arr => { const out = []; for (const c of arr) { const s = out[out.length - 1]; if (s && s.f === c.f) s.s += c.ch; else out.push({ f:c.f, s:c.ch }); } return out; };
   let curF = null;
   const meas = (f, s) => { if (curF !== f) MCTX.font = curF = f; return MCTX.measureText(s).width; };
-  const mw = arr => segs(arr).reduce((w, s) => w + meas(s.f, s.s), 0) + Math.max(0, arr.length - 1) * ls;
+  const mw = arr => segs(arr).reduce((w, s) => w + meas(s.f, s.s), 0) + Math.max(0, arr.length - 1) * ls + (wsp ? arr.filter(c => c.ch === ' ').length * wsp : 0);
   const lines = [];
   let para = [];
   const flush = () => {
@@ -2912,14 +2959,14 @@ function layoutText(L, txt) {
   const blockH = lines.length * lineH;
   let wi = 0, ci = 0, blockW = 0;
   const out = lines.map((cs, li) => {
-    const glyphs = []; let k = 0, segX = 0;
+    const glyphs = []; let k = 0, segX = 0, nsp = 0;
     for (const s of segs(cs)) {
       const chs = [...s.s]; let pre = '';
       chs.forEach(ch => {
         pre += ch;
         // posição = largura até esta letra (com o kerning do par anterior) menos a própria letra
-        const w = meas(s.f, ch), x = segX + meas(s.f, pre) - w + k * ls;
-        const space = ch === ' ';
+        const w = meas(s.f, ch), x = segX + meas(s.f, pre) - w + k * ls + nsp * wsp;
+        const space = ch === ' '; if (space) nsp++;
         if (space) wi++;
         glyphs.push({ ch, x, w, k, f:s.f, c:cs[k].c, space, word:wi, ci:space ? -1 : ci++ });
         k++;
@@ -2950,6 +2997,7 @@ function counterText(txt, e) {
 const SCR = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&*+=?';
 
 function drawText(ctx, L, t, R) {
+  if (L.capt && !L._capView) return drawCaption(ctx, L, t, R); // legenda: desenha o bloco da vez (js/legenda.js)
   const ph = phase(L, t); if (!ph) return;
   const key = ph.mode === 'in' ? L.in : ph.mode === 'out' ? L.out : null;
   const P = key ? (TP[key] || TP.cut) : null;
@@ -2975,7 +3023,7 @@ function drawText(ctx, L, t, R) {
   ctx.globalAlpha *= L.opacity ?? 1;
   ctx.font = lay.font; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
 
-  const unit = P ? P.unit : 'all';
+  const unit = L._capSt ? 'word' : P ? P.unit : 'all'; // legenda: cada palavra tem o estado do tempo dela
   const nOf = unit === 'char' ? lay.nChars : unit === 'word' ? lay.nWords : unit === 'line' ? lay.nLines : 1;
   // janela da máscara: ascendente/descendente reais do texto (itálicos e pernas de j, g, p passam da altura da linha)
   if (!lay.mask) {
@@ -2986,6 +3034,7 @@ function drawText(ctx, L, t, R) {
   const dir = ph.mode === 'out' ? -1 : 1;
   // estado da unidade idx com o progresso da fase em pr (o rastro pede progressos atrasados)
   const stAt = (idx, pr) => {
+    if (L._capSt) return L._capSt(idx);
     if (!P) return {};
     const q = unitP(pr, idx, nOf, P.s);
     const e = ph.mode === 'in' ? easeIn(P.ease, q, I) : easeOutPhase(P.ease, q, I);
@@ -3038,7 +3087,7 @@ function drawText(ctx, L, t, R) {
     const bl = st.blur > .15 ? st.blur * R.rs : 0;
     const put = (col, x) => { c.fillStyle = col; if (bl) blurText(c, ch, x, 0, col, bl); else c.fillText(ch, x, 0); };
     if (st.split) { c.save(); c.globalAlpha *= .7; put('#FF3D6E', -st.split); put('#3DD6FF', st.split); c.restore(); }
-    const col = brightCol(g.c || L.color, st.bright), gl = (st.glow || 0) + glowIdle;
+    const col = brightCol(st.col || g.c || L.color, st.bright), gl = (st.glow || 0) + glowIdle; // st.col: palavra em destaque (legenda)
     const putStroke = () => {
       const sc = brightCol(skC(L), st.bright), lw = skOut ? skw * 2 : skw;
       c.save(); c.lineJoin = L.strokeJoin || 'round'; c.miterLimit = 3;
@@ -3077,6 +3126,7 @@ function drawText(ctx, L, t, R) {
   };
   const paint = (c, stOf) => {
     if (tbg) paintBg(c, stOf);
+    if (L._capPre) L._capPre(c, lay); // legenda: caixa atrás da palavra falada
     for (const line of lay.lines) {
       const nInLine = line.glyphs.length;
       for (const g of line.glyphs) {
@@ -3705,11 +3755,12 @@ function drawBlockBody(ctx, L, G, info, R) {
       if (L.mask === 'circle') { ctx.beginPath(); ctx.ellipse(0, 0, G.w / 2, G.h / 2, 0, 0, TAU); }
       else rrect(ctx, -G.w / 2, -G.h / 2, G.w, G.h, radOf(L));
       ctx.clip();
-      const pn = panOf(L), iw = G.img.naturalWidth, ih = G.img.naturalHeight, k = Math.max(G.w / iw, G.h / ih) * pn.zoom; // enquadramento do formato aberto
+      const pn = panOf(L), iw = G.img.naturalWidth, ih = G.img.naturalHeight, k = imgCover(L, G.w, G.h, iw, ih, pn.zoom); // enquadramento do formato aberto
       const dw = iw * k, dh = ih * k;
       // virar a imagem dentro da máscara: espelha em torno do centro da própria imagem, então o deslocamento (Alt + arrastar) segue o mouse
       ctx.save();
       ctx.translate(pn.ix * G.w, pn.iy * G.h);
+      if (L.irot) ctx.rotate(L.irot * Math.PI / 180); // girar a imagem dentro da máscara (a máscara fica parada)
       const im = adjImg(L, G.img), cp = imgFor(ctx, im, dw, dh, L.flipX, L.flipY, R.export); // espelho e tamanho já prontos (imgFor)
       if (cp) ctx.drawImage(cp, -dw / 2, -dh / 2, dw, dh);
       else { if (L.flipX || L.flipY) ctx.scale(L.flipX ? -1 : 1, L.flipY ? -1 : 1); ctx.drawImage(im, -dw / 2, -dh / 2, dw, dh); }
@@ -3916,7 +3967,8 @@ function renderFrame0(ctx, t, rs, isExport) {
    cache voltam como estavam quando ele foi feito. Peso: até duas telas do tamanho do palco a mais na placa de vídeo. */
 const FC = { on:true, pre:null, suf:null, sigs:null, key:'' };
 // _bounds etc. mudam a cada quadro; vec = pontos de edição (o d, que entra, é o desenho); o SVG do logo entra pela identidade (é grande)
-const SIG_SKIP = (k, v) => (k[0] === '_' || k === 'vec' ? undefined : k === 'svg' && v && typeof v === 'object' ? 'svg' + objId(v) : v);
+// capt (legenda): as palavras entram pela identidade (cap.words é trocado inteiro a cada edição, e a lista é grande)
+const SIG_SKIP = (k, v) => (k[0] === '_' || k === 'vec' ? undefined : k === 'svg' && v && typeof v === 'object' ? 'svg' + objId(v) : k === 'capt' && v && v.words ? 'capt' + objId(v.words) + '|' + v.t0 : v);
 // o desenho muda com o tempo mesmo sem ninguém mexer
 function layerMoves(L, ph) {
   if (ph.mode !== 'hold') return true;
@@ -3926,6 +3978,7 @@ function layerMoves(L, ph) {
   if (L.type === 'image' && L.move && L.move !== 'none') return true;
   if ((L.type === 'bg' || L.type === 'shape') && (L.grain > 0 || ((L.mode || 'solid') !== 'solid' && (L.motion ?? 1) !== 0))) return true;
   if (L.type === 'text' && L.mark && L.mark !== 'none') return true;
+  if (L.capt) return true; // legenda: o bloco e a palavra da vez mudam com o tempo
   return false;
 }
 function layerSig(L, t, hid) {
@@ -3935,7 +3988,7 @@ function layerSig(L, t, hid) {
   // vídeo: o quadro que está pronto agora (o decodificado chega depois do pedido; parado, o tempo não muda e o cache segurava o anterior)
   if (vidOn(L)) { const v = VIDS.get(L.id); fr += v ? `v${v.ok ? 1 : 0}${v.gOk ? 1 : 0}${v.gAt}|${v.el.currentTime}|${v.el.seeking ? 1 : 0}` : 'v-'; }
   { const sh = tpLink(L); if (sh) fr += JSON.stringify(sh, TP_SH_SIG) + JSON.stringify(geomNow(sh)) + sh.keepIn; } // texto que segue uma forma: o desenho e o tamanho dela
-  return JSON.stringify(L, SIG_SKIP) + JSON.stringify(placeOf(L)) + ph.mode + fr + (!hid && layerMoves(L, ph) ? '@' + t : '');
+  return JSON.stringify(L, SIG_SKIP) + JSON.stringify(placeOf(L)) + ph.mode + fr + (!hid && (layerMoves(L, ph) || xfLive(L, t)) ? '@' + t : '');
 }
 // fundo escondido: fotos opacas e paradas cobrem todos os slides, então o movimento/granulado do fundo não aparece e, no cache,
 // ele conta como parado (senão tudo que tem "desfocar atrás" por cima era refeito a cada quadro tocando, sem mudar nada na tela)
@@ -4016,9 +4069,11 @@ function drawItemsCached(tc, els, G, t, R, cam, one) {
   const sigOf = (a, b) => sigs.slice(a, b).join('\u0001');
   const keepB = (a, b) => units.slice(a, b).flatMap(u => u.ls.map(l => [l, l._bounds]));
   const blit = (cv, op) => { tc.save(); tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalAlpha = 1; tc.filter = 'none'; tc.globalCompositeOperation = op; tc.drawImage(cv, 0, 0); tc.restore(); };
+  // o fundo de um frame pintado sai com o 1º item dele (G.painted): quem veio do cache já o levou, senão o próximo item o pintaria de novo por cima
+  const markPainted = (a, b) => { for (let i = a; i < b; i++) for (const l of units[i].ls) for (let g = l.grp, k = 0; g && k < 20; g = gpar(g), k++) if (gPaintOn(g)) (G.painted ||= new Set()).add(g); };
   // prefixo guardado que ainda vale
   let i0 = 0; const P = FC.pre;
-  if (P && P.key === key && P.n <= n && P.sig === sigOf(0, P.n)) { blit(P.cv, 'copy'); for (const [l, b] of P.b) l._bounds = b; i0 = P.n; }
+  if (P && P.key === key && P.n <= n && P.sig === sigOf(0, P.n)) { blit(P.cv, 'copy'); for (const [l, b] of P.b) l._bounds = b; i0 = P.n; markPainted(0, i0); }
   // o que não mudou desde o quadro anterior estende o prefixo
   const pe = Math.max(i0, Math.min(c0, n));
   if (pe > i0) {
@@ -4294,6 +4349,194 @@ function drawFx(ctx, L, t, R) {
   if (buf) blendOnto(ctx, buf, bm);
 }
 
+/* ------------ transição entre clipes (pedido do usuário: "presets de transição entre vídeos") ------------
+   B.xin = { k, d, dir? } no clipe que entra: transição a partir do clipe que termina onde ele começa (A, achado pelo tempo em
+   xfPairs: imagem ou vídeo visível, do mesmo slide, que termina a até XF_TOL s do começo de B). A janela fica centrada no corte
+   c = B.start: [c − d/2, c + d/2]. Nela A continua depois do fim e B começa antes (phase devolve repouso, XF_PH): o vídeo segue
+   com o resto do arquivo, o que ficou fora do corte (vidTime), e para no último/primeiro quadro se o arquivo acabar; a saída de A
+   e a entrada de B não valem (a transição as substitui). drawLayerFx desenha A e B cada um numa tela à parte (frameBuf 'xa'/'xb')
+   no lugar do de cima na pilha, e o preset (XFS) mistura as duas na caixa dos dois (recortada no slide); o som de cada um cruza
+   junto (buildMix). Peso: só dentro da janela, duas telas do tamanho do palco e os dois vídeos decodificando ao mesmo tempo. */
+const XF_TOL = .12, XF_MIN = .1, XF_MAX = 3;
+const XF_PH = Object.freeze({ mode:'hold', p:1, inD:0, outD:0 });
+let XFP = null;
+// pares ativos: inn = id de B → par, out = id de A → par (uma conta por quadro; fresh = agora, para a timeline durante o arrasto)
+function xfPairs(fresh) {
+  const key = `${RT.frameNo}|${RT.rev}|${S.layers.length}`;
+  if (!fresh && XFP && XFP.S === S && XFP.key === key) return XFP;
+  const inn = new Map(), out = new Map(), ls = S.layers;
+  if (!S.still) for (let i = 0; i < ls.length; i++) {
+    const B = ls[i], x = B.xin; if (!x || !XFS[x.k] || B.type !== 'image' || !B.visible) continue;
+    let A = null, best = Infinity;
+    for (let j = 0; j < ls.length; j++) {
+      const o = ls[j]; if (o === B || o.type !== 'image' || !o.visible || out.has(o.id)) continue;
+      const df = Math.abs((o.end ?? S.duration) - B.start); if (df > XF_TOL || o.start >= B.start - .05) continue;
+      if (slides() > 1 && slideOfL(o) !== slideOfL(B)) continue;
+      const sc = df + Math.abs(i - j) * 1e-4; // empate: o vizinho na pilha
+      if (sc < best) { best = sc; A = o; }
+    }
+    if (!A) continue;
+    const lim = Math.min((A.end ?? S.duration) - A.start, (B.end ?? S.duration) - B.start); // a janela cabe nos dois clipes
+    const d = clamp(+x.d || XFS[x.k].dur, XF_MIN, Math.max(XF_MIN, Math.min(XF_MAX, lim))), c = B.start;
+    const p = { A, B, P:XFS[x.k], x, d, c, t0:c - d / 2, t1:c + d / 2 };
+    inn.set(B.id, p); out.set(A.id, p);
+  }
+  XFP = { S, key, inn, out, n:inn.size };
+  return XFP;
+}
+// par em que a camada está trocando agora (A ou B dentro da janela)
+function xfLive(L, t) {
+  const X = xfPairs(); if (!X.n) return null;
+  // clipe do meio: entra de um (inn) e sai para outro (out)
+  for (const p of [X.inn.get(L.id), X.out.get(L.id)]) if (p && t >= p.t0 && t <= p.t1) return p;
+  return null;
+}
+// quem desenha a mistura: o de cima na pilha (o de baixo não desenha nada na janela)
+const xfTop = p => S.layers.indexOf(p.A) > S.layers.indexOf(p.B) ? p.A : p.B;
+const xfSm = u => { u = clamp(u); return u * u * (3 - 2 * u); };
+const xfIO = u => Ease.cubicInOut(clamp(u));
+const XF_DIRS = { l:[-1, 0], r:[1, 0], u:[0, -1], d:[0, 1] };
+const xfV = x => XF_DIRS[x.dir] || XF_DIRS.l;
+// tela src no destino (px, mesma geometria): alfa, transformação em volta do centro da caixa Z (escala s, giro r, deslocamento) e desfoque
+function xfPut(c, src, a = 1, Z = null, s = 1, r = 0, dx = 0, dy = 0, bl = 0) {
+  if (a <= .002) return;
+  c.save(); c.globalAlpha = Math.min(1, a);
+  if (Z && (s !== 1 || r || dx || dy || bl > .3)) {
+    if (bl > .3) s *= 1 + 2.5 * bl / Math.max(1, Math.min(Z.w, Z.h)); // desfocado: um pouco maior, para a borda não clarear
+    const cx = Z.x + Z.w / 2, cy = Z.y + Z.h / 2;
+    c.translate(cx + dx, cy + dy); if (r) c.rotate(r); if (s !== 1) c.scale(s, s); c.translate(-cx, -cy);
+  }
+  if (bl > .3) c.filter = `blur(${bl.toFixed(2)}px)`;
+  c.drawImage(src, 0, 0); c.restore();
+}
+// tinge a tela (só onde há desenho) com uma cor: o clipe vai para o preto/branco sem pintar o que está fora dele
+function xfTint(src, col, a) {
+  if (a <= .002) return;
+  const x = src.getContext('2d'); x.save(); x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = Math.min(1, a);
+  x.globalCompositeOperation = 'source-atop'; x.fillStyle = col; x.fillRect(0, 0, src.width, src.height); x.restore();
+}
+// tela de apoio limpa, do tamanho das outras (ref = { cv, pad, geo }: a geometria das telas desta transição, xfDraw)
+function xfTmp(ref, slot) {
+  const c = frameBuf(ref.cv, slot, ref.pad, ref.geo), x = c.getContext('2d');
+  x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.filter = 'none'; x.globalCompositeOperation = 'source-over'; x.clearRect(0, 0, c.width, c.height);
+  return c;
+}
+// b recortado por uma máscara de borda suave (g = gradiente pronto) numa tela à parte
+function xfMasked(ref, b, Z, g) {
+  const m = xfTmp(ref, 'xc'), x = m.getContext('2d');
+  x.drawImage(b, 0, 0); x.globalCompositeOperation = 'destination-in'; x.fillStyle = g; x.fillRect(Z.x - 2, Z.y - 2, Z.w + 4, Z.h + 4);
+  x.globalCompositeOperation = 'source-over';
+  return m;
+}
+// movimento (empurrar, chicote): os dois clipes deslocados; com rastro, a média de cópias ao longo do movimento (desfoque de movimento)
+function xfShift(c, ref, a, b, Z, x, e, trail) {
+  const [vx, vy] = xfV(x), dx = vx * Z.w * e, dy = vy * Z.h * e;
+  const both = (g, o) => { xfPut(g, a, 1, Z, 1, 0, dx + vx * o, dy + vy * o); xfPut(g, b, 1, Z, 1, 0, dx - vx * Z.w + vx * o, dy - vy * Z.h + vy * o); };
+  if (trail < 2) { both(c, 0); return; }
+  const acc = xfTmp(ref, 'xc'), ax = acc.getContext('2d'), n = 7;
+  for (let j = 0; j < n; j++) {
+    const one = xfTmp(ref, 'xd'), ox = one.getContext('2d'); both(ox, (j / (n - 1) - .5) * trail);
+    ax.globalAlpha = 1 / (j + 1); ax.drawImage(one, 0, 0);
+  }
+  xfPut(c, acc);
+}
+/* presets: mix(c, a, b, u, Z, k, x, ref). c = destino em px (sem transformação), a/b = os dois clipes prontos (mesma geometria),
+   u = 0..1 na janela, Z = caixa dos clipes em px, k = px por px do vídeo (desfoque), x = B.xin (dir), ref = tela de referência.
+   clip = recorta na caixa (o que se move não passa para fora do clipe nem para o slide vizinho). Com u = 1 sobra só b, inteiro. */
+const XFS = {
+  dissolve: { label:'Dissolver', dur:.6, mix:(c, a, b, u) => { xfPut(c, a, clamp(3 * (1 - u))); xfPut(c, b, xfSm(u)); } },
+  black:    { label:'Escurecer', dur:.8, mix:(c, a, b, u) => { if (u < .5) { xfTint(a, '#000', xfSm(u * 2)); xfPut(c, a); } else { xfTint(b, '#000', 1 - xfSm(u * 2 - 1)); xfPut(c, b); } } },
+  white:    { label:'Clarear', dur:.8, mix:(c, a, b, u) => { if (u < .5) { xfTint(a, '#fff', xfSm(u * 2)); xfPut(c, a); } else { xfTint(b, '#fff', 1 - xfSm(u * 2 - 1)); xfPut(c, b); } } },
+  blur:     { label:'Desfocar', dur:.7, clip:true, mix:(c, a, b, u, Z, k) => {
+    const q = 1 - Math.abs(2 * u - 1), bl = 34 * k * q * q;
+    xfPut(c, a, clamp(2.5 * (1 - u)), Z, 1, 0, 0, 0, bl); xfPut(c, b, xfSm((u - .25) / .5), Z, 1, 0, 0, 0, bl); } },
+  push:     { label:'Empurrar', dur:.5, clip:true, dir:true, mix:(c, a, b, u, Z, k, x, ref) => xfShift(c, ref, a, b, Z, x, xfIO(u), 0) },
+  slide:    { label:'Deslizar', dur:.5, clip:true, dir:true, mix:(c, a, b, u, Z, k, x) => {
+    const [vx, vy] = xfV(x), e = xfIO(u);
+    xfTint(a, '#000', .45 * e); xfPut(c, a, 1, Z, 1, 0, vx * Z.w * .3 * e, vy * Z.h * .3 * e);
+    xfPut(c, b, 1, Z, 1, 0, -vx * Z.w * (1 - e), -vy * Z.h * (1 - e)); } },
+  whip:     { label:'Chicote', dur:.45, clip:true, dir:true, mix:(c, a, b, u, Z, k, x, ref) => {
+    const e = u < .5 ? 8 * u ** 4 : 1 - 8 * (1 - u) ** 4, q = 1 - Math.abs(2 * u - 1), [vx] = xfV(x);
+    xfShift(c, ref, a, b, Z, x, e, (vx ? Z.w : Z.h) * .4 * q ** 1.5); } },
+  zoom:     { label:'Zoom', dur:.5, clip:true, mix:(c, a, b, u, Z, k) => {
+    const q = 1 - Math.abs(2 * u - 1), bl = 26 * k * q * q, ea = clamp(u * 2) ** 2, eb = clamp(2 - u * 2) ** 2;
+    xfPut(c, a, 1, Z, 1 + 1.3 * ea, 0, 0, 0, bl); xfPut(c, b, xfSm((u - .4) / .2), Z, 1 + .9 * eb, 0, 0, 0, bl); } },
+  zoomout:  { label:'Afastar', dur:.6, clip:true, mix:(c, a, b, u, Z, k) => {
+    const e = xfIO(u), q = 1 - Math.abs(2 * u - 1);
+    xfPut(c, b, xfSm(u / .5), Z, 1.3 - .3 * e, 0, 0, 0, 10 * k * (1 - e));
+    xfPut(c, a, 1 - xfSm((u - .35) / .5), Z, 1 - .45 * e, 0, 0, 0, 8 * k * q * q); } },
+  spin:     { label:'Girar', dur:.6, clip:true, mix:(c, a, b, u, Z, k) => {
+    const q = 1 - Math.abs(2 * u - 1), bl = 22 * k * q * q, ea = clamp(u * 2) ** 2, eb = clamp(2 - u * 2) ** 2;
+    xfPut(c, a, 1, Z, 1 + .6 * ea, Math.PI / 3 * ea, 0, 0, bl); xfPut(c, b, xfSm((u - .45) / .1), Z, 1 + .6 * eb, -Math.PI / 3 * eb, 0, 0, bl); } },
+  wipe:     { label:'Cortina', dur:.6, clip:true, dir:true, mix:(c, a, b, u, Z, k, x, ref) => {
+    const [vx, vy] = xfV(x), span = vx ? Z.w : Z.h, F = span * .12, dist = -F + (span + 2 * F) * xfIO(u);
+    const sx = vx < 0 ? Z.x + Z.w : vx > 0 ? Z.x : Z.x + Z.w / 2, sy = vy < 0 ? Z.y + Z.h : vy > 0 ? Z.y : Z.y + Z.h / 2;
+    const g = c.createLinearGradient(sx + vx * (dist - F), sy + vy * (dist - F), sx + vx * dist, sy + vy * dist);
+    g.addColorStop(0, '#000'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    xfPut(c, a); xfPut(c, xfMasked(ref, b, Z, g)); } },
+  circle:   { label:'Círculo', dur:.7, clip:true, mix:(c, a, b, u, Z, k, x, ref) => {
+    const R = Math.hypot(Z.w, Z.h) / 2 * 1.08, F = R * .12, r = (R + F) * xfIO(u), cx = Z.x + Z.w / 2, cy = Z.y + Z.h / 2;
+    const g = c.createRadialGradient(cx, cy, Math.max(0, r - F), cx, cy, Math.max(.01, r));
+    g.addColorStop(0, '#000'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    xfPut(c, a); xfPut(c, xfMasked(ref, b, Z, g)); } },
+  glitch:   { label:'Falha', dur:.45, clip:true, mix:(c, a, b, u, Z) => {
+    if (u < .12) { xfPut(c, a); return; } if (u > .88) { xfPut(c, b); return; }
+    const n = 12, st = Math.floor(u * 18), q = 1 - Math.abs(2 * u - 1), bh = Z.h / n, w = a.width;
+    xfPut(c, u < .5 ? a : b); // embaixo: o clipe da vez; por cima, faixas trocadas e deslocadas
+    for (let i = 0; i < n; i++) {
+      const src = rand(i, st) < (u - .12) / .76 ? b : a, y = Z.y + i * bh, on = rand(i + 7, st) < .55 * q + .1;
+      if (!on) continue;
+      const dx = (rand(i + 31, st) - .5) * Z.w * .18 * q;
+      c.drawImage(src, 0, y, w, bh + 1, dx, y, w, bh + 1);
+      c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = .18 * q; c.drawImage(src, 0, y, w, bh + 1, dx + Z.w * .012, y, w, bh + 1); c.restore();
+    } } },
+};
+const XF_KEYS = ['dissolve', 'black', 'white', 'blur', 'push', 'slide', 'whip', 'zoom', 'zoomout', 'spin', 'wipe', 'circle', 'glitch'];
+// desenha a mistura de A e B no lugar do de cima (drawLayerFx)
+const XF_BUDGET = 4e6; // px de cada tela da transição no palco com zoom
+function xfDraw(tc, p, t, R, cam, depth, one) {
+  const ref = tc.canvas, M = tc.getTransform(), u = clamp((t - p.t0) / p.d);
+  // a caixa dos dois clipes (px do vídeo), dentro do slide de B; sem caixa medida, o slide
+  const sx = (slides() > 1 ? slideOfL(p.B) : 0) * W();
+  const box = () => {
+    const bs = [p.A._bounds, p.B._bounds].filter(q => q && q.w > 0 && q.h > 0), z = bs.length ? unionBox(bs) : { x:sx, y:0, w:W(), h:H() };
+    const q = { x0:Math.max(z.x, sx), y0:Math.max(z.y, 0), x1:Math.min(z.x + z.w, sx + W()), y1:Math.min(z.y + z.h, H()) };
+    return q.x1 > q.x0 && q.y1 > q.y0 ? q : { x0:sx, y0:0, x1:sx + W(), y1:H() };
+  };
+  // palco com zoom (o canvas cobre só a parte vista, _vo): empurrar, girar, desfocar… trazem para a vista o que está fora dela.
+  // Aí os clipes são desenhados inteiros (a caixa deles) em telas próprias, com teto de pixels (XF_BUDGET), e a mistura volta
+  // ao palco esticada. Sem zoom (e na exportação) as telas têm a geometria do próprio canvas, na resolução dele
+  const zoomed = !!ref._vo;
+  let G = { cv:ref, pad:padOf(ref), geo:null }, M2 = M, R2 = R, s = Math.abs(M.a);
+  if (zoomed) {
+    const q = box(); s = Math.min(s, Math.sqrt(XF_BUDGET / Math.max(1, (q.x1 - q.x0) * (q.y1 - q.y0))));
+    const geo = { x:Math.floor(q.x0 * s), y:Math.floor(q.y0 * s) }; geo.w = Math.max(1, Math.ceil(q.x1 * s) - geo.x); geo.h = Math.max(1, Math.ceil(q.y1 * s) - geo.y);
+    G = { cv:{ width:Math.ceil(FW() * s), height:Math.ceil(H() * s) }, pad:0, geo };
+    M2 = new DOMMatrix([s, 0, 0, s, -geo.x, -geo.y]); R2 = { ...R, rs:s };
+  }
+  const paint = (L, slot) => {
+    const c = xfTmp(G, slot), x = c.getContext('2d'); x.setTransform(M2);
+    RT.xfSolo = true; try { drawLayerFx(x, L, t, R2, cam, depth, one); } catch (e) { console.error(e); } finally { RT.xfSolo = false; }
+    return c;
+  };
+  const a = paint(p.A, 'xa'), b = paint(p.B, 'xb'), q = box();
+  const Z = { x:M2.a * q.x0 + M2.e, y:M2.d * q.y0 + M2.f, w:M2.a * (q.x1 - q.x0), h:M2.d * (q.y1 - q.y0) };
+  const o = zoomed ? xfTmp(G, 'xo') : null, c = o ? o.getContext('2d') : tc;
+  c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 1; c.filter = 'none'; c.globalCompositeOperation = 'source-over';
+  if (p.P.clip) { c.beginPath(); c.rect(Z.x, Z.y, Z.w, Z.h); c.clip(); }
+  try { p.P.mix(c, a, b, u, Z, s, p.x, G); } catch (e) { console.error(e); }
+  c.restore();
+  if (o) { tc.save(); tc.setTransform(M.a / s, 0, 0, M.d / s, M.e + M.a * G.geo.x / s, M.f + M.d * G.geo.y / s); tc.globalAlpha = 1; tc.filter = 'none'; tc.globalCompositeOperation = 'source-over'; tc.drawImage(o, 0, 0); tc.restore(); }
+}
+// vídeo na janela: A segue depois do fim e B começa antes, com o resto do arquivo (parado no último/primeiro quadro se acabar)
+function xfVidTime(L, t, el) {
+  const X = xfPairs(); if (!X.n) return null;
+  const end = L.end ?? S.duration, d = (el && el.duration) || L.vdur || 1, sp = vSpd(L);
+  const po = t > end && X.out.get(L.id), pi = t < L.start && X.inn.get(L.id);
+  if (po) return Math.min(d - .02, vidTime0(L, end - 1e-3, el) + (t - end) * sp);
+  if (pi) return Math.max(VID_EPS, vidTime0(L, L.start, el) - (L.start - t) * sp);
+  return null;
+}
 /* ------------ sombra: a camada é desenhada à parte e volta com a sombra (acompanha fade, máscaras e animações) ------------ */
 const SHADOWS = {
   none:  { label:'Sem sombra' },
@@ -4606,6 +4849,8 @@ function fxGeo(tc, L, t, cam, depth) {
   return { x:Math.min(x0, fw - w), y:Math.min(y0, fh - hh), w, h:hh };
 }
 function drawLayerFx(tc, L, t, R, cam, depth, one) {
+  // transição entre clipes: o de cima desenha os dois misturados (xfDraw), o de baixo não desenha. PNG da seleção só com os dois
+  if (!RT.xfSolo && !RT.measure) { const p = xfLive(L, t); if (p && (!RT.only || (RT.only.has(p.A.id) && RT.only.has(p.B.id)))) { if (L === xfTop(p)) xfDraw(tc, p, t, R, cam, depth, one); return; } }
   if (L.type !== 'bg' && offView(tc, L, t, cam, depth)) return;
   if (!slideClipOf(L) || slides() < 2 || L.type === 'bg') return drawLayerFx0(tc, L, t, R, cam, depth, one);
   const si = slideOfL(L);
@@ -4674,18 +4919,21 @@ function paintFrame(c, gid, gm) {
   if (gm.stroke && strokeSee(gm)) strokeOnPath(c, path, { ...gm, strokeW:skW(gm) * b.k });
 }
 // frame pintado sob o mouse (no fundo dele, fora dos itens): o de cima na pilha. Devolve um item dele (o clique escolhe o frame inteiro)
-function frameHit(pt) {
+// O frame de mais dentro (o cartão, não a coluna que o contém) e, nele, o item de cima: { L, g }
+function frameHitG(pt) {
   if (!S.groups) return null;
+  let best = null, bd = 0;
   for (let i = S.layers.length - 1; i >= 0; i--) {
     const L = S.layers[i]; if (!L.grp || !L.visible || L.locked || !phase(L, T)) continue;
     for (let g = L.grp, n = 0; g && n < 20; g = gpar(g), n++) {
       if (!gPaintOn(g)) continue;
       const b = frameRect(g), cm = camOf(L), q = cm ? camInv(cm, pt) : pt; // no espaço do frame (câmera e giro dos grupos desfeitos)
-      if (b && q.x >= b.x && q.x <= b.x + b.w && q.y >= b.y && q.y <= b.y + b.h) return L;
+      if (b && q.x >= b.x && q.x <= b.x + b.w && q.y >= b.y && q.y <= b.y + b.h) { const d = gchain(g).length; if (d > bd) { best = { L, g }; bd = d; } }
     }
   }
-  return null;
+  return best;
 }
+function frameHit(pt) { const r = frameHitG(pt); return r ? r.L : null; }
 /* ------------ grupo com animação própria ------------
    Os itens do grupo são desenhados juntos numa tela à parte (cada um com a própria animação, sombra e câmera) e essa imagem
    do conjunto é animada pelo preset do grupo (mesmo motor dos blocos: drawState). O pivô é o centro da caixa do conjunto em repouso.
@@ -5307,7 +5555,7 @@ function updStageHint() {
     else if (L && L.type !== 'bg' && !phase(L, T)) { msg = T < L.start ? `${L.name} ainda não apareceu neste momento (entra em ${fmtSec(L.start)})` : `${L.name} já saiu neste momento (sai em ${fmtSec(L.end ?? S.duration)})`; act = ['Ver no palco', () => seekLayer(L)]; }
     // fora do principal, quem tem posição presa só neste formato não acompanha o principal: o botão solta todos de uma vez
     // (pedido do usuário: o "Voltar ao automático" do painel só aparecia com um elemento solto escolhido)
-    else if (fmtOwn() && linked() && els.some(ownPos)) { // formato livre: posição própria é o normal, não um aviso
+    else if (fmtOwn() && els.some(ownPos)) {
       const n = els.filter(ownPos).length;
       msg = `${n} elemento${n > 1 ? 's' : ''} com posição presa só no ${fmtLabel(S.format)}`;
       act = ['Voltar ao automático', () => resetPos(S.layers)];
@@ -5355,7 +5603,7 @@ const fmtT = s => { s = Math.max(0, s); const m = Math.floor(s / 60), ss = Math.
 function updTime() {
   placeHead();
   updDur();
-  const tc = `${fmtT(T)} <span>/ ${S.duration.toFixed(1)}s</span>`;
+  const tc = `${fmtT(T)} <span>/ ${fmtSec(S.duration)}</span>`;
   if (RT.tcHtml !== tc) { RT.tcHtml = tc; $('#tc').innerHTML = tc; }
   const sv = String(Math.round(T / S.duration * 1000)), sb = $('#scrub'); if (sb.value !== sv) sb.value = sv;
 }
@@ -5399,7 +5647,8 @@ function previewOut(L) {
 // quadro a quadro (vírgula/ponto, setas com o fundo selecionado); Shift anda 1 s
 function stepFrames(n) { if (S.still) return; pause(); const f = fps(); T = clamp((Math.round(T * f) + n) / f, 0, S.duration); RT.userSeek = true; needs = true; }
 const lastFrame = () => Math.max(0, (Math.round(S.duration * fps()) - 1) / fps());
-const fmtSec = v => v.toFixed(1).replace('.', ',') + 's';
+// a partir de 1 min: 2:05,0 (o arquivo vai até 10 min)
+const fmtSec = v => { const r = Math.round(v * 10) / 10; if (r < 60) return r.toFixed(1).replace('.', ',') + 's'; const m = Math.floor(r / 60); return m + ':' + (r - m * 60).toFixed(1).padStart(4, '0').replace('.', ','); };
 // quadro em que tudo que está na tela já entrou
 function heroTime() {
   const els = S.layers.filter(l => l.type !== 'bg' && l.visible && !NOBOX(l)); // câmera e transição não contam
@@ -5702,7 +5951,10 @@ const SZ_MAX = Infinity, MH_MAX = Infinity, SZ_MIN = .0005; // sem mínimo de ve
 function selUnion() {
   const fb = flowFrameSel(); if (fb) return fb; // grupo com layout: a caixa é o frame dele
   const ls = freePicked().filter(o => o._bounds && o.visible && phase(o, T)); if (!ls.length || pickedLayers().length < 2) return null;
-  return { ...unionBox(ls.map(o => o._bounds)), ls, rg:wholeGroup() };
+  // vários frames com layout escolhidos (os cartões de uma coluna): a caixa leva a caixa de cada frame (com o espaço interno), não só o texto de dentro
+  const boxes = ls.map(o => o._bounds);
+  for (const g of selFrames()) { const r = flowOf(g) && flowNow(g); if (r && r.box) boxes.push({ x:r.box.x0, y:r.box.y0, w:r.box.x1 - r.box.x0, h:r.box.y1 - r.box.y0 }); }
+  return { ...unionBox(boxes), ls, rg:wholeGroup() };
 }
 // Oito alças em todo elemento (e na seleção de vários): canto = escala tudo de uma vez a partir do canto oposto; lado = depende do tipo
 // (imagem com máscara e forma: só largura ou só altura; texto: largura de quebra nas laterais; linha: comprimento e espessura; o resto escala).
@@ -5746,7 +5998,11 @@ function handleAt(pt) {
     const rr = hRad() * 3.6, q = cs.filter(c => d(c) <= rr).sort((a, b) => d(a) - d(b))[0];
     if (q) { // dentro da caixa continua sendo mover
       const l = rotPt(camInv(camOf(L), pt), boxC(t.b), -t.a), b = t.b, p = t.p;
-      if (l.x < b.x - p || l.x > b.x + b.w + p || l.y < b.y - p || l.y > b.y + b.h + p) return { k:'rot', rot:true, hx:0, hy:0, x:q.x, y:q.y };
+      if (l.x < b.x - p || l.x > b.x + b.w + p || l.y < b.y - p || l.y > b.y + b.h + p) {
+        // outro elemento (ou frame pintado) debaixo do mouse: o clique é nele, não um giro (o cartão de baixo, Shift + clique para somar)
+        const o = hitTest(pt) || (frameHitG(pt) || {}).L; if (o && !isPicked(o.id)) return null;
+        return { k:'rot', rot:true, hx:0, hy:0, x:q.x, y:q.y };
+      }
     }
   }
   return null;
@@ -5836,7 +6092,7 @@ function startResize(ev, pt, hd) {
     gR:grp && cm ? cm.g.find(e => e.gid === (b.gid || b.rg)) : null, // grupo girado: o pivô anda quando o conjunto escala (ver `put` em resizeTo)
     A:{ x:cx - hx * b.w / 2, y:cy - hy * b.h / 2 }, H0:{ x:cx + hx * b.w / 2, y:cy + hy * b.h / 2 }, s0:items[0].s0, k:b.k || 1, bw:b.w / (b.k || 1),
     fl:grp ? flowScale(items.map(q => q.o)) : null, fg:grp && b.gid || null, tg:snapSetup().tg }; // grupo com layout: o espaço (e o frame) escala junto
-  if (!grp) RT.drag.mid = colMid([L]); // na coluna do layout do quadro que recentraliza, o lado puxado andaria só metade
+  if (!grp) { const cm1 = colMid([L]), fm = fixedMid(L); RT.drag.mid = { x:cm1.x || fm.x, y:cm1.y || fm.y }; } // na coluna do layout do quadro que recentraliza (ou no frame de tamanho fixo que centraliza), o lado puxado andaria só metade
   // frame do grupo com layout: os lados mudam o tamanho dele; os cantos escalam tudo junto (como antes)
   if (b.gid && (hx === 0 || hy === 0)) Object.assign(RT.drag, { how:'frame', gid:b.gid, B0:{ x0:b.x, y0:b.y, x1:b.x + b.w, y1:b.y + b.h } }); // alça do frame: muda o tamanho dele
   cv.setPointerCapture(ev.pointerId);
@@ -6004,7 +6260,8 @@ function cvDown(ev) {
   let pt = stagePt(ev), hd = handleAt(pt);
   if (hd) { hd.rot ? startRotate(ev, pt) : hd.rad ? startRadius(ev, pt, hd) : hd.tp ? tpSlideStart(ev, pt, selL()) : startResize(ev, pt, hd); return; }
   const gp = flowGapAt(pt); if (gp) { startGapDrag(ev, pt, gp); return; } // espaço do layout automático
-  const L = hitTest(pt) || ghostAt(pt) || frameHit(pt); // sem nada na tela ali, a seleção que está fora da tela também pega; no fundo de um frame pintado, o frame
+  let fh = null; // fundo de um frame pintado: o frame de mais dentro que está sob o mouse
+  const L = hitTest(pt) || ghostAt(pt) || ((fh = frameHitG(pt)) && fh.L); // sem nada na tela ali, a seleção que está fora da tela também pega; no fundo de um frame pintado, o frame
   // fundo escolhido com imagem/vídeo: Alt + arrastar no vazio move a imagem dentro do quadro
   const sb = selL();
   if (!L && ev.altKey && sb && sb.type === 'bg' && mediaFill(sb) && pt.x >= 0 && pt.x <= FW() && pt.y >= 0 && pt.y <= H()) {
@@ -6015,7 +6272,7 @@ function cvDown(ev) {
   if (ev.shiftKey) { // segundo clique do clique duplo com Shift: o item já foi somado no primeiro, não tira de volta
     const now = performance.now(), again = RT.shiftTap && RT.shiftTap.id === L.id && now - RT.shiftTap.t < 500;
     RT.shiftTap = again ? null : { id:L.id, t:now };
-    if (!again) toggleSel(L);
+    if (!again) toggleSel(L, fh && fh.g);
     return;
   }
   // grupo/frame: o primeiro clique pega o grupo inteiro, o clique duplo entra no item; vizinho de um item já escolhido sozinho pega só ele (arrastar troca de lugar na fila)
@@ -6146,33 +6403,42 @@ cv.addEventListener('wheel', ev => {
   needs = true;
   clearTimeout(wheelT); wheelT = setTimeout(() => { wheelT = null; changed({ props:true }); }, 350);
 }, { passive:false });
+// só um arrasto de verdade grava a fila: a posição guardada tem 5 casas (±5e-6) e a da conta não, então um clique parado também "mexia" (e a fila saltava)
+const MOVED_EPS = 5e-5;
 const endDrag = () => {
   if (!RT.drag) return;
   const tap = RT.drag.tap && RT.drag.L; // toque sem arrastar num grupo: fica só essa camada
   const mv = RT.drag.mode === 'move' && !RT.drag.flowL && !RT.drag.flowB; // da fila/coluna: a posição final é a da conta, o painel precisa refazer
-  if (RT.drag.flowL) { const D = RT.drag, p = placeRaw(D.L); if (Math.abs(p.x - D.x0) + Math.abs(p.y - D.y0) > 1e-6) flowCommit(D.flow, D.fz); } // item da fila solto: entra no lugar dele
-  else if (RT.drag.flowB) { const D = RT.drag, p = placeRaw(D.L); if (Math.abs(p.x - D.x0) + Math.abs(p.y - D.y0) > 1e-6) frameCommit(D); } // bloco da coluna do quadro solto
+  if (RT.drag.flowL) { const D = RT.drag, p = placeRaw(D.L); if (Math.abs(p.x - D.x0) + Math.abs(p.y - D.y0) > MOVED_EPS) flowCommit(D.flow, D.fz); } // item da fila solto: entra no lugar dele
+  else if (RT.drag.flowB) { const D = RT.drag, p = placeRaw(D.L); if (Math.abs(p.x - D.x0) + Math.abs(p.y - D.y0) > MOVED_EPS) frameCommit(D); } // bloco da coluna do quadro solto
   RT.drag = null; RT.guide = null;
   if (tap && !(tap.grp && wholeGroup())) select(tap.id); // frame de dentro já escolhido inteiro: o toque não volta para o frame de fora (senão o clique duplo nunca desce além do 2º nível)
   changed({ props:!mv });
 };
 // clique duplo: dentro de um grupo escolhe só o item; num texto ou botão, vai direto editar o texto
 // clique duplo num grupo escolhido: entra um nível (frame de dentro); no último, escolhe o item
-function drillSelect(L) {
-  const chain = []; for (let g = L.grp, n = 0; g && n < 20; g = gpar(g), n++) chain.unshift(g);
+function drillSelect(L, g0) { // g0: clique no fundo pintado de um frame (não no item): desce só até esse frame
+  const chain = []; for (let g = g0 || L.grp, n = 0; g && n < 20; g = gpar(g), n++) chain.unshift(g);
   const pk = pickedLayers(); // nível atual = frame de fora cujas folhas são exatamente a seleção (vale também com 1 folha só)
   const w = chain.find(g => { const lv = gleaves(g); return lv.length === pk.length && lv.every(m => isPicked(m.id) || pk.includes(m)); });
   const next = w ? chain[chain.indexOf(w) + 1] : chain[0];
-  if (!next) { select(L.id, true); if (L.type === 'text' || L.type === 'cta') editText(L); return; } // último nível: escolhe o item e, sendo texto/botão, já abre a edição
+  if (g0 && !next) return;
+  if (g0) L = gleaves(next).find(l => l.id === L.id) || gleaves(next)[0];
+  if (!next) { select(L.id, true); return; } // último nível: escolhe o item (editar é outro clique duplo ou Enter)
   RT.picks = new Set(gleaves(next).map(l => l.id)); RT.selected = L.id; renderLayers(); renderProps(); needs = true;
 }
 cv.addEventListener('dblclick', ev => {
   if (RT.pen || RT.vec) return; // caneta e edição de pontos tratam o clique sozinhas
   const hd0 = handleAt(stagePt(ev)); if (hd0 && (hd0.rad || hd0.tp)) return; // bolinha do canto (ou de apoio do texto em curva): não entra na edição
-  const L = hitTest(stagePt(ev)); if (!L) return;
+  const L = hitTest(stagePt(ev));
+  if (!L) { // fundo pintado de um frame: desce um nível até ele (o cartão de dentro da coluna)
+    const fh = !ev.shiftKey && !ev.ctrlKey && !ev.metaKey && frameHitG(stagePt(ev)); if (fh) drillSelect(fh.L, fh.g);
+    return;
+  }
   if (ev.shiftKey || ev.ctrlKey || ev.metaKey) return; // Shift/Ctrl + clique duplo só soma o item, não sobe para o grupo
   const pk0 = pickedLayers();
-  if (L.grp && (L.type === 'text' || L.type === 'cta') && !L.locked) { select(L.id, true); editText(L); return; } // texto/botão dentro de frames (um ou vários níveis): vai direto para a edição
+  if (L.grp && (L.type === 'text' || L.type === 'cta') && !L.locked && pk0.length === 1 && pk0[0] === L && !wholeGroup()) { editText(L); return; } // texto/botão de dentro de frames já escolhido sozinho: o clique duplo edita; antes disso só desce um nível (até escolher o texto)
+  if (L.grp && (L.type === 'text' || L.type === 'cta')) { drillSelect(L); return; }
   if (L.grp && (wholeGroup() || (!(pk0.length === 1 && pk0[0] === L) && (pk0.length > 1 || gpar(L.grp))))) { drillSelect(L); return; } // frame de um item só escolhido inteiro: entra no item
   editText(L);
 });
@@ -6695,6 +6961,30 @@ function setHover(id) { id = id || null; if (RT.hover !== id) { RT.hover = id; n
 function marqHits(r) {
   return S.layers.filter(o => { if (o.type === 'bg' || !o.visible || o.locked || !o._bounds || !phase(o, T)) return false; const b = visB(o); return b.x < r.x + r.w && b.x + b.w > r.x && b.y < r.y + r.h && b.y + b.h > r.y; });
 }
+// Seleção por área começada dentro de um frame com layout (como no Figma): escolhe os filhos desse frame, não o frame de fora inteiro.
+// Os cartões de uma coluna se escolhem juntos arrastando por cima deles. Começou fora de qualquer frame: o grupo inteiro, como sempre
+function marqScope(p) {
+  let best = null, bd = 0;
+  for (const g of Object.keys(S.groups || {})) {
+    if (!flowOf(g) || !gleaves(g).some(l => l.visible)) continue;
+    const b = frameRect(g), d = gchain(g).length;
+    if (b && d > bd && p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) { best = g; bd = d; }
+  }
+  return best;
+}
+// Começou fora de qualquer frame: o frame mais alto que a área cobre inteiro; se cobre só um pedaço do frame de fora, os frames de dentro que ela toca
+const asFrame = g => Object.assign([...gleaves(g)], { g }); // as folhas do frame, com o id dele (`.g`): a área escolheu o frame, não só os itens
+function marqUnit(o, scope, r) {
+  if (!o.grp) return [o];
+  if (scope && ginside(o.grp, scope)) {
+    if (o.grp === scope) return [o];
+    const g = gchain(o.grp).find(k => gpar(k) === scope);
+    return g ? asFrame(g) : [o];
+  }
+  const ch = gchain(o.grp); if (ch.length < 2) return groupOf(o); // grupo ou frame sem frame dentro: inteiro, como sempre
+  for (const g of ch) { const b = frameRect(g); if (b && b.x >= r.x && b.y >= r.y && b.x + b.w <= r.x + r.w && b.y + b.h <= r.y + r.h) return asFrame(g); }
+  return asFrame(ch[1]);
+}
 function marquee(ev) {
   const p0 = stagePt(ev), add = ev.shiftKey, x0 = ev.clientX, y0 = ev.clientY;
   let moved = false;
@@ -6709,11 +6999,19 @@ function marquee(ev) {
     if (RT.pinched) return; // o segundo dedo cancelou: era pinça, não seleção (nem clique no vazio)
     if (!moved || !r) { if (!add) selectBg(); return; } // Shift errando o clique não solta a seleção
     const hits = marqHits(r);
+    // frame de dentro de outro frame (o cartão): tocar na caixa dele, não só num item, já escolhe o cartão
+    for (const g of Object.keys(S.groups || {})) {
+      if (!gpar(g)) continue; const b = frameRect(g); if (!b || !(b.x < r.x + r.w && b.x + b.w > r.x && b.y < r.y + r.h && b.y + b.h > r.y)) continue;
+      const o = gleaves(g).find(l => l.type !== 'bg' && l.visible && !l.locked && phase(l, T)); if (o && !hits.includes(o)) hits.push(o);
+    }
     if (!hits.length) { if (!add) selectBg(); return; }
     const ids = new Set(add ? [...(RT.picks || [])].filter(id => S.layers.some(l => l.id === id && l.type !== 'bg')) : []);
     if (add && selL() && selL().type !== 'bg') ids.add(RT.selected);
-    hits.forEach(o => groupOf(o).forEach(m => ids.add(m.id)));
-    RT.picks = ids; RT.selected = hits[hits.length - 1].id;
+    const scope = marqScope(p0);
+    const frs = add ? selFrames() : [];
+    hits.forEach(o => { const u = marqUnit(o, scope, r); u.forEach(m => ids.add(m.id)); if (u.g) frs.push(u.g); });
+    RT.picks = ids; RT.selected = hits[hits.length - 1].id; RT.itemPicks = null;
+    setFrPicks(ids, frs); // dois cartões irmãos que juntos são o frame de fora inteiro continuam dois cartões
     renderLayers(); renderProps(); needs = true;
   };
   addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
@@ -6725,6 +7023,7 @@ function editText(L) {
   if (lockedNote(L)) return;
   if (propTab !== 'style') { propTab = 'style'; renderProps(); }
   if (L.type !== 'text' && L.type !== 'cta') return;
+  if (L.capt) { capFocus(L); return; } // legenda: o trecho da agulha na lista do painel
   const ph = phase(L, T); if (!ph || ph.mode !== 'hold') seekLayer(L); // com o texto inteiro na tela
   const el = document.getElementById(fid(L, 'text')); if (!el) return;
   paneShow('right'); foldReveal(el); // coluna escondida ou seção Texto fechada: aparece
@@ -6911,12 +7210,17 @@ async function openState(st, id, name, project = FILES.project) {
   // fotos de outros arquivos saem da memória (cada arquivo aberto deixava as dele decodificadas até fechar a aba); quem precisar carrega de novo
   { const keep = new Set(); for (const L of S.layers) for (const k of [L.src, L.vsrc, L.cut && L.cut.orig, L.cut && L.cut.mask]) if (k) keep.add(k);
     for (const k of [...RT.images.keys()]) if (!keep.has(k)) RT.images.delete(k); }
-  RT.selected = S.layers.find(l => l.type === 'logo')?.id || S.layers.find(l => l.type !== 'bg')?.id || S.layers[0]?.id;
+  RT.selected = S.layers.find(l => l.type === 'logo')?.id || S.layers.find(l => l.type !== 'bg' && !NOBOX(l))?.id || S.layers.find(l => l.type !== 'bg')?.id || S.layers[0]?.id; // som/câmera não: o vídeo, não o som dele
   renderAll(); fitStage();
   await refreshLogo(); ensureFonts();
   S.layers.forEach(l => l.src && getImage(l.src));
   pause(); T = heroTime(); needs = true;
   return true;
+}
+// abrir um arquivo da janela Arquivos vai para uma aba nova (pedido do usuário); se já está aberto em outra aba, vai até ela. Ctrl + clique troca no lugar (`openFile`)
+async function openFileTab(id) {
+  if (await ABAS.busy(id)) { await ABAS.openBusy(id); return; }
+  closeFiles(); ABAS.add({ file:id });
 }
 async function openFile(id) {
   if (await ABAS.busy(id)) { await ABAS.openBusy(id); return; } // já está aberto em outra aba
@@ -7168,13 +7472,13 @@ async function renderFiles() {
     });
     const where = FVIEW === '*' || q ? (f.project ? PROJ_NAMES.get(f.project) : 'Rascunhos') + ' · ' : '';
     const card = h('div', { class:'fcard' + (f.id === FILES.id ? ' cur' : ''), role:'button', tabindex:'0', draggable:'true', title:`Abrir ${f.name}`,
-      onclick:e => f.id === FILES.id ? closeFiles() : e.ctrlKey || e.metaKey ? (closeFiles(), ABAS.add({ file:f.id })) : openFile(f.id),
+      onclick:e => f.id === FILES.id ? closeFiles() : e.ctrlKey || e.metaKey ? openFile(f.id) : openFileTab(f.id),
       onkeydown:e => { if (e.key === 'Enter' && e.target === card) card.click(); } }, [
       h('div', { class:'fthumb' }, [f.thumb ? h('img', { src:f.thumb, alt:'', draggable:'false' }) : null, f.id === FILES.id ? h('em', { text:'Aberto' }) : openElse.has(f.id) ? h('em', { text:'Em outra aba' }) : null]),
       nm,
       h('small', { text:`${where}Editado ${ago(f.updatedAt || f.createdAt)}` }),
       h('div', { class:'facts' }, [
-        f.id === FILES.id || openElse.has(f.id) ? null : h('button', { class:'icon-btn', title:'Abrir em nova aba (Ctrl + clique no arquivo)', 'aria-label':`Abrir ${f.name} em nova aba`, html:ICON_TAB, onclick:e => { e.stopPropagation(); closeFiles(); ABAS.add({ file:f.id }); } }),
+        f.id === FILES.id || openElse.has(f.id) ? null : h('button', { class:'icon-btn', title:'Abrir em nova aba', 'aria-label':`Abrir ${f.name} em nova aba`, html:ICON_TAB, onclick:e => { e.stopPropagation(); openFileTab(f.id); } }),
         h('button', { class:'icon-btn', title:'Mover para um projeto', 'aria-label':`Mover ${f.name}`, html:ICON_FOLDER, onclick:e => { e.stopPropagation(); moveMenu(e.currentTarget, f.id, f.project || null); } }),
         h('button', { class:'icon-btn', title:'Duplicar', 'aria-label':`Duplicar ${f.name}`, html:ICONS.copy, onclick:e => { e.stopPropagation(); duplicateFile(f.id); } }),
         h('button', { class:'icon-btn', title:'Apagar', 'aria-label':`Apagar ${f.name}`, html:ICONS.trash, onclick:e => { e.stopPropagation(); deleteFile(f.id); } }),
@@ -7271,9 +7575,11 @@ async function encodeWebCodecs(canvas, ctx, w, hh, Ns, prog, mixes, sl = [0]) {
   const cut = canvas.width > w; // o quadro tem mais de um slide
   const outs = sl.map((s, k) => {
     const mix = mixes[k], achunks = (mix && aenc.get(mix)) || null; if (achunks) anySound = true;
-    const opt = { target:new Mp4Muxer.ArrayBufferTarget(), video:{ codec:pick.mux, width:w, height:hh, frameRate:fps() }, fastStart:'in-memory', firstTimestampBehavior:'offset' };
+    // o MP4 vai virando Blob aos pedaços (blobSink, js/trecho.js): um vídeo de 10 min não fica inteiro na memória. O moov continua no
+    // começo (fast start): o espaço dele é reservado pelo número de quadros e de pedaços de som, que já se sabe aqui
+    const sink = blobSink(), opt = { target:sink.target, video:{ codec:pick.mux, width:w, height:hh, frameRate:fps() }, fastStart:{ expectedVideoChunks:Ns[k], expectedAudioChunks:achunks ? achunks.length : 0 }, firstTimestampBehavior:'offset' };
     if (achunks) opt.audio = { codec:apick.mux, sampleRate:mix.sampleRate, numberOfChannels:2 };
-    const o = { s, N:Ns[k], muxer:new Mp4Muxer.Muxer(opt), err:null, cv:null };
+    const o = { s, N:Ns[k], muxer:new Mp4Muxer.Muxer(opt), sink, err:null, cv:null };
     if (achunks) for (const [c, m] of achunks) o.muxer.addAudioChunk(c, m);
     if (cut) o.cv = softCv(w, hh);
     o.enc = new VideoEncoder({ output:(chunk, meta) => o.muxer.addVideoChunk(chunk, meta), error:e => { o.err = e; } });
@@ -7300,7 +7606,7 @@ async function encodeWebCodecs(canvas, ctx, w, hh, Ns, prog, mixes, sl = [0]) {
   }
   await Promise.all(outs.map(o => o.enc.flush())); fail();
   for (const o of outs) { o.muxer.finalize(); o.enc.close(); }
-  const blobs = outs.map(o => new Blob([o.muxer.target.buffer], { type:'video/mp4' }));
+  const blobs = outs.map(o => o.sink.blob('video/mp4'));
   return { blob:blobs[0], blobs, ext:'mp4', audio:anySound,
     codec:(pick.cfg.codec.startsWith('avc1.64') ? 'H.264 High' : pick.cfg.codec.startsWith('avc') ? 'H.264' : 'VP9') + ` · ${(pick.cfg.bitrate / 1e6).toFixed(1)} Mbps` + (anySound ? ` · ${apick.mux === 'aac' ? 'AAC' : 'Opus'}` : mix0 ? ' · sem som (o navegador não codificou o áudio)' : '') };
 }
@@ -7477,8 +7783,8 @@ function exportVideo() {
     ...slideSec,
     h('h3', { text:'Formatos' }),
     chips(Object.entries(FORMATS).map(([k, f]) => [k, f.label]), k => fm.has(k), k => { if (fm.has(k)) { if (fm.size > 1) fm.delete(k); } else fm.add(k); }),
-    h('p', { class:'hint', text:baseFmt() === 'custom' ? 'O formato livre é o principal: nenhum formato se reorganiza a partir dele. O que você ajustou num formato fica só nele.' : (anyVid ? `Cada formato se reorganiza a partir do ${fmtLabel(baseFmt())} (o principal): os blocos ficam juntos, o que encosta na margem continua nela e a foto muda de recorte para ocupar o espaço. O que você ajustou num formato fica só nele.`
-      : `Cada formato se reorganiza a partir do ${fmtLabel(baseFmt())} (o principal). O que você ajustou num formato fica só nele.`) + ' O livre não se reorganiza.' }),
+    h('p', { class:'hint', text:anyVid ? `Cada formato se reorganiza a partir do ${fmtLabel(baseFmt())} (o principal): os blocos ficam juntos, o que encosta na margem continua nela e a foto muda de recorte para ocupar o espaço. O que você ajustou num formato fica só nele.`
+      : `Cada formato se reorganiza a partir do ${fmtLabel(baseFmt())} (o principal). O que você ajustou num formato fica só nele.` }),
     h('h3', { text:'Variações de texto' }),
     rows.length ? chips([['one', 'Só a atual'], ['all', `Todas (${rows.length + 1})`]], k => (k === 'all') === all, k => { all = k === 'all'; })
       : h('p', { class:'hint', text:'Nenhuma variação ainda. Crie em "Variações", no topo, para exportar várias versões de uma vez.' }),
@@ -7542,6 +7848,7 @@ async function saveFramePng(mode) {
   toast(dir ? `${n} imagens salvas na pasta "${dir.name}"` : `${n} imagens baixadas, uma por slide`);
 }
 $('#pngBtn').onclick = () => saveFramePng();
+$('#splitBtn').onclick = () => splitAtPlayhead();
 $('#svgBtn').onclick = () => exportSvg();
 $('#mClose').onclick = () => { if (RT.exporting) { cancelExport = true; return; } $('#modal').hidden = true; const v = $('#mVideo'); v.pause(); };
 $('#mSave').onclick = () => lastExport && saveFile(lastExport.blob, lastExport.fname);
@@ -7636,34 +7943,144 @@ const vidOn = L => !!L.video && (L.type === 'image' || (L.type === 'shape' || L.
 // corte: L.vIn/L.vOut = trecho do vídeo em segundos (ausente = do começo / até o fim); o trecho repete se a camada for mais longa
 function vidCut(L, el) {
   const d = (el && el.duration) || L.vdur || 1, a = clamp(L.vIn || 0, 0, Math.max(0, d - .1));
-  return { a, b:clamp(L.vOut ?? d, a + .1, d), d };
+  return { a, b:clamp(L.vOut ?? d, a + .1, d), d, sp:vSpd(L) };
 }
+/* velocidade (pedido do usuário: acelerar o vídeo): L.vSpeed (ausente = 1×; VSPD_MIN..VSPD_MAX). Um segundo da timeline anda sp
+   segundos do vídeo: o trecho [a, b] ocupa (b − a) / sp na barra. vIn/vOut, os pontos das pausas (at) e dos cortes secos ficam no
+   tempo do vídeo original; o tempo parado de cada pausa (len) é da timeline (não acelera). O som com sync copia (linkSync) e toca
+   na mesma velocidade sem mudar o tom (vidStretch). Peso: tocando, o decodificador trabalha sp vezes mais por segundo */
+const VSPD_MIN = .25, VSPD_MAX = 4;
+const vSpd = L => clamp(+(L && L.vSpeed) || 1, VSPD_MIN, VSPD_MAX);
+/* pausas (pedido do usuário: dois vídeos na tela, um para e o outro continua): L.vPause = [{ at, len }], at = segundo do vídeo
+   original em que ele para, len = segundos parado no quadro de lá. Só valem dentro do trecho [a, b]; pausa no fim do trecho
+   (at = b) = congelado até o fim da barra. Uma passada (cyc) = trecho + pausas: a barra acompanha (vidFitEnd) e, repetindo, as
+   pausas repetem junto. O som do vídeo leva as mesmas pausas (linkSync) e fica em silêncio nelas (buildMix).
+   Peso: nenhum, o quadro parado é o mesmo (o decodificador não trabalha) */
+/* cortes secos (pedido do usuário: "Tirar silêncios" num botão, não como regra): L.vSkip = [{ at, len }], o vídeo pula do segundo
+   at para at + len do original (o que fica no meio não aparece nem toca). Entram no plano como eventos { at, len:0, jump }, junto
+   com as pausas: a passada encurta, o som com sync copia (linkSync) e toca um pedaço por trecho (buildMix), as bordas da barra
+   cortam por vidCutP. Uma camada só (pedaços em camadas separadas = um <video> e um decodificador por pedaço). Peso: nenhum por
+   quadro; tocando, cada pulo para longe do quadro-chave decodifica desde ele (como uma busca) */
+function vidPlan(L, el) {
+  const { a, b, d, sp } = vidCut(L, el);
+  const ev = (L.vPause || []).filter(p => p.len > .005 && p.at > a - 1e-3 && p.at < b + 1e-3).map(p => ({ at:clamp(p.at, a, b), len:p.len }));
+  for (const s of L.vSkip || []) { const s0 = Math.max(a, s.at), s1 = Math.min(b, s.at + s.len); if (s1 - s0 > .005) ev.push({ at:s0, len:0, jump:s1 - s0 }); }
+  ev.sort((x, y) => x.at - y.at || (x.jump ? 1 : 0) - (y.jump ? 1 : 0));
+  // pulo que se cruza com o anterior encurta; pausa dentro de um trecho pulado não acontece
+  const ps = []; let cur = a, cut = 0;
+  for (const p of ev) {
+    if (p.at < cur - 1e-6) { if (!p.jump || p.at + p.jump <= cur + .005) continue; p.jump = p.at + p.jump - cur; p.at = cur; }
+    ps.push(p); if (p.jump) { cut += p.jump; cur = p.at + p.jump; } else cur = p.at;
+  }
+  return { a, b, d, sp, ps, cut, cyc:ps.reduce((s, p) => s + p.len, (b - a - cut) / sp) };
+}
+// tempo dentro de uma passada (u, segundos desde o começo da camada) → [segundo do vídeo, parado?]
+function vidRun(P, u) {
+  const sp = P.sp || 1; let pos = P.a, el = 0;
+  for (const p of P.ps) {
+    const n = (p.at - pos) / sp; if (u < el + n) return [pos + (u - el) * sp, false];
+    el += n; pos = p.at; if (u < el + p.len) return [p.at, true];
+    el += p.len; if (p.jump) pos += p.jump;
+  }
+  return [Math.min(P.b, pos + (u - el) * sp), false];
+}
+// a barra repete o trecho (é mais longa que uma passada)
+const vidLoops = L => (L.end ?? S.duration) - L.start > vidPlan(L).cyc + .05;
 // + VID_EPS: o tempo exato do quadro às vezes cai uns décimos de ms antes dele (WebM guarda em ms) e mostrava o anterior
 const VID_EPS = 1 / 240;
-function vidTime(L, t, el) {
-  const { a, b } = vidCut(L, el), len = b - a, vt = Math.max(0, t - L.start);
-  return a + (vt < len - .02 ? vt : vt % len) + VID_EPS;
+function vidTime(L, t, el) { const x = xfVidTime(L, t, el); return x != null ? x : vidTime0(L, t, el); } // na transição entre clipes, o resto do arquivo
+function vidTime0(L, t, el) {
+  const vt = Math.max(0, t - L.start);
+  if (L.vPause || L.vSkip) { const P = vidPlan(L, el); if (P.ps.length) return Math.min(vidRun(P, vt < P.cyc - .02 ? vt : vt % P.cyc)[0], P.b - .02) + VID_EPS; }
+  const { a, b, sp } = vidCut(L, el), len = (b - a) / sp;
+  return a + (vt < len - .02 ? vt : vt % len) * sp + VID_EPS;
 }
-// a camada dura o trecho (como um clipe num editor de vídeo): o fim da barra acompanha o corte
+// a camada dura o trecho (como um clipe num editor de vídeo): o fim da barra acompanha o corte (e as pausas)
 function vidFitEnd(o) {
   if (o.type !== 'image' && o.type !== 'audio') return; // preenchimento com vídeo (fundo, forma) repete dentro da barra que já existe
-  const { a, b } = vidCut(o); o.end = +Math.min(S.duration, o.start + b - a).toFixed(3);
+  o.end = +Math.min(S.duration, o.start + vidPlan(o).cyc).toFixed(3);
+}
+// pausa na agulha sem limite de tempo (pedido do usuário): se a passada (trecho + pausas) passa do fim do arquivo, ou do slide no
+// carrossel, o arquivo cresce até caber (no máximo DUR_MAX). Chamar antes de vidFitEnd, dentro de um passo de desfazer já aberto
+function vidGrow(o) {
+  if (S.still || (o.type !== 'image' && o.type !== 'audio')) return;
+  const need = Math.min(DUR_MAX, Math.ceil((o.start + vidPlan(o).cyc) * 2) / 2);
+  if (slides() < 2) { if (need > S.duration + .01) setDuration(need); return; }
+  const i = slideOfL(o); if (slideStill(i) || need <= slideEnd(i) + .01) return;
+  // carrossel: só o slide dele cresce; o fundo e o som acompanham a timeline, os outros elementos ficam onde estão
+  const D0 = S.duration, d = Array.from({ length:slides() }, (_, k) => slideDur(k)); d[i] = need;
+  const D = Math.max(D0, need);
+  for (const L of S.layers) {
+    if (L === o) continue;
+    if (L.type === 'bg' || NOBOX(L)) { if (L.end == null || L.end >= D0 - .01) L.end = endTo(L, D); }
+    else if (L.end == null) L.end = D0;
+  }
+  S.duration = D; if (d.every(x => x === D)) delete S.sdur; else S.sdur = d;
+  RT.layout.clear(); renderFormats(); updDur(true);
+}
+// estado no começo de um arrasto na timeline (vidTrim, vidClip) e a volta dele com Esc
+const vidSnap = (o, d) => ({ ...vidCut(o), P:vidPlan(o), rIn:o.vIn, rOut:o.vOut, rP:o.vPause, rS:o.vSkip, s:o.start, e:o.end ?? d });
+function vidUnsnap(o, v) {
+  o.vIn = v.rIn; o.vOut = v.rOut; o.vPause = v.rP; o.vSkip = v.rS;
+  for (const k of ['vIn', 'vOut', 'vPause', 'vSkip']) if (o[k] == null) delete o[k];
+}
+// corte pelas bordas com pausas, a partir do estado do começo do arrasto (v.P). left: o começo da barra andou e o vídeo fica
+// parado no tempo (o que passou sai; a pausa cortada no meio fica com o resto). right: o fim da barra corta o trecho (no meio
+// de uma pausa ela fica com o que sobra; congelado no fim estica e encolhe com a barra). Barra que já repetia: a direita não corta
+function vidCutP(o, v, left, right) {
+  let { a, b, ps } = v.P; const cyc = v.P.cyc, sp = v.P.sp || 1; // u, el, n: tempo da barra; a, b, pos, at: tempo do vídeo
+  if (left) {
+    let u = o.start - v.s;
+    if (u < 0) a = clamp(a + u * sp, 0, b - .1);
+    else {
+      if (v.e - v.s > cyc + .05 && u >= cyc - .3) { const off = u % cyc; u = cyc - off < .3 ? 0 : off; } // repetindo: como vidHead
+      let pos = a, el = 0, k = 0, na = null; const rest = [];
+      for (; k < ps.length; k++) {
+        const p = ps[k], n = (p.at - pos) / sp; if (u < el + n) { na = pos + (u - el) * sp; break; }
+        el += n; pos = p.at;
+        if (p.jump) { pos += p.jump; continue; } // corte seco: o começo cai depois dele
+        if (u < el + p.len) { na = p.at; rest.push({ at:p.at, len:el + p.len - u }); k++; break; }
+        el += p.len;
+      }
+      if (na == null) na = pos + (u - el) * sp;
+      ps = [...rest, ...ps.slice(k)]; a = Math.min(na, b - .1);
+    }
+    if (a > 1e-3) o.vIn = +a.toFixed(3); else delete o.vIn;
+  }
+  if (right && v.e - v.s <= cyc + .05) {
+    const n = (o.end ?? S.duration) - o.start, keep = []; let pos = a, el = 0, nb = null;
+    for (let k = 0; k < ps.length; k++) {
+      const p = ps[k], seg = (p.at - pos) / sp; if (n <= el + seg + 1e-4) { nb = pos + (n - el) * sp; break; }
+      el += seg; pos = p.at;
+      if (p.jump) { keep.push(p); pos += p.jump; continue; } // corte seco antes do fim: fica
+      if (n <= el + p.len || (k === ps.length - 1 && p.at >= b - 1e-3)) { if (n - el > .005) keep.push({ at:p.at, len:n - el }); nb = p.at; break; }
+      keep.push(p); el += p.len;
+    }
+    if (nb == null) nb = pos + (n - el) * sp;
+    ps = keep; b = Math.max(a + .1, nb);
+    if (b < v.d - 1e-3) o.vOut = +b.toFixed(3); else delete o.vOut;
+  }
+  // de volta às duas listas: pausas (vPause) e cortes secos (vSkip)
+  const pz = ps.filter(p => !p.jump), sk = ps.filter(p => p.jump);
+  if (pz.length) o.vPause = pz.map(p => ({ at:+p.at.toFixed(3), len:+p.len.toFixed(3) })); else delete o.vPause;
+  if (sk.length) o.vSkip = sk.map(p => ({ at:+p.at.toFixed(3), len:+p.jump.toFixed(3) })); else delete o.vSkip;
 }
 // borda esquerda: começo do trecho com o vídeo parado no tempo. Barra repetindo e corte além da primeira passada (corte longo,
 // reclamação do usuário: "quebra"): o começo grudava no fim do trecho e sobrava 0,1 s repetindo e piscando na barra toda. Ali o
 // trecho começa no quadro que estava no lugar (resto da divisão pelo trecho); perto da volta, o trecho inteiro de novo
 function vidHead(v, start) {
-  const len = v.b - v.a, dt = start - v.s;
-  if (dt < len - .3 || v.e - v.s <= len + .05) return clamp(v.a + dt, 0, v.b - .1);
+  const sp = v.sp || 1, len = (v.b - v.a) / sp, dt = start - v.s; // len, dt: tempo da barra
+  if (dt < len - .3 || v.e - v.s <= len + .05) return clamp(v.a + dt * sp, 0, v.b - .1);
   const off = dt % len;
-  return v.a + (len - off < .3 ? 0 : off);
+  return v.a + (len - off < .3 ? 0 : off * sp);
 }
 // borda da barra na timeline = corte. v = estado no começo do arrasto ({ a, b, d, s, e } de vidCut + barra).
 // Esquerda: o vídeo fica parado no tempo e o começo do trecho anda junto. Direita: o fim do trecho segue a barra;
 // passou do fim do vídeo = trecho até o fim, repetindo. Se a camada já era mais longa que o trecho (repetindo), a direita não corta.
 function vidTrim(o, v, mode) {
+  if (v.P && v.P.ps.length) return vidCutP(o, v, mode === 'l', mode === 'r');
   if (mode === 'l') { const a = vidHead(v, o.start); if (a > 1e-3) o.vIn = +a.toFixed(3); else delete o.vIn; }
-  else if (mode === 'r' && v.e - v.s <= v.b - v.a + .05) { const b = v.a + (o.end ?? S.duration) - o.start; if (b < v.d - 1e-3) o.vOut = +b.toFixed(3); else delete o.vOut; }
+  else if (mode === 'r' && v.e - v.s <= (v.b - v.a) / v.sp + .05) { const b = v.a + ((o.end ?? S.duration) - o.start) * v.sp; if (b < v.d - 1e-3) o.vOut = +b.toFixed(3); else delete o.vOut; }
 }
 // prévia: toca junto quando o palco toca; pausado, fica no quadro da agulha.
 // Buscar no meio do vídeo (corte) é lento: o navegador decodifica desde o quadro-chave anterior. Por isso nunca se busca
@@ -7718,11 +8135,11 @@ function syncVideos() {
       if (el.seeking) continue;
       const d = vt - el.currentTime, cb = vidCut(L, el).b;
       // atrasado mais de 1 s, ou a conta deu a volta (trecho repetindo, agulha voltou): busca à frente pelo tempo da última busca
-      if (d > 1 || d < -1) { vidRate(el, 1); el.currentTime = vidTime(L, T + (v.lag ?? .3), el); continue; }
+      if (d > Math.max(1, vSpd(L)) || d < -1) { vidRate(el, 1); el.currentTime = vidTime(L, T + (v.lag ?? .3), el); continue; }
       // adiantado (o palco pesado anda mais devagar que o vídeo) ou no fim do corte antes de a conta dar a volta: espera parado,
       // sem buscar para trás (buscar no meio do vídeo é o que travava com corte)
       if (d < -.25 || el.currentTime >= cb - .03) { if (!el.paused) el.pause(); continue; }
-      vidRate(el, Math.abs(d) < .03 ? 1 : clamp(1 + d * 2, .5, 2));
+      vidRate(el, vSpd(L) * (Math.abs(d) < .03 ? 1 : clamp(1 + d * 2, .5, 2))); // velocidade do vídeo (vSpd) × o acerto
       if (el.paused) el.play().catch(() => {});
     } else {
       if (!el.paused) el.pause(); vidRate(el, 1);
@@ -8001,11 +8418,12 @@ async function videosReady() {
   const t0 = performance.now();
   while (ls.some(L => { const v = VIDS.get(L.id); return v && !v.ok && !v.missing; }) && performance.now() - t0 < 8000) await sleep(50);
 }
-function videoPoster(url) {
+// at = segundo do quadro do pôster (o começo do corte); ausente = o começo do vídeo
+function videoPoster(url, at) {
   return new Promise((res, rej) => {
     const el = document.createElement('video'); el.muted = true; el.preload = 'auto';
     el.onerror = () => rej(new Error('Não consegui abrir esse vídeo. Tente MP4 (H.264) ou WebM.'));
-    el.onloadeddata = () => { el.currentTime = Math.min(.1, (el.duration || 1) / 2); };
+    el.onloadeddata = () => { const d = el.duration || 1; el.currentTime = at != null ? clamp(at + .05, 0, Math.max(0, d - .05)) : Math.min(.1, d / 2); };
     el.onseeked = () => {
       const k = Math.min(1, 720 / el.videoWidth), c = document.createElement('canvas');
       c.width = Math.round(el.videoWidth * k); c.height = Math.round(el.videoHeight * k);
@@ -8017,19 +8435,93 @@ function videoPoster(url) {
 }
 const isVid = f => f && /^video\//.test(f.type);
 const isAud = f => f && (/^audio\//.test(f.type) || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(f.name || ''));
+// vídeo longo (mais de 3 min ou enorme) passa antes pela janela de trechos (videoGate, js/trecho.js): só o que foi marcado entra,
+// um vídeo por trecho, um depois do outro na timeline; o arquivo cresce até caber (no máximo DUR_MAX). Um desfazer só para tudo
 async function addVideoFile(f, pos) {
   if (!f) return;
-  toast('Abrindo o vídeo…');
+  const got = await videoGate(f); if (!got || !got.length) return;
+  if (got.own) return cutFiles(got); // "Um arquivo cada": os trechos viram arquivos novos, o aberto não muda
+  toast(got.length > 1 ? `Abrindo ${got.length} trechos…` : 'Abrindo o vídeo…');
   try {
-    const id = await putMedia(f), u = await mediaUrl(id), [p, an] = await Promise.all([videoPoster(u), videoSound(id)]), size = .8;
-    const L = mkImage({ name:f.name ? f.name.replace(/\.[^.]+$/, '') : 'Vídeo', video:id, src:p.src, vdur:p.dur, mask:'rect', radius:24, size, mh:+(size * p.h / p.w).toFixed(4), in:'fade', inDur:BP.fade.dur, y:.5 });
-    await getImage(L.src);
-    addLayer(L, pos || {});
-    const e0 = L.end ?? S.duration; vidFitEnd(L); L.end = Math.min(L.end, e0); // a barra do vídeo começa do tamanho dele (dentro de um frame, no máximo a dele)
-    if (an) { addVideoAudio(L, an); select(L.id, true); } // o som: camada separada no grupo do vídeo (o mesmo desfazer do vídeo)
-    changed({ layers:true, props:true }); if (an) renderTimeline();
-    toast((p.dur > S.duration - L.start + .05 ? `Vídeo adicionado. Ele tem ${fmtSec(p.dur)} e passa do fim: puxe a borda da barra para cortar` : 'Vídeo adicionado') + (an ? '. O som ficou numa camada separada, no grupo dele' : ''), an ? 5000 : undefined);
+    const its = [];
+    for (const g of got) { const id = await putMedia(g.file), u = await mediaUrl(id), [p, an] = await Promise.all([videoPoster(u), videoSound(id)]); its.push({ g, id, p, an }); }
+    const cut = !!got[0].cut, lens = its.map(({ g, p }) => g.cut ? g.cut.vOut - g.cut.vIn : p.dur), d0 = S.duration;
+    pushUndo();
+    let L = null, start, over = false; const fr0 = insertTarget(); // os trechos seguintes entram onde o primeiro entrou, não no grupo (vídeo + som) dele
+    for (let i = 0; i < its.length; i++) {
+      const { g, id, p, an } = its[i];
+      L = mkVideo(id, g.file.name ? g.file.name.replace(/\.[^.]+$/, '') : 'Vídeo', p); // o padrão do componente Vídeo (Componentes)
+      if (g.cut) Object.assign(L, g.cut);
+      await getImage(L.src);
+      if (i) { const ls = fr0 ? gleaves(fr0) : []; RT.picks = new Set(ls.map(l => l.id)); RT.selected = ls.length ? ls[ls.length - 1].id : null; RT.itemPicks = null; }
+      addLayer(L, { ...(pos || {}), start, noUndo:true });
+      // trecho: o arquivo cresce até caber todos (sem carrossel nem imagem estática, que têm duração por slide)
+      if (!i && cut && slides() === 1 && !S.still) { const need = L.start + lens.reduce((s, x) => s + x, 0); if (need > S.duration + .01) setDuration(Math.min(DUR_MAX, Math.ceil(need * 2) / 2)); }
+      const e0 = L.end ?? S.duration; vidFitEnd(L); L.end = Math.min(L.end, e0); // a barra do vídeo começa do tamanho dele (dentro de um frame, no máximo a dele)
+      if (L.start + lens[i] > L.end + .01) over = true;
+      if (an) addVideoAudio(L, an); // o som: camada separada no grupo do vídeo (o mesmo desfazer do vídeo)
+      start = L.end;
+    }
+    if (its.some(x => x.an)) select(L.id, true);
+    changed({ layers:true, props:true }); renderTimeline();
+    const p = its[0].p, an = its.some(x => x.an), grew = S.duration > d0 + .01;
+    toast((its.length > 1 ? `${its.length} trechos adicionados, um depois do outro` : cut ? 'Trecho adicionado' : 'Vídeo adicionado')
+      + (grew ? `. O arquivo passou para ${fmtSec(S.duration)} para caber` : !cut && p.dur > S.duration - L.start + .05 ? `. Ele tem ${fmtSec(p.dur)} e passa do fim: puxe a borda da barra para cortar` : cut && over ? '. Passa do fim do arquivo: aumente a Duração para ver tudo' : '')
+      + (an ? `. O som ficou numa camada separada, no grupo ${its.length > 1 ? 'de cada um' : 'dele'}` : ''), cut || an ? 6000 : undefined, cut ? UNDO_ACT : undefined);
   } catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
+}
+/* trechos em arquivos separados (Importar trecho → "Um arquivo cada"; pedido do usuário: cortes de um vídeo longo, cada um no seu
+   arquivo, com gordura para transição). Cada trecho vira um arquivo novo no projeto aberto, com a marca dele e o formato, a margem e o
+   fundo do padrão de arquivo novo (Componentes): o vídeo cobre o quadro, sem animação, o som fica no grupo dele e o arquivo dura o
+   trecho. A gordura está no vídeo (vIn/vOut cortam). O arquivo aberto não muda: o estado novo é montado trocando o S por um instante,
+   sem await no meio (o palco não chega a desenhar outro arquivo). Peso: cada trecho é lido uma vez (pôster e onda do som) e nada
+   fica na memória depois */
+async function cutFiles(got) {
+  const n = got.length, proj = FILES.project, brand = JSON.stringify(S.brand), made = [], t0 = Date.now();
+  toast(n > 1 ? `Criando ${n} arquivos…` : 'Criando o arquivo…', 600000);
+  if (saveT) await flushSave();
+  try {
+    for (let i = 0; i < n; i++) {
+      if (n > 1 && i) toast(`Criando o arquivo ${i + 1} de ${n}…`, 600000);
+      const g = got[i], id = await putMedia(g.file), u = await mediaUrl(id);
+      const [p, an] = await Promise.all([videoPoster(u, g.cut && g.cut.vIn), videoSound(id)]);
+      MUSIC.delete(id); URL.revokeObjectURL(u); MEDIA.delete(id); // o arquivo não está aberto: som decodificado e endereço do vídeo saem da memória
+      const img = await new Promise(res => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = p.src; });
+      const keep = S, sel = RT.selected, name = (g.file.name || 'Trecho').replace(/\.[^.]+$/, '');
+      let st, fw, fh;
+      try {
+        newProject(JSON.parse(brand)); delete S.slides; // carrossel no padrão: o corte é um vídeo só
+        fw = W(); fh = H();
+        const len = g.cut ? g.cut.vOut - g.cut.vIn : p.dur;
+        S.duration = +clamp(len, 2, DUR_MAX).toFixed(3); // como o campo Duração: no mínimo 2 s
+        for (const L of S.layers) L.end = S.duration;
+        const V = mkImage({ name, video:id, src:p.src, vdur:p.dur, mask:'rect', radius:0, size:+(fw / SU).toFixed(4), mh:+(fh / SU).toFixed(4), x:.5, y:.5,
+          in:'cut', out:'cut', inDur:0, outDur:0, start:0, end:S.duration, ...(g.cut || {}) });
+        S.layers.push(V); vidFitEnd(V);
+        if (an) addVideoAudio(V, an);
+        st = JSON.stringify(S);
+      } finally { S = keep; RT.selected = sel; }
+      // miniatura da janela Arquivos: o quadro do começo do corte, cobrindo o formato
+      const c = document.createElement('canvas'), x = c.getContext('2d'); c.width = 240; c.height = Math.round(fh * 240 / fw);
+      if (img) { const k = Math.max(c.width / img.width, c.height / img.height); x.drawImage(img, (c.width - img.width * k) / 2, (c.height - img.height * k) / 2, img.width * k, img.height * k); }
+      const fid = newFileId();
+      if (!(await DB.set('file:' + fid, st))) throw new Error(DISK.dir ? `não consegui gravar na pasta "${DISK.name}"` : 'o navegador bloqueou o armazenamento');
+      await ABAS.idx(async () => {
+        const list = (await DB.get('files')) || [], names = new Set(list.map(f => f.name));
+        let nm = name, k = 2; while (names.has(nm)) nm = `${name} ${k++}`;
+        const rec = { id:fid, name:nm, createdAt:t0 + n - i, updatedAt:t0 + n - i, thumb:c.toDataURL('image/jpeg', .72) }; // o 1º trecho fica no topo da lista
+        if (proj) rec.project = proj;
+        list.unshift(rec); made.push(rec); return DB.set('files', list);
+      });
+    }
+    const pn = proj ? PROJ_NAMES.get(proj) || 'projeto' : 'Rascunhos';
+    toast(n > 1 ? `${n} arquivos criados em "${pn}", um por trecho` : `"${made[0].name}" criado em "${pn}"`, 8000,
+      n > 1 ? { label:'Ver arquivos', fn:() => openFiles(proj || '') } : { label:'Abrir', fn:() => openFileTab(made[0].id) });
+    if (!$('#files').hidden) renderFiles();
+  } catch (e) {
+    console.warn('trechos em arquivos', e);
+    toast((made.length ? `${made.length} de ${n} arquivos criados. Não consegui criar o resto: ` : 'Não consegui criar os arquivos: ') + (e.message || e), 8000);
+  }
 }
 
 /* ============================================================
@@ -8171,12 +8663,60 @@ function playSfx(ctx, out, noise, e) {
     env(.02, .28, 1.1);
   }
 }
+/* som com velocidade (vSpd): o trecho [a, b] do som tocado sp vezes mais rápido sem mudar o tom (como o <video> e o "manter o tom"
+   dos editores). WSOLA: quadros de 40 ms com janela de Hann a cada 20 ms na saída, lidos a cada 20 × sp ms na entrada; cada quadro
+   procura (±12 ms) o encaixe que mais se parece com a continuação do anterior (correlação numa grade de 4 em 4 amostras, depois
+   amostra a amostra), então a onda não se cancela nas emendas. Um buffer pronto por camada (STRETCH, refeito só quando o arquivo,
+   o corte ou a velocidade mudam). Peso: ~3 M multiplicações por segundo de saída (1 min a 2× ≈ 0,1 s) e a memória do trecho
+   esticado (~23 MB por minuto de saída; câmera lenta longa ocupa mais) */
+const STRETCH = new Map(); // id da camada → { k, buf }
+function vidStretch(A, buf, a, b, sp) {
+  for (const id of STRETCH.keys()) if (!S.layers.some(l => l.id === id)) STRETCH.delete(id);
+  const key = [A.aud, a, b, sp, buf.length].join('|'), got = STRETCH.get(A.id); if (got && got.k === key) return got.buf;
+  const sr = buf.sampleRate, nc = buf.numberOfChannels, i0 = Math.round(a * sr), i1 = Math.min(buf.length, Math.round(b * sr));
+  const N = Math.round(sr * .04) & ~1, Hs = N / 2, tol = Math.round(sr * .012), M = Hs, out = Math.ceil((i1 - i0) / sp);
+  if (out < 2 || i1 - i0 < 2) return null;
+  // região de leitura com folga (zeros fora do arquivo), em mono para a busca
+  const r0 = i0 - tol - N, rn = (i1 - i0) + 2 * (tol + N) + N, src = [], mono = new Float32Array(rn);
+  for (let c = 0; c < nc; c++) {
+    const d = buf.getChannelData(c), x = new Float32Array(rn), s0 = Math.max(0, r0), s1 = Math.min(buf.length, r0 + rn);
+    if (s1 > s0) x.set(d.subarray(s0, s1), s0 - r0);
+    for (let i = 0; i < rn; i++) mono[i] += x[i] / nc;
+    src.push(x);
+  }
+  const win = new Float32Array(N); for (let i = 0; i < N; i++) win[i] = Math.sin(Math.PI * i / N) ** 2;
+  const dst = []; for (let c = 0; c < nc; c++) dst.push(new Float32Array(out + N));
+  const corr = (p, q, step) => { let s = 0, e = 1e-9; for (let i = 0; i < M; i += step) { const y = mono[q + i]; s += mono[p + i] * y; e += y * y; } return s / Math.sqrt(e); };
+  const base = i0 - r0, hi = rn - N - 1;
+  let prev = base;
+  for (let k = 0; k * Hs < out; k++) {
+    let pos = Math.min(hi, base + Math.round(k * Hs * sp));
+    if (k) {
+      const want = prev + Hs, lo = Math.max(0, pos - tol), up = Math.min(hi, pos + tol);
+      let best = pos, bv = -Infinity;
+      for (let q = lo; q <= up; q += 4) { const v = corr(want, q, 4); if (v > bv) { bv = v; best = q; } }
+      for (let q = Math.max(lo, best - 3), e = Math.min(up, best + 3); q <= e; q++) { const v = corr(want, q, 1); if (v > bv) { bv = v; best = q; } }
+      pos = best;
+    }
+    const o = k * Hs;
+    for (let c = 0; c < nc; c++) {
+      const x = src[c], y = dst[c];
+      for (let i = 0; i < N; i++) y[o + i] += x[pos + i] * (k === 0 && i < Hs ? 1 : win[i]); // o 1º quadro entra inteiro (sem rampa no começo)
+    }
+    prev = pos;
+  }
+  const res = new AudioBuffer({ length:out, numberOfChannels:nc, sampleRate:sr });
+  for (let c = 0; c < nc; c++) res.copyToChannel(dst[c].subarray(0, out), c);
+  STRETCH.set(A.id, { k:key, buf:res });
+  return res;
+}
 const audLayers = () => S.layers.filter(l => l.type === 'audio' && l.visible && l.aud && (l.vol ?? 1) > 0);
 const hasAudio = () => !!(S.audio && S.audio.id) || (!!S.sfx && S.sfx !== 'off') || audLayers().length > 0;
 // sl = slide (carrossel: cada arquivo leva só o som dos vídeos do próprio slide); null = todos
-async function buildMix(sr = 48000, d = S.duration, sl = null) {
+// voice = só o som das camadas de áudio (a fala, para a legenda): sem a música nem os efeitos
+async function buildMix(sr = 48000, d = S.duration, sl = null, voice = false) {
   const off = new OfflineAudioContext(2, Math.ceil(d * sr), sr), A = S.audio;
-  if (A && A.id) {
+  if (A && A.id && !voice) {
     const buf = await musicBuffer(A.id);
     if (buf) {
       const sk = clamp(audioSkip(), 0, Math.max(0, buf.duration - .5)), s = off.createBufferSource(), g = off.createGain(), v = A.vol ?? .8, fo = Math.min(1.2, d * .2);
@@ -8192,14 +8732,41 @@ async function buildMix(sr = 48000, d = S.duration, sl = null) {
     const V = linkOf(A); if (V && !vidOn(V)) continue; // preenchimento que deixou de ser vídeo
     const t0 = A.start, t1 = Math.min(A.end ?? S.duration, d); if (t1 <= t0 + .01) continue;
     let buf = null; try { buf = await musicBuffer(A.aud); } catch (e) {} if (!buf) continue;
-    const { a } = vidCut(A), b = Math.min(vidCut(A).b, buf.duration), len = b - a; if (len < .02) continue;
+    const { a, sp } = vidCut(A), b = Math.min(vidCut(A).b, buf.duration); if (b - a < .02) continue;
+    // com velocidade: o trecho [a, b] já esticado/encolhido (vidStretch); bt = segundo do vídeo → segundo nesse buffer
+    let bt = x => x;
+    if (sp !== 1) { const sb = vidStretch(A, buf, a, b, sp); if (!sb) continue; buf = sb; bt = x => (x - a) / sp; }
+    const P = vidPlan(A), len = (b - a) / sp;
+    if (P.ps.length) { // com pausas ou cortes secos: um pedaço por trecho que toca, silêncio nas pausas, repetindo a passada como o vídeo
+      const v = A.vol ?? 1, once = t1 - t0 <= P.cyc + .01;
+      for (let c = t0; c < t1 - .01; c += P.cyc) {
+        let pos = a, t = c;
+        for (const p of [...P.ps.filter(p => p.at <= b), { at:b, len:0 }]) {
+          const n = (p.at - pos) / sp, e = Math.min(t1, t + n);
+          if (e > t + .005) {
+            const s = off.createBufferSource(), g = off.createGain(); s.buffer = buf;
+            g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v, t + .005); g.gain.setValueAtTime(v, Math.max(t + .005, e - .01)); g.gain.linearRampToValueAtTime(0, e);
+            s.connect(g); g.connect(off.destination); s.start(t, bt(pos)); s.stop(e);
+          }
+          t += n + p.len; pos = p.at + (p.jump || 0); // corte seco: o próximo pedaço começa depois do trecho pulado
+        }
+        if (once) break;
+      }
+      continue;
+    }
     const s = off.createBufferSource(), g = off.createGain(), v = A.vol ?? 1, loop = t1 - t0 > len + .01, stop = loop ? t1 : Math.min(t1, t0 + len);
-    s.buffer = buf; if (loop) { s.loop = true; s.loopStart = a; s.loopEnd = b; }
+    s.buffer = buf; if (loop) { s.loop = true; s.loopStart = bt(a); s.loopEnd = bt(b); }
+    // transição entre clipes (xfPairs): o som do que entra começa antes do corte e o do que sai continua depois, com o resto do
+    // arquivo, e os dois cruzam na janela (sem resto no arquivo, começa/acaba onde dá)
+    const XV = !loop && V && xfPairs(), xi = XV && XV.n && XV.inn.get(V.id), xo = XV && XV.n && XV.out.get(V.id);
+    const pre = xi ? Math.max(0, t0 - xi.t0) : 0, post = xo ? Math.max(0, Math.min(d, xo.t1) - stop) : 0;
+    let st = t0 - pre, o0 = sp === 1 ? bt(a) - pre : bt(a); if (o0 < 0) { st -= o0; o0 = 0; } st = Math.max(0, st);
+    const en = Math.min(d, stop + post), up = pre ? t0 + pre : st + .01, dn = post ? Math.max(up, stop - post) : en - .01;
     // rampas de 10 ms nas pontas: sem estalo no corte
-    g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(v, t0 + .01); g.gain.setValueAtTime(v, Math.max(t0 + .01, stop - .01)); g.gain.linearRampToValueAtTime(0, stop);
-    s.connect(g); g.connect(off.destination); s.start(t0, a); s.stop(stop);
+    g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(v, up); g.gain.setValueAtTime(v, Math.max(up, dn)); g.gain.linearRampToValueAtTime(0, en);
+    s.connect(g); g.connect(off.destination); s.start(st, o0); s.stop(en);
   }
-  if (S.sfx && S.sfx !== 'off') {
+  if (S.sfx && S.sfx !== 'off' && !voice) {
     const out = off.createGain(), comp = off.createDynamicsCompressor(), noise = sfxNoise(off);
     out.gain.value = S.sfx === 'punchy' ? .9 : .4; out.connect(comp); comp.connect(off.destination);
     for (const e of sfxEvents()) if (e.t < d) playSfx(off, out, noise, e);
@@ -8234,7 +8801,7 @@ async function encodeAudio(buf, pick) {
 const AUD = { ctx:null, src:null, buf:null, sig:'', chk:0, building:false, c0:0, t0:0 };
 function audioSig() {
   const A = S.audio, fx = S.sfx && S.sfx !== 'off';
-  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from] : 0, S.sfx || 'off', audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol]), fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
+  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from] : 0, S.sfx || 'off', audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol, l.vPause, l.vSkip, l.vSpeed]), S.layers.filter(l => l.xin).map(l => [l.id, l.xin, l.start, l.visible]), fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
 }
 async function rebuildMix(sig) {
   AUD.building = true;
@@ -8277,7 +8844,9 @@ function linkSync() {
   for (const A of S.layers) {
     const V = linkOf(A); if (!V) continue;
     A.start = V.start; A.end = V.end; A.vdur = V.vdur; A.x = V.x; A.y = V.y; // x: o slide do som é o do vídeo (carrossel)
-    for (const k of ['vIn', 'vOut']) if (V[k] != null) A[k] = V[k]; else delete A[k];
+    for (const k of ['vIn', 'vOut', 'vSpeed']) if (V[k] != null) A[k] = V[k]; else delete A[k]; // vSpeed: o som acelera junto
+    if (V.vPause) A.vPause = V.vPause.map(p => ({ ...p })); else delete A.vPause; // o som para junto com o vídeo
+    if (V.vSkip) A.vSkip = V.vSkip.map(p => ({ ...p })); else delete A.vSkip; // e pula junto (cortes secos)
   }
 }
 // onda do som do arquivo; null se não tem faixa de áudio (o navegador recusa) ou é só silêncio
@@ -8323,7 +8892,7 @@ function soundNote(V) {
 function audioProps(L) {
   const V = L.link && S.layers.find(l => l.id === L.link && l.video === L.aud), t = h('section', { class:'sec' }, [h('h3', { text:'Tempo' })]);
   if (V) t.append(checkF(L, 'sync', 'Seguir o vídeo'));
-  if (V && L.sync) t.append(h('p', { class:'hint', text:`Entra, sai e corta junto com "${V.name}". Desmarque para cortar o som sozinho.` }));
+  if (V && L.sync) t.append(h('p', { class:'hint', text:`Entra, sai e corta junto com "${V.name}". Desmarque para cortar o som sozinho.` }), splitRow(L));
   else t.append(...vidCutFields(L));
   return [h('section', { class:'sec' }, [h('h3', { text:'Som' }),
     rangeF(L, 'vol', 'Volume', 0, 1.5, .01, v => Math.round((v ?? 1) * 100) + '%'),
@@ -8332,11 +8901,13 @@ function audioProps(L) {
 // onda na barra da timeline: o trecho cortado, repetindo se a barra for mais longa
 function drawAudBar(bar, L) {
   const c = bar.querySelector('.tl-awave'), r = bar.getBoundingClientRect(), dpr = devicePixelRatio || 1; if (!c || !L.peaks || !r.width) return;
-  c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
-  const x = c.getContext('2d'), { a, b } = vidCut(L), len = Math.max(.05, b - a), span = (L.end ?? S.duration) - L.start, st = L.pkS || .1;
+  c.width = Math.min(8192, Math.round(r.width * dpr)); c.height = Math.round(r.height * dpr); // com zoom na timeline a barra passa de 30 mil px: o desenho estica
+  const x = c.getContext('2d'), { a, b, sp } = vidCut(L), len = Math.max(.05, (b - a) / sp), span = (L.end ?? S.duration) - L.start, st = L.pkS || .1, P = vidPlan(L);
   x.fillStyle = getComputedStyle(c).color;
   for (let px = 0; px < c.width; px++) {
-    const ts = a + (px / c.width * span) % len, v = PK_CH.indexOf(L.peaks[Math.floor(ts / st)] || '0') / 63, hh = Math.max(dpr, v * c.height * .8);
+    // com pausas: linha reta onde o som está parado
+    const [ts, held] = P.ps.length ? vidRun(P, (px / c.width * span) % P.cyc) : [a + (px / c.width * span) % len * sp, false];
+    const v = held ? 0 : PK_CH.indexOf(L.peaks[Math.floor(ts / st)] || '0') / 63, hh = Math.max(dpr, v * c.height * .8);
     x.fillRect(px, (c.height - hh) / 2, 1, hh);
   }
 }
@@ -8359,9 +8930,28 @@ const ICONS = {
 const groupOf = L => L && L.grp ? gleaves(gtop(L.grp)) : [L];
 // id do grupo quando a seleção é o grupo inteiro (e só ele); um item escolhido sozinho (timeline, Ctrl + clique) não conta
 const itemSel = () => !!RT.itemPicks && RT.itemPicks === RT.picks; // itens escolhidos um a um: não valem como o grupo, mesmo que sejam todos
+/* Frames irmãos escolhidos inteiros (pedido do usuário: os dois cartões de um frame, sem o frame de fora que os agrupa). A seleção é por
+   camada, então escolher todos os filhos de um frame era igual a escolher o frame (wholeGroup, cabeçalhos, alinhar). `RT.frPicks` guarda
+   quais frames foram escolhidos; vale só enquanto `RT.picks` for o mesmo conjunto (como `itemPicks`) e os frames ainda estiverem inteiros. */
+function frSel() {
+  const f = RT.frPicks; if (!f || f.set !== RT.picks) return null;
+  return f.ids.every(g => { const lv = gleaves(g); return lv.length && lv.every(l => RT.picks.has(l.id)); }) ? f.ids : null;
+}
+function setFrPicks(picks, ids) { // ids: frames escolhidos; os que estão dentro de outro escolhido não contam
+  ids = [...new Set(ids)].filter(g => !ids.some(o => o !== g && ginside(g, o)));
+  RT.frPicks = ids.length ? { set:picks, ids } : null;
+}
+// o cabeçalho do frame aparece escolhido: todas as folhas escolhidas, menos quando ele só é o frame de fora de frames escolhidos
+function grpOn(gid) {
+  if (itemSel()) return false;
+  const fs = frSel(); if (fs) return fs.some(f => ginside(gid, f));
+  return gleaves(gid).every(m => isPicked(m.id));
+}
 function wholeGroup() {
   const L = selL(); if (!L || !L.grp) return null;
   if (itemSel()) return null; // itens escolhidos um a um (mesmo que sejam todos do grupo): continuam itens, não viram o grupo
+  const fs = frSel(); // frames escolhidos de propósito: um só = ele (e não o frame de fora que o contém); vários = seleção de vários
+  if (fs) { if (fs.length > 1) return null; const lv = gleaves(fs[0]); return pickedLayers().every(p => lv.includes(p)) ? fs[0] : null; }
   const pk = pickedLayers(), chain = []; for (let g = L.grp, n = 0; g && n < 20; g = gpar(g), n++) chain.unshift(g);
   for (const g of chain) { const lv = gleaves(g); if ((lv.length >= 2 || (lv.length && flowOf(g))) && lv.every(m => isPicked(m.id)) && pk.every(p => lv.includes(p))) return g; } // do frame de fora para o de dentro
   return null;
@@ -8395,8 +8985,49 @@ function lockedNote(ls) {
   toast(ls.length > 1 ? `${ls.length} camadas bloqueadas` : `${ls[0].name} está bloqueada`, 4000, { label:'Desbloquear', fn:() => setLock(ls, false) });
   return true;
 }
-function toggleSel(L) {
+// frames inteiros escolhidos (os de fora, sem os que estão dentro de outro escolhido)
+function selFrames() {
+  const fs = frSel(); if (fs) return fs;
+  const pk = new Set(pickedLayers().map(l => l.id));
+  const ids = Object.keys(S.groups || {}).filter(g => { const lv = gleaves(g); return lv.length && (lv.length >= 2 || flowOf(g)) && lv.every(l => pk.has(l.id)); });
+  return ids.filter(g => !ids.some(o => o !== g && ginside(g, o)));
+}
+// Shift + clique com frames de dentro de um frame escolhidos (os cartões de uma coluna): soma ou tira o irmão do mesmo nível, como no Figma
+function toggleSibling(L, g0) {
+  const fr = selFrames(); if (!fr.length) return false;
+  const cover = new Set(fr.flatMap(g => gleaves(g).map(l => l.id)));
+  if (!pickedLayers().every(l => cover.has(l.id))) return false; // tem camada solta na seleção: o jeito de sempre
+  const chain = gchain(g0 || L.grp);
+  let P = gpar(fr[0]); if (fr.some(g => gpar(g) !== P)) return false;
+  let h = P && chain.find(g => gpar(g) === P);
+  // frame inteiro escolhido (a coluna dos cartões) e Shift + clique num cartão de dentro: tira só esse cartão
+  if (!h && fr.length === 1 && gkids(fr[0]).length > 1 && (h = chain.find(g => gpar(g) === fr[0]))) P = fr[0];
+  if (!h) return false;
+  const cur = new Set(cover), lv = gleaves(h).map(l => l.id);
+  let next;
+  if (P === fr[0] && fr.length === 1) { lv.forEach(id => cur.delete(id)); RT.selected = [...cur].pop(); next = gkids(P).filter(k => k !== h); }
+  else {
+    if (fr.includes(h)) {
+      if (fr.length === 1) return false; // clique dentro do único frame escolhido: tira só o item, como antes
+      lv.forEach(id => cur.delete(id)); if (!cur.has(RT.selected)) RT.selected = [...cur].pop();
+      next = fr.filter(g => g !== h);
+    } else { lv.forEach(id => cur.add(id)); RT.selected = lv.includes(L.id) ? L.id : lv[0]; next = [...fr, h]; }
+  }
+  RT.picks = cur; RT.itemPicks = null; setFrPicks(cur, next); // os frames escolhidos ficam como estão, mesmo que juntos sejam o frame de fora inteiro
+  renderLayers(); renderProps(); needs = true; return true;
+}
+// Shift/Ctrl + clique no cabeçalho de um frame (lista e timeline): soma ou tira o frame, sem escolher o frame de fora
+function toggleGroupSel(gid) {
+  const lv = gleaves(gid); if (!lv.length) return;
+  if (toggleSibling(lv[lv.length - 1], gid)) return;
+  const fr = selFrames(), cur = new Set(pickedLayers().map(l => l.id));
+  if (grpOn(gid) && cur.size > lv.length) { lv.forEach(l => cur.delete(l.id)); if (!cur.has(RT.selected)) RT.selected = [...cur].pop(); RT.picks = cur; RT.itemPicks = null; RT.frPicks = null; }
+  else { lv.forEach(l => cur.add(l.id)); RT.selected = lv[lv.length - 1].id; RT.picks = cur; RT.itemPicks = null; setFrPicks(cur, [...fr, gid]); }
+  renderLayers(); renderProps(); needs = true;
+}
+function toggleSel(L, g0) {
   if (L.type === 'bg') return select(L.id);
+  if (L.grp && toggleSibling(L, g0)) return;
   const cur = RT.picks && RT.picks.size ? new Set([...RT.picks].filter(id => S.layers.some(l => l.id === id))) : new Set();
   cur.add(RT.selected);
   const mem = groupOf(L).map(l => l.id);
@@ -8435,8 +9066,8 @@ function ensureBounds(ls, quiet) {
 // um grupo escolhido inteiro conta como um bloco só (o de fora mais alto que está todo na seleção);
 // itens escolhidos um a um (itemSel) ou só parte do grupo alinham cada um por si
 function selUnits(ls) {
-  const map = new Map(), set = new Set(ls), item = itemSel();
-  const unitOf = L => { let k = L.id; if (!item) for (let g = L.grp, n = 0; g && n < 20; g = gpar(g), n++) if (gleaves(g).every(o => set.has(o))) k = g; return k; };
+  const map = new Map(), set = new Set(ls), item = itemSel(), fs = frSel();
+  const unitOf = L => { let k = L.id; if (fs) { const f = fs.find(g => ginside(L.grp, g)); return f || k; } if (!item) for (let g = L.grp, n = 0; g && n < 20; g = gpar(g), n++) if (gleaves(g).every(o => set.has(o))) k = g; return k; };
   for (const L of ls) if (L._bounds) { const k = unitOf(L); if (!map.has(k)) map.set(k, []); map.get(k).push(L); }
   return [...map.values()].map(m => ({ m,
     x0:Math.min(...m.map(l => l._bounds.x)), y0:Math.min(...m.map(l => l._bounds.y)),
@@ -8475,7 +9106,8 @@ function alignLayers(mode) {
    animação dele); o resto entra direto. Antes a conta subia até o frame mais de fora (gtop): com um item de um frame de dentro junto,
    não achava pai e o grupo saía do frame. Devolve o id do grupo novo (o chamador já fez pushUndo) */
 function wrapSel(ms, meta) {
-  const unit = l => { let u = null; for (let g = l.grp, n = 0; g && n < 20; g = gpar(g), n++) { if (gleaves(g).every(o => ms.includes(o))) u = g; else break; } return u; };
+  const fs = frSel(); // frames irmãos escolhidos: cada um é uma peça, o frame de fora que os junta não entra na conta
+  const unit = l => { let u = null; for (let g = l.grp, n = 0; g && n < 20; g = gpar(g), n++) { if (gleaves(g).every(o => ms.includes(o))) u = g; else break; if (fs && fs.includes(g)) break; } return u; };
   const whole = new Set(), loose = [];
   for (const l of ms) { const u = unit(l); if (u) whole.add(u); else loose.push(l); }
   // onde cada peça está agora; o grupo novo vai no frame mais de dentro que contém todas
@@ -8496,8 +9128,9 @@ function wrapSel(ms, meta) {
 function groupSel() {
   const ms = S.layers.filter(l => l.type !== 'bg' && isPicked(l.id)); if (ms.length < 2) return;
   pushUndo();
-  wrapSel(ms);
+  const ng = wrapSel(ms);
   RT.picks = new Set(ms.map(l => l.id)); if (!RT.picks.has(RT.selected)) RT.selected = ms[ms.length - 1].id; RT.itemPicks = null;
+  if (S.groups[ng].parent) setFrPicks(RT.picks, [ng]); // o grupo novo pode ser todo o conteúdo do frame de fora: continua sendo ele a seleção
   changed({ layers:true, props:true }); toast(`${ms.length} elementos agrupados. Ctrl+Shift+G desfaz`);
 }
 function ungroupSel() {
@@ -8507,7 +9140,12 @@ function ungroupSel() {
     changed({ layers:true, props:true }); toast('Frame desfeito: os de dentro continuam'); return;
   }
   const ids = new Set(pickedLayers().map(l => l.grp).filter(Boolean)); if (!ids.size) return;
-  pushUndo(); keepPlace(() => { S.layers.forEach(l => { if (ids.has(l.grp)) delete l.grp; }); ids.forEach(g => { if (S.groups) delete S.groups[g]; }); });
+  pushUndo(); keepPlace(() => {
+    S.layers.forEach(l => { if (ids.has(l.grp)) delete l.grp; });
+    // frame de dentro que sobra não pode ficar apontando para o frame apagado (a árvore perdia o pai)
+    if (S.groups) for (const k of Object.keys(S.groups)) if (!ids.has(k) && S.groups[k] && ids.has(S.groups[k].parent)) delete S.groups[k].parent;
+    ids.forEach(g => { if (S.groups) delete S.groups[g]; });
+  });
   changed({ layers:true, props:true }); toast('Grupo desfeito');
 }
 /* ------------ Pathfinder (como no Figma): Unir, Subtrair, Interseção, Excluir e Achatar ------------
@@ -8780,6 +9418,7 @@ function flowToggle() {
   pushUndo();
   const ng = wrapSel(ls, { name:'Frame' });
   RT.picks = new Set(ls.map(l => l.id)); if (!RT.picks.has(RT.selected)) RT.selected = ls[ls.length - 1].id; RT.itemPicks = null;
+  if (S.groups[ng].parent) setFrPicks(RT.picks, [ng]);
   changed({ layers:true, props:true }); flowOn(ng);
 }
 // painel: grupo inteiro selecionado = o layout dele; um item de um grupo com layout = "fora do layout"
@@ -8821,15 +9460,69 @@ function flowMin(F, its) {
   const tot = its.reduce((n, i) => n + (v ? i.h : i.w), 0) + (F.auto ? 0 : (F.gap ?? 24) * kk * (its.length - 1)), cr = Math.max(...its.map(i => v ? i.w : i.h));
   return v ? { w:cr + ph, h:tot + pv } : { w:tot + ph, h:cr + pv };
 }
+/* Lateral do frame (pedido do usuário: "diminuir a extensão para a lateral, sem diminuir o tamanho"): puxar a alça de lado para dentro deixa o texto de
+   dentro mais estreito, quebrando em mais linhas, e a fonte não muda. Vale também para os frames de dentro (o texto de um cartão num frame de fora que
+   envolve outros elementos). R = flowLayout(false, null). Texto em curva ou girado e frame sem layout não encolhem. */
+const txtShr = i => i.L.type === 'text' && !tpKind(i.L) && !i.L.rot;
+// largura mínima do texto (px do formato aberto): a palavra mais longa, cada palavra numa linha
+const txtMinW = i => layoutText({ ...i.L, fixW:true, maxW:.001 }, caseTxt(i.L, i.L.text)).blockW * i.k;
+const flowGapW = (F, its, kk) => F.auto ? 0 : (F.gap ?? 24) * kk * (its.length - 1);
+// menor largura (px) de um item da fila: texto = palavra mais longa, frame de dentro = o que ele aguenta, o resto = como está
+const itemMinW = (R, i) => i.L.kid ? (flowOf(i.L.kid) && R.groups.get(i.L.kid) ? frameMinW(R, i.L.kid) : i.w) : txtShr(i) ? Math.min(i.w, txtMinW(i)) : i.w;
+function frameMinW(R, gid) {
+  const r = R.groups.get(gid), F = flowOf(gid); if (!r || !F) return 0;
+  const its = r.items, kk = r.kk || 1, P = fpad(F), ws = its.map(i => itemMinW(R, i));
+  return (F.dir !== 'h' ? Math.max(...ws) : ws.reduce((n, w) => n + w, 0) + flowGapW(F, its, kk)) + (P.l + P.r) * kk;
+}
+// o estado de antes do arrasto (largura de cada texto e frame de dentro) para voltar quando o frame volta a ter espaço
+function wrapNat(R, gid, N) {
+  const r = R.groups.get(gid); if (!r || !flowOf(gid)) return N;
+  for (const i of r.items) {
+    if (i.L.kid) { const kF = flowOf(i.L.kid); if (kF && R.groups.get(i.L.kid)) { N.set(i.L.id, { w:i.w, fw:kF.w }); wrapNat(R, i.L.kid, N); } }
+    else if (txtShr(i)) N.set(i.L.id, { w:i.w, fixW:i.L.fixW, maxW:i.L.maxW });
+  }
+  return N;
+}
+// avail = largura (px) da caixa do frame gid; reparte para os itens e desce pelos frames de dentro
+function wrapFit(R, gid, avail, N) {
+  const r = R.groups.get(gid), F = flowOf(gid); if (!r || !F) return;
+  const its = r.items, kk = r.kk || 1, P = fpad(F), inner = avail - (P.l + P.r) * kk, v = F.dir !== 'h';
+  const mn = its.map(i => itemMinW(R, i)), nt = its.map((i, j) => Math.max(mn[j], (N.get(i.L.id) || { w:i.w }).w));
+  let al;
+  if (v) al = nt.map((w, j) => Math.max(mn[j], Math.min(w, inner)));
+  else { // em linha: cada um fica entre o mínimo e o tamanho de antes, na mesma proporção
+    const sn = nt.reduce((n, w) => n + w, 0), sm = mn.reduce((n, w) => n + w, 0), f = sn > sm ? clamp((inner - flowGapW(F, its, kk) - sm) / (sn - sm), 0, 1) : 1;
+    al = nt.map((w, j) => mn[j] + (w - mn[j]) * f);
+  }
+  its.forEach((i, j) => {
+    const o = N.get(i.L.id); if (!o) return;
+    if (i.L.kid) {
+      const kF = flowOf(i.L.kid);
+      if (kF.w != null && !kF.fillW) kF.w = al[j] >= o.w - .5 ? o.fw : Math.round(al[j] / kk); // frame de dentro com largura fixa
+      wrapFit(R, i.L.kid, al[j], N);
+    } else if (al[j] >= o.w - .5) { i.L.fixW = o.fixW; i.L.maxW = o.maxW; }
+    else { i.L.fixW = true; i.L.maxW = +(al[j] / i.k / SU).toFixed(4); }
+  });
+}
 // a coluna do layout do quadro recentraliza quem está nela: na horizontal com "No centro" e na vertical com "No meio" (sem Auto).
 // Puxar uma alça de lado ali faz os dois lados andarem juntos (como com Alt), senão a borda puxada anda só metade e para antes da margem
 function colMid(ls) {
   const F = S.flow; if (!F || !RT.frameIds || !ls.some(l => RT.frameIds.has(l.id))) return { x:false, y:false };
   return { x:F.align === 'center', y:F.pin === 'center' && !F.auto };
 }
+// item dentro de um frame de tamanho fixo que o centraliza (alinhar ao centro no outro eixo, "No meio" no eixo da fila): a caixa do frame sai do
+// centro do conteúdo, então puxar uma alça de lado com o lado oposto parado deslocava o centro do item e o frame inteiro andava junto (reclamação do
+// usuário: encolher o texto de uma Caixa para a esquerda levava o frame para a esquerda). Aí os dois lados andam juntos (como com Alt) e o frame fica
+function fixedMid(L) {
+  const F = L && L.grp && flowOf(L.grp); if (!F || !inFlow(L)) return { x:false, y:false };
+  const v = F.dir !== 'h', cross = F.align || 'center', main = F.auto ? 'start' : F.pin || 'start';
+  const fx = F.w != null || F.fillW, fy = F.h != null || F.fillH;
+  return { x:v ? fx && cross === 'center' : fx && main === 'center', y:v ? fy && main === 'center' : fy && cross === 'center' };
+}
 function flowResize(D, ex, ey, alt) {
   const F = flowOf(D.gid), its = F ? (flowNow(D.gid) || {}).items || [] : []; if (!its.length) return;
-  const b = { ...D.B0 }, kk = its.reduce((n, i) => n + i.k, 0) / its.length, lim = flowMin(F, its);
+  const b = { ...D.B0 }, kk = its.reduce((n, i) => n + i.k, 0) / its.length, lim = flowMin(F, its), R0 = D.hx ? flowLayout(false, null) : null;
+  if (R0) lim.w = Math.min(lim.w, frameMinW(R0, D.gid));
   const pull = (e, k0, k1, d, mn, sym) => { // nunca menor que o conteúdo
     if (sym) { const c = (b[k0] + b[k1]) / 2, hw = Math.max(mn / 2, Math.abs(e - c)); b[k0] = c - hw; b[k1] = c + hw; }
     else if (d > 0) b[k1] = Math.max(b[k0] + mn, e); else b[k0] = Math.min(b[k1] - mn, e);
@@ -8840,9 +9533,11 @@ function flowResize(D, ex, ey, alt) {
   // layout do quadro "No centro" (e "No meio", na altura): a coluna recentraliza o frame, então o lado puxado só andava metade e a trava da margem agia antes de
   // a borda chegar nela (reclamação do usuário: parava antes, como se houvesse largura máxima). Aí os dois lados andam juntos, como com Alt
   const mid = colMid(gleaves(D.gid));
-  if (D.hx) { pull(ex, 'x0', 'x1', D.hx, lim.w, alt || mid.x); if (lock) cap('x0', 'x1', M.x0, M.x1, lim.w); F.w = Math.round((b.x1 - b.x0) / kk); F.fillW = undefined; }
+  if (D.hx) { pull(ex, 'x0', 'x1', D.hx, lim.w, alt || mid.x); if (lock) cap('x0', 'x1', M.x0, M.x1, lim.w); F.w = Math.round((b.x1 - b.x0) / kk); F.fillW = undefined; wrapFit(R0, D.gid, b.x1 - b.x0, D.nat || (D.nat = wrapNat(R0, D.gid, new Map()))); RT.layout.clear(); }
   if (D.hy) { pull(ey, 'y0', 'y1', D.hy, lim.h, alt || mid.y); if (lock) cap('y0', 'y1', M.y0, M.y1, lim.h); F.h = Math.round((b.y1 - b.y0) / kk); F.fillH = undefined; }
   flowFill(D.gid, b);
+  // o texto quebrou em outra largura: o tamanho guardado (âncora do lado parado) acompanha, senão a caixa deslizava durante o arrasto
+  if (D.hx && S.format === baseFmt()) flowSizes(flowLayout(true), new Map(S.layers.map(l => [l.id, l])));
 }
 // espaço interno (padding) de um frame: ks = lados (pt pr pb pl). Frame com tamanho fixo: a caixa fica parada e o conteúdo se afasta
 // da borda (no eixo que abraça, a caixa cresce em volta; nunca fica menor que o conteúdo). Frame que abraça: o conteúdo fica parado
@@ -8940,10 +9635,15 @@ function flowItemSec(L) {
     h('p', { class:'hint', text:L.flowFree ? 'Continua no grupo e anima junto, mas não ocupa lugar na fila.' : 'Arraste (ou use as setas) para trocar de lugar na fila. O espaço e o alinhamento são do grupo.' }),
   ]);
 }
+// âncora da fila como a conta de verdade a usa (frame de dentro entra como bloco; só com os itens soltos a âncora saía do lugar)
+function flowFz(gid) {
+  const r = flowLayout(false).groups.get(gid);
+  return r ? r.fz : flowSolve(flowOf(gid), flowItems(gid), null).fz;
+}
 // arrastar um item sozinho (clique nele; com o grupo inteiro escolhido, um toque antes) de um grupo com layout: ele segue o mouse, os outros abrem espaço, e ao soltar entra na fila
 function flowGrab(D) {
   const L = D.L, mv = [L, ...(D.others || []).map(q => q.o)];
-  if (inFlow(L) && flowOf(L.grp) && !flowWhole(L.grp, mv)) { D.flow = L.grp; D.flowL = L.id; D.fz = flowSolve(flowOf(L.grp), flowItems(L.grp), null).fz; return; }
+  if (inFlow(L) && flowOf(L.grp) && !flowWhole(L.grp, mv)) { D.flow = L.grp; D.flowL = L.id; D.fz = flowFz(L.grp); return; }
   // coluna do quadro: o bloco arrastado segue o mouse, os outros abrem espaço; só continua junto da linha em que já estava
   if (!S.flow || !RT.frameIds || !RT.frameIds.has(L.id)) return;
   D.flowB = new Set(mv.filter(o => RT.frameIds.has(o.id)).map(o => o.id));
@@ -8983,7 +9683,7 @@ function flowStep(L, dx, dy) {
   if (!n) return;
   if (n.L.kid) { toast('O vizinho é um frame inteiro: arraste o item com o mouse para trocar'); return; }
   pushUndo();
-  const fz = { ...flowSolve(F, flowItems(L.grp), null).fz, all:true }, q = placeRaw(n.L), c = (v ? q.y : q.x) + d * .001; // passa para o outro lado do vizinho
+  const fz = { ...flowFz(L.grp), all:true }, q = placeRaw(n.L), c = (v ? q.y : q.x) + d * .001; // passa para o outro lado do vizinho
   setPos(L, v ? null : c, v ? c : null); flowCommit(L.grp, fz); changed();
 }
 // escalar o grupo inteiro (alça de canto, "Tamanho da seleção"): o espaço e o tamanho guardado acompanham.
@@ -9142,15 +9842,14 @@ function setFormat(k) {
   if (k === S.format) return;
   if (!hasContent()) S.base = k; else if (!FORMATS[S.base]) S.base = S.format;
   S.format = k; RT.layout.clear(); renderFormats(); fitStage(); changed({ props:true });
-  if (k !== S.base && !linked()) toast(k === 'custom' ? `Formato livre: não se reorganiza a partir do ${fmtLabel(S.base)}. O que você mover aqui fica só nele.` : `O ${fmtLabel(k)} não se reorganiza a partir do formato livre. O que você mover aqui fica só nele.`, 6000);
-  else if (k !== S.base && !RT.fmtTip) { RT.fmtTip = true; toast(`O ${fmtLabel(k)} se reorganiza sozinho a partir do ${fmtLabel(S.base)}. O que você mover aqui fica só nele.`, 6000); }
+  if (k !== S.base && !RT.fmtTip) { RT.fmtTip = true; toast(`O ${fmtLabel(k)} se reorganiza sozinho a partir do ${fmtLabel(S.base)}. O que você mover aqui fica só nele.`, 6000); }
 }
 // Torna k o formato principal (clique duplo no botão do formato) sem mudar nada do que se vê, em nenhum formato: o que está na tela
 // em k vira x/y (e tamanho/enquadramento) de verdade e os outros formatos, que passam a se reorganizar a partir de k, ganham em
 // `fpos` a posição de antes se a conta nova cairia em outro lugar (mesma ideia de `keepPlace`).
 function makeBase(k) {
   if (!FORMATS[k] || k === baseFmt() || !hasContent()) return;
-  if (k === 'custom' || baseFmt() === 'custom') { toast('O formato livre ainda não se liga aos outros: não troca de principal'); return; }
+  if (k === 'custom' || baseFmt() === 'custom') { toast('O formato livre não troca de principal: ele se reorganiza a partir dos outros'); return; }
   const cur = S.format, ls = S.layers.filter(l => l.type !== 'bg' && !NOBOX(l)), snap = new Map();
   flowBake(); pushUndo();
   const each = f => { try { for (const j of Object.keys(FORMATS)) { S.format = j; RT.frameNo = (RT.frameNo || 0) + 1; f(j); } } finally { S.format = cur; RT.frameNo++; } };
@@ -9172,10 +9871,10 @@ function makeBase(k) {
 function renderFormats() {
   const box = $('#fmt'); box.innerHTML = '';
   const bf = baseFmt(), any = hasContent();
-  const free = k => 'Formato livre: o tamanho que você quiser, fora dos padrões do Instagram. Não se reorganiza a partir dos outros formatos' + (any && k === bf ? '. É o principal deste arquivo' : '');
+  const free = k => 'Formato livre: o tamanho que você quiser, fora dos padrões do Instagram. Se reorganiza a partir do principal, como os outros' + (any && k === bf ? '. É o principal deste arquivo' : '');
   for (const [k, f] of Object.entries(FORMATS)) box.append(h('button', { 'aria-pressed':String(S.format === k), class:any && k === bf ? 'base' : null, text:k === 'custom' ? 'Livre' : f.label, onclick:() => setFormat(k), ondblclick:() => makeBase(k),
     title:k === 'custom' ? free(k) : !any ? null : k === bf ? 'Formato principal: os outros se reorganizam a partir dele'
-      : bf === 'custom' ? 'Não se reorganiza a partir do formato livre (o principal). O que você mover aqui fica só neste formato' : `Reorganizado a partir do ${fmtLabel(bf)}. O que você mover aqui fica só neste formato. Clique duplo: tornar principal` }));
+      : `Reorganizado a partir do ${fmtLabel(bf)}. O que você mover aqui fica só neste formato. Clique duplo: tornar principal` }));
   { const on = S.format === 'custom'; $('#cdims').hidden = !on; if (on) { $('#cW').value = customDim('w'); $('#cH').value = customDim('h'); } }
   updDur(true); $('#slides').value = slides();
   // imagem estática: some tudo que é de vídeo (CSS em .app.still)
@@ -9358,17 +10057,18 @@ function groupCell(gid, where, depth = 0) {
     onclick:e => { e.stopPropagation(); if (e.detail === 0) flip(); } });
   chev.style.transform = g.open === false ? 'rotate(-90deg)' : '';
   const el = h('div', { class:(list ? 'lgroup' : 'tl-nm') + ' lcell', title:'Clique para selecionar o grupo. Clique duas vezes para renomear. Ctrl + clique num item escolhe só ele', onclick:e => {
+    if (e.shiftKey || e.ctrlKey || e.metaKey) { toggleGroupSel(gid); return; } // soma ou tira este frame da seleção
     if (e.detail > 1) { renameGroupInline(gid, e.currentTarget.querySelector('.lnm')); return; }
     selectGroup(gid);
   } }, [chev, h('span', { class:'lnm', text:groupName(gid) }), h('small', { class:'tl-n', text:String(mem.length) }),
     h('div', { class:'acts' }, [...lockVisAct(mem), actBtn('Desagrupar', '<span class="x">×</span>', () => { selectGroup(gid); ungroupSel(); })])]);
   if (list) {
-    el.setAttribute('role', 'button'); el.tabIndex = 0; el.setAttribute('aria-selected', String(!itemSel() && mem.every(m => isPicked(m.id))));
+    el.setAttribute('role', 'button'); el.tabIndex = 0; el.setAttribute('aria-selected', String(grpOn(gid)));
     el.onkeydown = e => { if (e.key === 'Enter') selectGroup(gid); };
     el.dataset.gid = gid;
   }
   if (depth > 0) el.classList.add('nested');
-  if (g.open === false && mem.some(m => isPicked(m.id)) && !(!itemSel() && mem.every(m => isPicked(m.id)))) el.classList.add('has-sel'); // recolhido com algo escolhido dentro
+  if (g.open === false && mem.some(m => isPicked(m.id)) && !grpOn(gid)) el.classList.add('has-sel'); // recolhido com algo escolhido dentro
   cellIndent(el, list, depth, list ? 0 : 6, list ? 10 : 12);
   groupDrop(el, gid);
   el.draggable = true;
@@ -9406,7 +10106,7 @@ function layersSig() {
     A ? JSON.stringify(A, (k, v) => (Array.isArray(v) && v.length > 64) || (typeof v === 'string' && v.length > 256) ? v.length : v) : 0]);
 }
 function syncSel() {
-  const on = gid => !itemSel() && gleaves(gid).every(m => isPicked(m.id));
+  const on = grpOn;
   // recolhido com algo escolhido dentro (mesma regra do groupCell)
   const hasSel = gid => gmeta(gid, true).open === false && !on(gid) && gleaves(gid).some(m => isPicked(m.id));
   for (const el of $('#layers').children) {
@@ -9696,15 +10396,36 @@ function pasteLayers(p) {
   toast((out.length > 1 ? `${out.length} elementos colados` : `"${out[0].name}" colado`) + (fr ? ` em "${groupName(fr)}"` : ''));
 }
 const typingIn = t => { const tag = (t && t.tagName || '').toLowerCase(); return tag === 'input' && !['range', 'checkbox', 'color', 'button'].includes(t.type) || tag === 'textarea' || tag === 'select' || !!(t && t.isContentEditable); };
-const overlayOpen = () => !!document.querySelector('.modal.ask') || !$('#files').hidden || !$('#modal').hidden || !$('#keys').hidden || !!CUTWIN || !!COMPWIN;
-['copy', 'cut'].forEach(kind => document.addEventListener(kind, e => {
-  if (typingIn(e.target) || overlayOpen() || String(getSelection() || '').length) return; // texto selecionado copia o texto
-  const L = selL(), p = clipPayload(); if (!p) return;
-  e.preventDefault(); e.clipboardData.setData('text/plain', CLIP_TAG + JSON.stringify(p));
+const overlayOpen = () => !!document.querySelector('.modal.ask') || !$('#files').hidden || !$('#modal').hidden || !$('#keys').hidden || !!CUTWIN || !!COMPWIN || !!TRECHOWIN;
+// copia/recorta o que está escolhido; `write` grava o texto na área de transferência (evento nativo ou navigator.clipboard)
+function copyPicked(kind, write) {
+  const L = selL(), p = clipPayload(); if (!p) return false;
+  write(CLIP_TAG + JSON.stringify(p));
   const what = p.layers.length > 1 ? `${p.layers.length} elementos` : `"${p.layers[0].name}"`;
   if (kind === 'cut') deleteLayer(L, `${what} recortado${p.layers.length > 1 ? 's' : ''}. Ctrl+V cola`);
   else toast(`${what} copiado${p.layers.length > 1 ? 's' : ''}. Ctrl+V cola aqui ou em outro arquivo`);
+  return true;
+}
+['copy', 'cut'].forEach(kind => document.addEventListener(kind, e => {
+  // texto selecionado copia o texto (seleção só de espaço/quebra de linha, sobra de um clique duplo fora do palco, não conta)
+  if (typingIn(e.target) || overlayOpen() || String(getSelection() || '').trim().length) return;
+  if (!clipPayload()) return;
+  e.preventDefault(); copyPicked(kind, txt => e.clipboardData.setData('text/plain', txt));
 }));
+// "Copiar" do botão direito: document.execCommand('copy') não dispara o evento no Chrome quando não há texto selecionado, então grava direto
+function copyMenu(kind = 'copy') {
+  if (!clipPayload()) return;
+  copyPicked(kind, txt => {
+    const viaField = () => { // plano B: campo de texto temporário (o texto dele sai pelo copiar nativo; o handler acima ignora campos)
+      const ta = h('textarea', { style:'position:fixed;left:-9999px;top:0;opacity:0', readonly:true }); ta.value = txt; document.body.appendChild(ta);
+      const prev = document.activeElement; ta.select();
+      let ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+      ta.remove(); if (prev && prev.focus) try { prev.focus(); } catch (e) {}
+      if (!ok) toast('O navegador não deixou copiar. Use Ctrl+C');
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).catch(viaField); else viaField();
+  });
+}
 /* ------------ menu do botão direito ------------ */
 function closeMenu() { document.querySelector('.ctx')?.remove(); }
 function openMenu(ev, L) {
@@ -9719,9 +10440,10 @@ function openMenu(ev, L) {
       item('Ver a entrada', () => previewIn(L), { off:isBg }),
       item('Entrar na agulha', () => markAt('start'), { off:isBg, kbd:'I' }),
       item('Sair na agulha', () => markAt('end'), { off:isBg, kbd:'O' }),
+      item('Dividir na agulha', splitAtPlayhead, { off:isBg || !splitTargets([L]).length, kbd:'S' }),
       h('hr')]),
     item('Renomear', () => renameLayer(L), { off:isBg }),
-    item('Copiar', () => document.execCommand('copy'), { off:isBg, kbd:'Ctrl+C' }),
+    item('Copiar', copyMenu, { off:isBg, kbd:'Ctrl+C' }),
     item('Duplicar', () => duplicateLayer(L), { off:isBg, kbd:'Ctrl+D' }),
     item('Salvar em Meus elementos', saveElement, { off:isBg }),
     ...(compKindOf(L) ? [
@@ -9764,25 +10486,78 @@ const tlLabel = L => {
   if (L.type === 'camera') return (CAMS[L.cam] || {}).label || '';
   if (L.type === 'fx') return (FXS[L.fx] || {}).label || '';
   if (L.type === 'audio') return '';
+  if (L.capt) return 'Legenda · ' + capStyle(L).name;
   const m = L.type === 'text' ? TP : BP; return (m[L.in] || {}).label || '';
 };
 function tlGeom() { const tl = $('#tl'), lane = tl.querySelector('.tl-scale'); if (!lane) return null; const r = lane.getBoundingClientRect(); return { x0:r.left, w:r.width, tl }; }
+// zoom da timeline (pedido do usuário: arquivo de até 10 min; sem zoom cada segundo ficava estreito demais para cortar).
+// RT.tlz = 1 cabe tudo, no máximo ~200 px por segundo. Ctrl + roda (ou pinça) em cima da timeline; "Ajustar" volta a 1
+const tlNameW = tl => parseFloat(getComputedStyle(tl).getPropertyValue('--name')) || 160;
+function tlLaneW() { const tl = $('#tl'); return Math.max(200, tl && tl.clientWidth ? tl.clientWidth - tlNameW(tl) : 800); }
+function tlZoomFix() { RT.tlz = clamp(RT.tlz || 1, 1, Math.max(1, 200 * S.duration / tlLaneW())); return RT.tlz; }
+// o tempo sob cx (ponteiro; sem ele, a agulha) fica parado na tela
+function tlZoom(z, cx) {
+  const tl = $('#tl'), g = tlGeom(); if (!g) return;
+  const r = tl.getBoundingClientRect(), px = cx ?? clamp(g.x0 + T / S.duration * g.w, r.left + tlNameW(tl), r.right), t = (px - g.x0) / g.w * S.duration, z0 = RT.tlz || 1;
+  RT.tlz = z; if (tlZoomFix() === z0) return;
+  renderTimeline();
+  const g2 = tlGeom(); if (g2) { tl.scrollLeft += g2.x0 + t / S.duration * g2.w - px; placeHead(); }
+}
+$('#tl').addEventListener('wheel', e => {
+  if (!(e.ctrlKey || e.metaKey) || S.still) return;
+  e.preventDefault(); tlZoom((RT.tlz || 1) * Math.exp(-e.deltaY * .0025), e.clientX);
+}, { passive:false });
 function placeHead() {
   const g = tlGeom(); if (!g) return;
   const hd = g.tl.querySelector('.tl-head'); if (!hd) return;
-  const x = g.x0 - g.tl.getBoundingClientRect().left + T / S.duration * g.w, ch = g.tl.clientHeight;
+  // com zoom a timeline rola para os lados: a agulha fica no conteúdo (+ scrollLeft) e some embaixo dos nomes
+  const sl = g.tl.scrollLeft, x = g.x0 - g.tl.getBoundingClientRect().left + sl + T / S.duration * g.w, ch = g.tl.clientHeight, nw = g.x0 - g.tl.getBoundingClientRect().left + sl;
   // bottom:0 só cobre a área visível; a agulha vai até o fim das camadas. A altura só é medida de novo quando a timeline
   // é refeita (agulha nova) ou muda de tamanho: medir zera a altura e força um layout, e isso rodava em todo quadro
   if (hd._ch !== ch) { hd._ch = ch; hd.style.height = '0px'; hd.style.height = g.tl.scrollHeight + 'px'; }
   if (hd._x !== x) { hd._x = x; hd.style.left = x + 'px'; }
+  if (RT.tlz > 1) {
+    const vw = g.tl.clientWidth, under = x < sl + nw - 1;
+    if (hd._under !== under) { hd._under = under; hd.style.visibility = under ? 'hidden' : ''; }
+    // tocando: a timeline acompanha a agulha
+    if (playing && (x > sl + vw - 24 || x < sl + nw)) g.tl.scrollLeft = x - nw - 24;
+  } else if (hd._under) { hd._under = false; hd.style.visibility = '';
+  }
+}
+// transição entre clipes: a janela em que os dois aparecem misturados, na faixa de quem sai e na de quem entra (só visual)
+function xfMarks(lane, L) {
+  if (!lane) return;
+  lane.querySelectorAll(':scope > .tl-xf').forEach(e => e.remove());
+  if (L.type !== 'image' || !L.id) return;
+  const X = xfPairs(true); if (!X.n) return;
+  for (const p of [X.inn.get(L.id), X.out.get(L.id)]) if (p) lane.append(h('i', { class:'tl-xf', style:`left:${p.t0 / S.duration * 100}%;width:${p.d / S.duration * 100}%` }));
 }
 function placeBar(bar, L) {
   const d = S.duration, end = L.end ?? d, ph = phase(L, L.start) || { inD:0, outD:0 }, span = Math.max(.001, end - L.start);
   bar.style.left = (L.start / d * 100) + '%'; bar.style.width = (span / d * 100) + '%';
+  if (bar.parentElement) xfMarks(bar.parentElement, L);
   bar.querySelector('.seg.in').style.width = (ph.inD / span * 100) + '%';
   bar.querySelector('.seg.out').style.width = (ph.outD / span * 100) + '%';
   // a onda acompanha o corte: sem refazer, o desenho de antes esticava junto com a barra
   if (L.type === 'audio' && bar.querySelector('.tl-awave')) drawAudBar(bar, L);
+  // legenda: um risco onde começa cada trecho (js/legenda.js)
+  if (L.capt || bar.querySelector('.tl-cap')) {
+    bar.querySelectorAll('.tl-cap').forEach(e => e.remove());
+    if (L.capt) { const off = capOff(L); for (const b of capBlocks(L)) { const x = (b.s + off - L.start) / span; if (x > 0 && x < 1) bar.append(h('i', { class:'tl-cap', style:`left:${x * 100}%` })); } }
+  }
+  // pausas do vídeo: faixa hachurada onde o quadro fica parado (repete com o trecho); corte seco (vSkip): um risco no ponto do pulo
+  if (L.vPause || L.vSkip || bar.querySelector('.tl-vp,.tl-vj')) {
+    bar.querySelectorAll('.tl-vp,.tl-vj').forEach(e => e.remove());
+    const P = L.vPause || L.vSkip ? vidPlan(L) : null;
+    if (P && P.ps.length) for (let c = 0; c < span - .01; c += P.cyc) {
+      let t = c, pos = P.a;
+      for (const p of P.ps) {
+        t += (p.at - pos) / P.sp; pos = p.at;
+        if (p.jump) { pos += p.jump; if (t > .01 && t < span - .01) bar.append(h('i', { class:'tl-vj', style:`left:${t / span * 100}%` })); continue; }
+        const w = Math.min(p.len, span - t); if (w > 0) bar.append(h('i', { class:'tl-vp', style:`left:${t / span * 100}%;width:${w / span * 100}%` })); t += p.len;
+      }
+    }
+  }
 }
 // reposiciona as barras existentes (velocidade, duração de entrada/saída etc.) sem refazer a timeline
 function refreshBars() {
@@ -9796,25 +10571,29 @@ function refreshBars() {
 function renderTimeline() {
   const tl = $('#tl'); if (!tl || tl.hidden) return;
   revealPicks();
-  const keep = tl.scrollTop; tl.innerHTML = '';
-  const d = S.duration, ruler = h('div', { class:'tl-ruler' }, [h('div', { class:'tl-nm', style:'cursor:default' }, [h('span', { text:'Camadas' })])]);
+  const keep = tl.scrollTop, keepL = tl.scrollLeft; tl.innerHTML = '';
+  // zoom (Ctrl + roda, tlZoom): as faixas ficam RT.tlz vezes mais largas e a timeline rola para os lados, os nomes ficam parados
+  const z = tlZoomFix(); tl.classList.toggle('zoomed', z > 1); tl.style.setProperty('--tlz', z);
+  const d = S.duration, ruler = h('div', { class:'tl-ruler' }, [h('div', { class:'tl-nm', style:'cursor:default' }, [h('span', { text:'Camadas' }),
+    z > 1 ? h('button', { class:'btn small tl-fit', text:'Ajustar', title:'Volta a mostrar o arquivo inteiro (Ctrl + roda na timeline aproxima)', onclick:() => tlZoom(1) }) : null])]);
   const scale = h('div', { class:'tl-scale' });
-  const step = d > 30 ? 5 : d > 12 ? 2 : 1;
+  // um número a cada ~46 px, pelo zoom (no arquivo de 10 min sem zoom: de minuto em minuto)
+  const pps = tlLaneW() * z / d, step = [.5, 1, 2, 5, 10, 15, 30, 60, 120].find(s => s * pps >= 46) || 120;
   // número do segundo some quando o marcador de fim de slide (S1…) cai em cima dele
   const sEnds = S.sdur && !S.still ? Array.from({ length:slides() }, (_, s) => slideDur(s)).filter(e => e > 0 && e < d - .01) : [];
-  for (let s = 0; s <= d + 1e-6; s += step) { const x = s / d * 100; scale.append(h('i', { style:`left:${x}%` })); if (s < d - step * .3 && !sEnds.some(e => Math.abs(e - s) < d * .035)) scale.append(h('b', { style:`left:${x}%`, text:s + 's' })); }
+  for (let k = 0, s = 0; s <= d + 1e-6; s = ++k * step) { const x = s / d * 100; scale.append(h('i', { style:`left:${x}%` })); if (s < d - step * .3 && !sEnds.some(e => Math.abs(e - s) * pps < 28)) scale.append(h('b', { style:`left:${x}%`, text:s < 60 ? String(s).replace('.', ',') + 's' : Math.floor(s / 60) + ':' + String(s % 60).padStart(s % 1 ? 4 : 2, '0').replace('.', ',') })); }
   const endH = h('div', { class:'tl-end', title:`Duração do vídeo: ${d.toFixed(1)}s. Arraste para mudar` });
   endH.addEventListener('pointerdown', tlDuration);
   scale.append(endH);
   for (const b of beatTimes()) scale.append(h('u', { class:'tl-beat', style:`left:${(b / d * 100).toFixed(3)}%` })); // batidas da música
   // carrossel: onde termina cada slide mais curto que a timeline (o arquivo dele para ali)
-  if (S.sdur && !S.still) for (let s = 0; s < slides(); s++) { const e = slideDur(s); if (e > 0 && e < d - .01) scale.append(h('s', { class:'tl-send', style:`left:${(e / d * 100).toFixed(3)}%`, title:`Fim de ${slideName(s)} (${fmtSec(e)})`, text:`S${s + 1}` })); }
+  if (S.sdur && !S.still) for (let s = 0; s < slides(); s++) { const e = slideDur(s); if (e > 0 && e < d - .01) scale.append(h('s', { class:'tl-send', style:`left:${(e / d * 100).toFixed(3)}%`, title:`Fim de ${slideName(s)} (${fmtSec(e)})`, "data-n":`slide ${s + 1}` })); }
   ruler.append(scale); tl.append(ruler);
   if (S.audio) tl.append(audioRow());
   const els = S.layers.filter(L => L.type !== 'bg').reverse();
   if (!els.length) tl.append(h('div', { class:'tl-empty', text:'Nenhum elemento ainda. Use Adicionar, na coluna da esquerda.' }));
   const groupRow = (gid, depth) => {
-    const g = gmeta(gid, true), mem = gleaves(gid), on = !itemSel() && mem.every(m => isPicked(m.id));
+    const g = gmeta(gid, true), mem = gleaves(gid), on = grpOn(gid);
     const bar = h('div', { class:'tl-bar grp', style:`--c:var(--accent)` }, [h('div', { class:'seg in' }), h('div', { class:'seg out' }), h('div', { class:'h l' }), h('div', { class:'h r' })]);
     const tip = () => { const w = gwin(gid); bar.title = `${groupName(gid)}: ${w.start.toFixed(1)}s a ${w.end.toFixed(1)}s. Arraste para os lados para mover o grupo todo, para cima ou para baixo para mudar a ordem`; };
     placeBar(bar, gpseudo(gid)); tip();
@@ -9844,6 +10623,7 @@ function renderTimeline() {
     if (L.type === 'audio') { bar.prepend(h('canvas', { class:'tl-awave' })); requestAnimationFrame(() => drawAudBar(bar, L)); }
     if (layerStill(L)) { bar.classList.add('still'); bar.title = `${L.name} está num slide-imagem: aparece parado o tempo todo e o tempo da barra não conta (fica guardado para se o slide voltar a ser vídeo)`; }
     const lane = h('div', { class:'tl-lane' }, [bar]);
+    xfMarks(lane, L);
     // a faixa inteira decide: perto da borda (dentro ou fora da barra) redimensiona, no meio move, no vazio leva a agulha
     lane.addEventListener('pointerdown', e => {
       if (e.button) return;
@@ -9866,7 +10646,7 @@ function renderTimeline() {
   }
   scale.addEventListener('pointerdown', tlScrub);
   tl.append(h('div', { class:'tl-head' }));
-  tl.scrollTop = keep; placeHead();
+  tl.scrollTop = keep; tl.scrollLeft = keepL; placeHead();
 }
 function tlDuration(e) {
   e.preventDefault(); e.stopPropagation();
@@ -9992,15 +10772,16 @@ function tlDragGroup(e, gid, bar, mode) {
   // tempo (a barra passava do trecho e o vídeo voltava ao começo no fim, reclamação do usuário). Quem começa junto com o grupo
   // anda o começo do trecho (o vídeo fica parado no tempo, sem passar do começo do vídeo); o fim do trecho segue o fim da barra.
   // Se já repetia, o fim do trecho fica (igual à borda direita da barra)
-  const vid0 = new Map(mem.filter(l => (l.type === 'image' && l.video) || l.type === 'audio').map(l => [l, { ...vidCut(l), rIn:l.vIn, rOut:l.vOut, s:l.start, e:l.end ?? d }]));
+  const vid0 = new Map(mem.filter(l => (l.type === 'image' && l.video) || l.type === 'audio').map(l => [l, vidSnap(l, d)]));
   const vidClip = () => {
     for (const [l, v] of vid0) {
       const lead = mode === 'l' && Math.abs(v.s - s0) < 1e-3;
-      if (lead && l.start < v.s - v.a) l.start = r3(v.s - v.a);
+      if (lead && l.start < v.s - v.a / v.sp) l.start = r3(v.s - v.a / v.sp);
+      if (v.P.ps.length) { vidCutP(l, v, lead, true); continue; } // com pausas
       const a = lead ? vidHead(v, l.start) : v.a;
       if (a > 1e-3) l.vIn = +a.toFixed(3); else delete l.vIn;
-      if (v.e - v.s > v.b - v.a + .05) continue;
-      const b = Math.max(a + .1, a + (l.end ?? d) - l.start);
+      if (v.e - v.s > (v.b - v.a) / v.sp + .05) continue;
+      const b = Math.max(a + .1, a + ((l.end ?? d) - l.start) * v.sp);
       if (b < v.d - 1e-3) l.vOut = +b.toFixed(3); else delete l.vOut;
     }
   };
@@ -10050,7 +10831,7 @@ function tlDragGroup(e, gid, bar, mode) {
     bar.classList.remove('drag', 'hl', 'hr'); tip.remove(); guide.remove(); if (stk) stk.end();
   };
   const up = () => { done(); if (stk) stk.drop(); else if (moved) changed({ layers:true, props:true }); };
-  const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); o.forEach(x => { x.l.start = x.s; x.l.end = x.e; }); vid0.forEach((v, l) => { l.vIn = v.rIn; l.vOut = v.rOut; if (l.vIn == null) delete l.vIn; if (l.vOut == null) delete l.vOut; }); placeBar(bar, gpseudo(gid)); done(); needs = true; };
+  const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); o.forEach(x => { x.l.start = x.s; x.l.end = x.e; }); vid0.forEach((v, l) => vidUnsnap(l, v)); placeBar(bar, gpseudo(gid)); done(); needs = true; };
   bar.classList.add('drag'); if (mode !== 'm') bar.classList.add('h' + mode);
   addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up); addEventListener('keydown', key, true);
 }
@@ -10070,8 +10851,8 @@ function tlDrag(e, L, bar, mode) {
   for (const o of linked) grp.push({ o, s:o.start, e:o.end });
   const d = S.duration, s0 = L.start, e0 = L.end ?? d, end0 = L.end, x0 = e.clientX, y0 = e.clientY, grid = v => Math.round(v * 10) / 10, MIN = .3;
   // vídeo (e som de vídeo): as bordas cortam o vídeo (vidTrim); a esquerda não passa do começo do vídeo
-  const vid0 = new Map([L, ...grp.map(q => q.o)].filter(o => (o.type === 'image' && o.video) || o.type === 'audio').map(o => [o, { ...vidCut(o), rIn:o.vIn, rOut:o.vOut, s:o.start, e:o.end ?? d }]));
-  const sMin = o => { const v = vid0.get(o); return v ? Math.max(0, v.s - v.a) : 0; };
+  const vid0 = new Map([L, ...grp.map(q => q.o)].filter(o => (o.type === 'image' && o.video) || o.type === 'audio').map(o => [o, vidSnap(o, d)]));
+  const sMin = o => { const v = vid0.get(o); return v ? Math.max(0, v.s - v.a / v.sp) : 0; };
   // ímã: início, fim, agulha e as bordas das outras camadas (Shift desliga)
   const pts = [0, d, T, ...extraSnaps(L)]; // + batidas da música e o meio das transições
   for (const o of S.layers) if (o !== L && o.type !== 'bg' && !grp.some(q => q.o === o)) pts.push(o.start, o.end ?? d);
@@ -10137,7 +10918,7 @@ function tlDrag(e, L, bar, mode) {
   };
   const up = () => { done(); if (stk) stk.drop(); else if (moved) changed({ layers:true, props:true }); };
   // Esc devolve a barra para onde estava
-  const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); L.start = s0; L.end = end0; grp.forEach(q => { q.o.start = q.s; q.o.end = q.e; }); vid0.forEach((v, o) => { o.vIn = v.rIn; o.vOut = v.rOut; if (o.vIn == null) delete o.vIn; if (o.vOut == null) delete o.vOut; }); placeBar(bar, L); done(); needs = true; };
+  const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); L.start = s0; L.end = end0; grp.forEach(q => { q.o.start = q.s; q.o.end = q.e; }); vid0.forEach((v, o) => vidUnsnap(o, v)); placeBar(bar, L); done(); needs = true; };
   bar.classList.add('drag'); if (mode === 'l' || mode === 'r') bar.classList.add('h' + mode);
   addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up); addEventListener('keydown', key, true);
 }
@@ -10314,15 +11095,17 @@ function colorButton(value, label, { onStart, onInput, cls = '', alpha = true })
     // lista como a de estilos do Figma: grupos na mesma ordem da paleta da marca (aba Marca), com busca
     const lib = cls.includes('sw') ? null : brandLib();
     // cor da marca com opacidade (< 100%) leva a opacidade junto; a opaca mantém a que o elemento já tinha
-    const pick = (c, a = 1) => { if (onStart) onStart(); [hh, sat, v] = hexToHsv(c); if (alpha && a < 1) al = a; else if (alpha && al <= 0) al = 1; emit(); };
+    const pick = (c, a = 1, exact) => { if (onStart) onStart(); [hh, sat, v] = hexToHsv(c); if (alpha && a < 1) al = a; else if (alpha && exact) al = 1; else if (alpha && al <= 0) al = 1; emit(); };
     const libList = h('div', { class:'cp-list' }), libQ = h('input', { type:'text', class:'cp-q', placeholder:'Buscar cor da marca', spellcheck:'false', 'aria-label':'Buscar cor da marca' });
     const fillLib = () => {
-      const q = libQ.value.trim().toLowerCase().replace(/^#/, ''), now = cur.slice(0, 7).toLowerCase();
+      const q = libQ.value.trim().toLowerCase().replace(/^#/, ''), now = cur.slice(0, 7).toLowerCase(), nowA = colA(cur);
+      // mesma cor na paleta, uma com opacidade e outra sem: cada uma vale pela sua opacidade
+      const twin = x => (lib || []).some(g => g.items.some(y => y.c === x.c && Math.abs(y.a - x.a) > .003));
       libList.innerHTML = '';
       for (const g of lib || []) {
         const its = g.items.filter(x => !q || x.n.toLowerCase().includes(q) || x.c.slice(1).includes(q));
         if (!its.length) continue;
-        libList.append(h('div', { class:'cp-gh', text:g.title }), ...its.map(x => h('button', { type:'button', class:'cp-it' + (x.c === now ? ' on' : ''), title:x.c.toUpperCase(), onclick:() => { pick(x.c, x.a); fillLib(); } }, [
+        libList.append(h('div', { class:'cp-gh', text:g.title }), ...its.map(x => h('button', { type:'button', class:'cp-it' + (x.c === now && (!twin(x) || Math.abs(x.a - nowA) < .01) ? ' on' : ''), title:x.c.toUpperCase(), onclick:() => { pick(x.c, x.a, twin(x)); fillLib(); } }, [
           h('i', { class:'cp-dot', style:`background:${withA(x.c, x.a)}` }), h('span', { class:'cp-nm', text:x.n }), h('span', { class:'cp-hx', text:x.c.slice(1).toUpperCase() })])));
       }
       if (!libList.firstChild) libList.append(h('div', { class:'cp-empty', text:'Nenhuma cor' }));
@@ -10758,6 +11541,8 @@ function uploadF(label, accept, onFile) {
   return h('div', { class:'row' }, [h('button', { class:'btn small', text:label, onclick:() => inp.click() }), inp]);
 }
 // camadas que recebem a mudança: a selecionada e o resto da seleção (de qualquer tipo)
+// som que segue um vídeo também escolhido: vai junto com ele e não conta como outro tipo no painel (vários vídeos escolhidos)
+const tagAlong = o => { const V = linkOf(o); return !!V && isPicked(V.id); };
 function peersAny(L) { if (!isPicked(L.id)) return [L]; const ps = pickedLayers(); return ps.includes(L) ? ps : [L]; }
 function presetKeys(q, k) {
   if (q.__g) return G_KEYS[k]; // o grupo (gview)
@@ -10892,6 +11677,7 @@ function renderProps() {
   let L = selL();
   if (!L) { box.append(h('div', { class:'props-empty', text:'Selecione uma camada.' })); return; }
   const gid = wholeGroup(); // grupo inteiro selecionado: a aba Animação é a do grupo
+  if (!gid && tagAlong(L) && pickedLayers().length > 1) { L = linkOf(L); RT.selected = L.id; } // vários vídeos: o painel é o do vídeo
   if (gid && NOBOX(L)) { const v = gleaves(gid).filter(l => !NOBOX(l)).pop(); if (v) { RT.selected = v.id; L = v; } } // grupo do vídeo com o som: o painel fala do que aparece
   const head = h('section', { class:'sec sec-head', style:`--tc:${gid ? 'var(--c-group)' : TYPE_COLOR[typeKey(L)]}` }, [
     h('div', { class:'lhead' }, [
@@ -10910,7 +11696,7 @@ function renderProps() {
 
   const tabs = h('div', { class:'tabs', role:'tablist' }, [['anim', 'Animação'], ['style', 'Conteúdo e estilo']].map(([k, t]) =>
     h('button', { role:'tab', 'aria-selected':String(propTab === k), text:t, onclick:() => { propTab = k; renderProps(); } })));
-  if (S.still || layerStill(gid ? gpseudo(gid) : L)) propTab = 'style'; // imagem estática (o arquivo ou o slide): sem animação
+  if (S.still || layerStill(gid ? gpseudo(gid) : L) || (!gid && L.capt)) propTab = 'style'; // imagem estática (o arquivo ou o slide): sem animação; legenda: a animação é o estilo dela
   else head.append(tabs);
   // como no Figma: o nome e as abas ficam sempre no topo; alinhar, tamanho da seleção e layout automático são do conteúdo e estilo
   if (propTab !== 'anim') box.append(...[alignBar(), pathfinderSec(), pickedLayers().length > 1 ? scaleBar() : null, flowSec()].filter(Boolean));
@@ -10930,14 +11716,17 @@ function renderProps() {
       return [rangeF(L, sk, 'Velocidade', minS, maxS, .05, v => v.toFixed(2) + '×', { after }),
         rangeF(L, ik, 'Intensidade', 0, 1, .01, v => Math.round(v * 100) + '%', { after })];
     };
+    const xfNote = side => xfOn(L, side) ? h('p', { class:'hint', text:side === 'in' ? 'A transição do clipe anterior substitui esta entrada.' : 'A transição para o próximo clipe substitui esta saída.' }) : null;
+    { const s = xfSec(L, 'in'); if (s) box.append(s); } // transição entre clipes (vídeo/imagem colados na timeline)
     box.append((() => { const slot = h('div'); const ref = () => { slot.innerHTML = ''; const f = slideDirF(L, 'in'); if (f) slot.append(f); }; ref();
-      return h('section', { class:'sec' }, [h('h3', {}, ['Entrada', seeBtn('Ver a entrada (toca só este trecho)', () => previewIn(L))]), presetGrid(L, 'in', inKeys, map, ref), slot,
+      return h('section', { class:'sec' }, [h('h3', {}, ['Entrada', seeBtn('Ver a entrada (toca só este trecho)', () => previewIn(L))]), xfNote('in'), presetGrid(L, 'in', inKeys, map, ref), slot,
         ...rhythm('in', .4, 6, () => seekKeep(L))]); })());
     box.append(h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), idleGrid(L), ...rhythm('idle', .2, 4, () => seekKeep(L))]));
     box.append(...animExtras(L)); // marca à mão (texto), movimento dentro da imagem
+    { const s = xfSec(L, 'out'); if (s) box.append(s); }
     box.append((() => { const slot = h('div'); const ref = () => { slot.innerHTML = ''; const f = slideDirF(L, 'out'); if (f) slot.append(f); }; ref();
       return h('section', { class:'sec' }, [h('h3', {}, ['Saída', h('span', { class:'h3r' }, [h('small', { text:(L.end ?? S.duration) >= slideEnd(slideOfL(L)) - .01 ? (slides() > 1 && S.sdur ? 'no fim do slide' : 'no fim do vídeo') : `em ${(L.end).toFixed(1)}s` }),
-        seeBtn('Ver a saída (toca só este trecho)', () => previewOut(L))])]), presetGrid(L, 'out', outKeys, map, ref), slot,
+        seeBtn('Ver a saída (toca só este trecho)', () => previewOut(L))])]), xfNote('out'), presetGrid(L, 'out', outKeys, map, ref), slot,
         ...rhythm('out', .4, 6, () => seekKeep(L, true))]); })());
     box.append(h('section', { class:'sec' }, [
       h('h3', { text:'Tempo', 'data-sum':`${fmtSec(L.start)} → ${fmtSec(L.end ?? S.duration)}` }),
@@ -10949,6 +11738,54 @@ function renderProps() {
     box.append(...styleExtras(L)); // ajustes da imagem
   }
 }
+/* transição entre clipes no painel (aba Animação do vídeo/imagem): side 'in' = com o clipe que termina onde este começa (B.xin
+   deste), 'out' = com o que começa onde este termina (B.xin daquele). Só aparece quando há um clipe colado (até XF_TOL s) */
+function xfNeighbor(L, side) {
+  if (L.type !== 'image' || S.still || layerStill(L)) return null;
+  const s0 = L.start, e0 = L.end ?? S.duration; let best = null, bd = XF_TOL + 1e-9;
+  for (const o of S.layers) {
+    if (o === L || o.type !== 'image' || !o.visible || (slides() > 1 && slideOfL(o) !== slideOfL(L))) continue;
+    const df = side === 'in' ? Math.abs((o.end ?? S.duration) - s0) : Math.abs(o.start - e0);
+    if (df < bd && (side === 'in' ? o.start < s0 - .05 : o.start > s0 + .05)) { bd = df; best = o; }
+  }
+  return best;
+}
+const XF_ARROWS = [['l', 'ar_l', 'Para a esquerda'], ['r', 'ar_r', 'Para a direita'], ['u', 'ar_u', 'Para cima'], ['d', 'ar_d', 'Para baixo']];
+function xfSec(L, side) {
+  const N = xfNeighbor(L, side); if (!N) return null;
+  const B = side === 'in' ? L : N, cur = B.xin && XFS[B.xin.k] ? B.xin : null;
+  const pair = () => xfPairs(true).inn.get(B.id);
+  const seek = () => { const p = pair(); if (p) { pause(); T = clamp(p.c - p.d * .15, 0, S.duration); RT.userSeek = true; needs = true; } };
+  const see = () => { const p = pair(); if (p) play(Math.max(0, p.t0 - .5), Math.min(S.duration - .001, p.t1 + .5)); };
+  const redo = () => { changed({ layers:true, props:true }); renderTimeline(); seek(); };
+  const wrap = h('div', { class:'chips' });
+  wrap.dataset.cur = cur ? XFS[cur.k].label : 'Corte seco';
+  for (const k of ['none', ...XF_KEYS]) {
+    const on = cur ? cur.k === k : k === 'none', label = k === 'none' ? 'Corte seco' : XFS[k].label;
+    wrap.append(h('button', { class:'chip', 'aria-pressed':String(on), title:label, onclick:() => {
+      pushUndo();
+      if (k === 'none') delete B.xin; else B.xin = { ...(B.xin || {}), k, d:B.xin && B.xin.d ? B.xin.d : XFS[k].dur };
+      redo();
+    } }, [h('span', { text:label })]));
+  }
+  const kids = [h('h3', {}, [side === 'in' ? 'Transição do clipe anterior' : 'Transição para o próximo',
+    cur ? h('button', { type:'button', class:'see', title:'Ver a transição (toca só este trecho)', 'aria-label':'Ver a transição', html:`${ICON_PLAY}<span>Ver</span>`, onclick:see }) : null]),
+    h('p', { class:'hint', text:side === 'in' ? `De “${N.name}” para este clipe.` : `Deste clipe para “${N.name}”.` }), wrap];
+  if (cur) {
+    kids.push(rangeF(B, 'xinD', 'Duração', XF_MIN, 2, .05, v => (+v).toFixed(2) + 's', { get:() => B.xin.d || XFS[B.xin.k].dur, put:v => { B.xin.d = +(+v).toFixed(2); }, cap:XF_MAX, after:() => { renderTimeline(); seek(); } }));
+    if (XFS[cur.k].dir) {
+      const segs = h('div', { class:'segs ico', role:'group', 'aria-label':'Direção' });
+      const draw = () => { segs.innerHTML = ''; const d = B.xin.dir || 'l';
+        XF_ARROWS.forEach(([v, ic, title]) => segs.append(h('button', { type:'button', 'aria-pressed':String(d === v), html:ICONS[ic], title, 'aria-label':title,
+          onclick:() => { pushUndo(); B.xin.dir = v; draw(); changed(); seek(); } }))); };
+      draw(); kids.push(field('Direção', segs));
+    }
+    kids.push(h('p', { class:'hint', text:'Fica no meio do corte: o clipe que sai continua até o fim da transição e o que entra começa antes, com o resto do vídeo (se o arquivo acabar, fica parado no último quadro). Durante ela, a saída e a entrada dos dois clipes não valem.' }));
+  }
+  return h('section', { class:'sec' }, kids);
+}
+// a transição de/para outro clipe está ativa neste lado (o preset de entrada/saída do clipe não vale)
+const xfOn = (L, side) => { const X = xfPairs(true); return !!(side === 'in' ? X.inn.get(L.id) : X.out.get(L.id)); };
 // aba Animação do grupo inteiro: age sobre o conjunto e se soma à animação de cada item (que não muda)
 function groupAnimSecs(gid, head, box) {
   const G = gview(gid);
@@ -10988,6 +11825,7 @@ function groupStyleSecs(gid) {
 function frameStyleSecs(gid) {
   const F = flowOf(gid); if (!F) return [];
   const G = gview(gid), px = v => Math.round(v) + 'px';
+  G.radius ??= 0; // frame novo não tem raio guardado: sem isso o campo Cantos mostrava NaNpx
   G.fill ??= withA(S.brand.colors[2], 0); // começa "sem cor": ligar o frame não muda nada na tela
   // primeira cor num frame colado no conteúdo: ganha espaço interno, senão o fundo fica rente ao texto
   const FP = new Proxy(G, { set(t, k, v) {
@@ -11014,7 +11852,7 @@ function posFields(L) {
 // fora do formato principal: de onde vem a posição e como voltar ao automático
 function posNote(L) {
   if (S.format === baseFmt()) return null;
-  const ls = peersAny(L), own = ls.some(ownPos), lk = linked();
+  const ls = peersAny(L), own = ls.some(ownPos), lk = true;
   return h('div', { class:'posnote', id:fid(L, 'fpos') }, [
     h('span', { text:own ? `Posição ou tamanho ajustados só no ${fmtLabel(S.format)}` : lk ? `Automática, reorganizada a partir do ${fmtLabel(baseFmt())}` : `Mesma posição do ${fmtLabel(baseFmt())}, sem reorganizar` }),
     own ? h('button', { type:'button', class:'btn small ghost', text:lk ? 'Voltar ao automático' : `Voltar à do ${fmtLabel(baseFmt())}`, onclick:() => resetPos(ls) }) : null]);
@@ -11023,7 +11861,7 @@ function styleProps(L) {
   const sec = h('section', { class:'sec' }), put = (...xs) => sec.append(...xs.filter(Boolean));
   const px = v => Math.round(v) + 'px';
   // tipos misturados: só o que todos têm em comum (opacidade, mesclagem, sombra e desfoque; a posição fica em Posição, no topo)
-  if (peersAny(L).some(o => o.type !== L.type)) {
+  if (peersAny(L).filter(o => !tagAlong(o)).some(o => o.type !== L.type)) {
     const tw = tpPair(); // texto + forma: o texto passa a seguir o contorno da forma
     if (tw) put(h('h3', { text:'Texto na forma' }), h('div', { class:'row' }, [h('button', { class:'btn small', text:'Pôr o texto na forma', title:'O texto segue o contorno da forma (como o texto no caminho do Illustrator)', onclick:() => { tpAttach(tw.t, tw.s); select(tw.t.id); } })]),
       h('p', { class:'hint', text:'O texto passa a correr pelo contorno da forma e acompanha quando ela muda.' }));
@@ -11034,7 +11872,20 @@ function styleProps(L) {
   }
   // em todos os tipos: Posição (alignBar, no topo) → conteúdo → Aparência (opacidade, mesclagem, sombra, desfoque) → Contorno
   const look = () => [h('h3', { text:'Aparência' }), ...lookFields(L)];
-  if (L.type === 'text') {
+  if (L.type === 'text' && L.capt) { // legenda (js/legenda.js): estilo, texto para revisar e a tipografia do texto
+    put(...capSecs(L), h('h3', { text:'Texto' }),
+      fontGroup(L, { props:true }),
+      colorF(L, 'color', 'Cor'),
+      rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true }),
+      rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
+      rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
+      pxF(L, 'maxW', 'Largura máx.', .1, 1, { layout:true }),
+      segF(L, 'align', 'Alinhamento', ALIGN_OPTS),
+      togF(L, 'Letras', CASE_OPTS),
+      ...textBgFields(L),
+      ...strokeSecs(L),
+      ...look());
+  } else if (L.type === 'text') {
     put(h('h3', { text:'Texto' }), richF(L, 'Texto (Enter quebra a linha)'),
       fontGroup(L, { props:true }),
       colorF(L, 'color', 'Cor'),
@@ -11136,7 +11987,8 @@ function styleProps(L) {
       rangeF(L, 'zoom', 'Zoom', .2, 5, .01, v => v.toFixed(2) + '×'),
       rangeF(L, 'ix', 'Imagem ↔', -1, 1, .005, pct),
       rangeF(L, 'iy', 'Imagem ↕', -1, 1, .005, pct),
-      h('div', { class:'row' }, [h('button', { class:'btn small', text:'Preencher a máscara', onclick:() => { pushUndo(); setFrame(L, { zoom:1, ix:0, iy:0 }); changed({ props:true }); } })]),
+      rangeF(L, 'irot', 'Girar imagem', -180, 180, 1, v => Math.round(v || 0) + '°'),
+      h('div', { class:'row' }, [h('button', { class:'btn small', text:'Preencher a máscara', onclick:() => { pushUndo(); setFrame(L, { zoom:1, ix:0, iy:0 }); delete L.irot; changed({ props:true }); renderProps(); } })]),
       h('p', { class:'hint', text:'A imagem nunca distorce. No palco: a alça do canto aumenta tudo, as das laterais mudam a máscara, a roda do mouse dá zoom na imagem, Alt + arrastar move a imagem dentro e as bolinhas nos cantos arredondam (Alt = só um canto).' }),
       ...strokeSecs(L),
       ...look(),
@@ -11286,11 +12138,12 @@ function fillProps(L, sec) {
   if (L.mode === 'video') {
     if (L.video) sec.append(...soundNote(L), h('p', { class:'hint', text:'Repete enquanto a camada estiver na tela.' }), ...vidCutFields(L));
     sec.append(uploadF(L.video ? 'Trocar vídeo' : bg ? 'Enviar vídeo de fundo' : 'Enviar vídeo', 'video/*', async f => {
+      const got = await videoGate(f, { one:true }), g = got && got[0]; if (!g) return; f = g.file; // longo: só o trecho (js/trecho.js)
       toast('Abrindo o vídeo…');
       try {
         const id = await putMedia(f), u = await mediaUrl(id), [p, an] = await Promise.all([videoPoster(u), videoSound(id)]); pushUndo();
         const olds = S.layers.filter(a => linkOf(a) === L); if (olds.length) S.layers = S.layers.filter(a => !olds.includes(a)); // o som do vídeo antigo sai junto
-        L.video = id; L.vsrc = p.src; L.vdur = p.dur; delete L.vIn; delete L.vOut; if (an) addVideoAudio(L, an); await getImage(L.vsrc);
+        L.video = id; L.vsrc = p.src; L.vdur = p.dur; delete L.vIn; delete L.vOut; delete L.vPause; delete L.vSkip; if (g.cut) Object.assign(L, g.cut); if (an) addVideoAudio(L, an); await getImage(L.vsrc);
         changed({ layers:true, props:true }); renderTimeline(); toast(an ? 'Vídeo no preenchimento, com o som numa camada separada' : 'Vídeo no preenchimento');
       } catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
     }));
@@ -11440,14 +12293,48 @@ $('#loop').onchange = e => { S.loop = e.target.checked; autosave(); };
 $('#safe').onchange = () => { needs = true; if ($('#safe').checked && S.format !== '9x16') toast('A zona segura aparece no formato 9:16'); };
 $('#undo').onclick = undo;
 $('#redo').onclick = redo;
+// até 10 min (pedido do usuário: Reels mais longos; vídeo de 1 h entra por trecho, js/trecho.js)
+const DUR_MAX = 600;
+// fim novo de quem ia até o fim (to = fim novo da timeline ou do slide). Vídeo e som que ainda não repetem só iam até o fim porque
+// a timeline os cortava: crescem até o tamanho do trecho, não viram loop até o fim (reclamação do usuário: duração em 9 min e um
+// vídeo de menos de 1 min ocupava a timeline toda). Quem já repetia continua acompanhando o fim
+function endTo(L, to) {
+  const clip = L.vdur > 0 && ((L.type === 'image' && L.video) || L.type === 'audio');
+  if (!clip) return to;
+  const cyc = vidPlan(L).cyc;
+  return (L.end ?? to) - L.start <= cyc + .01 ? +Math.min(to, L.start + cyc).toFixed(3) : to;
+}
 // camadas que iam até o fim acompanham a nova duração
 function setDuration(v) {
-  v = clamp(v, 2, 60); const old = S.duration; if (v === old) return;
+  v = clamp(v, 2, DUR_MAX); const old = S.duration; if (v === old) return;
   S.duration = v;
-  S.layers.forEach(L => { if (L.end == null || L.end >= old - .01 || L.end > v) L.end = v; if (L.start > v - .3) L.start = Math.max(0, v - .3); });
+  S.layers.forEach(L => { if (L.end > v) L.end = v; else if (L.end == null || L.end >= old - .01) L.end = endTo(L, v); if (L.start > v - .3) L.start = Math.max(0, v - .3); });
   // carrossel: os slides que iam até o fim acompanham, os mais curtos ficam (imagem continua imagem)
   if (S.sdur) S.sdur = S.sdur.map(d => d == null || d === 0 ? d : d >= old - .01 || d > v ? v : d);
   T = Math.min(T, v); updDur(true); changed({ props:true, layers:true });
+}
+// Duração em mm:ss (00:30, 01:05; décimos só se houver: 00:07,5)
+function durF(v) {
+  v = Math.max(0, Math.round(v * 10) / 10); const m = Math.floor(v / 60), sec = v - m * 60, w = Math.floor(sec), f = Math.round((sec - w) * 10);
+  return String(m).padStart(2, '0') + ':' + String(w).padStart(2, '0') + (f ? ',' + f : '');
+}
+// aceita 90, 1:30, 01:30,5, 1m30, 1m30s, 2min, 45s (vazio ou texto que não é tempo = NaN, nunca 0)
+function durParse(t) {
+  const s = String(t).trim().toLowerCase().replace(/\s+/g, '');
+  if (!s) return NaN;
+  const n = x => parseFloat(String(x).replace(',', '.'));
+  const u = s.match(/^(?:(\d+(?:[.,]\d+)?)(?:min|m))?(?:(\d+(?:[.,]\d+)?)(?:seg|s)?)?$/);
+  if (u && (u[1] != null || u[2] != null)) return (u[1] != null ? n(u[1]) * 60 : 0) + (u[2] != null ? n(u[2]) : 0);
+  const p = s.replace(',', '.').split(':').map(Number);
+  return p.length <= 3 && p.every(x => isFinite(x) && x >= 0) ? p.reduce((a, x) => a * 60 + x, 0) : NaN;
+}
+// o campo Duração nunca muda o valor sem dizer: avisa o que entendeu quando não é o que foi digitado
+function durNote(raw, v) {
+  const txt = String(raw).trim();
+  if (isNaN(v)) { if (txt) toast(`Não entendi “${txt}”. Digite minutos:segundos, como 1:30, ou só os segundos, como 90`, 5000); return; }
+  if (v > DUR_MAX + .01) toast(`A duração máxima é ${durF(DUR_MAX)}. Usei ${durF(DUR_MAX)}`, 5000);
+  else if (v > 0 && v < 2) toast(`A duração mínima é 00:02 (0 = imagem estática). Usei 00:02`, 5000);
+  else if (/^\d{3,}$/.test(txt)) toast(`${txt} segundos = ${durF(v)}. Para minutos, digite ${txt.slice(0, -2)}:${txt.slice(-2)}`, 5000);
 }
 // campo Duração: no carrossel é a do slide atual (o do elemento escolhido, senão o último clicado)
 function updDur(force) {
@@ -11455,7 +12342,7 @@ function updDur(force) {
   const key = [car, si, S.still, S.duration, S.sdur ? S.sdur.join(',') : '', S.snames ? S.snames.join('\u0001') : ''].join('|');
   if (!force && (RT.durKey === key || document.activeElement === el)) return;
   RT.durKey = key;
-  el.value = car ? slideDur(si) : S.still ? 0 : S.duration;
+  el.value = durF(car ? slideDur(si) : S.still ? 0 : S.duration);
   $('#durL').textContent = car ? (S.snames && S.snames[si] ? `Duração · ${slideName(si)}` : `Duração do slide ${si + 1}`) : 'Duração';
   el.closest('label').title = car ? `Cada slide tem a sua duração. 0 = este slide é uma imagem (sai em PNG); os outros continuam como estão`
     : '0 = imagem estática: sem animação, sem timeline, exporta PNG';
@@ -11463,7 +12350,7 @@ function updDur(force) {
 // carrossel: duração de um slide (0 = imagem). A timeline vai até o slide mais longo; quem ia até o fim do slide acompanha,
 // os elementos dos outros slides ficam onde estão. Todos em 0 = o arquivo vira imagem estática (S.still)
 function setSlideDur(i, v) {
-  const n = slides(); v = v > 0 ? clamp(v, 2, 60) : 0;
+  const n = slides(); v = v > 0 ? clamp(v, 2, DUR_MAX) : 0;
   const was = slideDur(i); if (v === was) return;
   pushUndo(); pause();
   const D0 = S.duration, still0 = !!S.still, d = (S.sdur || []).slice(0, SLIDES_MAX);
@@ -11472,9 +12359,9 @@ function setSlideDur(i, v) {
   const vids = d.slice(0, n).filter(x => x > 0), D = vids.length ? Math.max(...vids) : D0;
   for (const L of S.layers) {
     if (L.type !== 'bg' && !NOBOX(L) && v > 0 && slideOfL(L) === i) {
-      if (L.end == null || L.end >= (was || D0) - .01 || L.end > v) L.end = v;
+      if (L.end > v) L.end = v; else if (L.end == null || L.end >= (was || D0) - .01) L.end = endTo(L, v);
       if (L.start > v - .3) L.start = Math.max(0, v - .3);
-    } else if (L.type === 'bg' || NOBOX(L)) { if (L.end == null || L.end >= D0 - .01 || L.end > D) L.end = D; if (L.start > D - .3) L.start = Math.max(0, D - .3); }
+    } else if (L.type === 'bg' || NOBOX(L)) { if (L.end > D) L.end = D; else if (L.end == null || L.end >= D0 - .01) L.end = endTo(L, D); if (L.start > D - .3) L.start = Math.max(0, D - .3); }
     else { if (L.end == null || L.end > D) L.end = Math.min(L.end ?? D0, D); if (L.start > D - .3) L.start = Math.max(0, D - .3); }
   }
   S.duration = D;
@@ -11484,7 +12371,7 @@ function setSlideDur(i, v) {
   if (!!S.still !== still0) { if (S.still && propTab === 'anim') propTab = 'style'; RT.layout.clear(); renderAdds(); }
   RT.layout.clear(); renderFormats(); updDur(true); changed({ props:true, layers:true });
   toast(S.still ? 'Todos os slides são imagem: o arquivo virou imagem estática. Digite uma duração num slide para ele voltar a ser vídeo'
-    : v === 0 ? `Slide ${i + 1} agora é imagem: tudo nele aparece junto e parado e ele sai em PNG` : `Slide ${i + 1}: ${fmtSec(v)}${D !== D0 ? ` · a timeline vai até ${fmtSec(D)}` : ''}`, 4500, UNDO_ACT);
+    : v === 0 ? `Slide ${i + 1} agora é imagem: tudo nele aparece junto e parado e ele sai em PNG` : `Slide ${i + 1}: ${fmtSec(v)}${D !== D0 ? ` · a timeline vai até ${fmtSec(D)}` : v < D ? ` · a timeline continua em ${fmtSec(D)}, a do slide mais longo` : ''}`, 4500, UNDO_ACT);
 }
 function setMargin() {
   const n = id => clamp(parseFloat($('#' + id).value) || 0, 0, 800);
@@ -11500,9 +12387,16 @@ $('#fps').addEventListener('change', e => { pushUndo(); S.fps = +e.target.value;
   addEventListener('pointerdown', e => { if (!pop.hidden && !e.target.closest('.mwrap')) show(false); });
   addEventListener('keydown', e => { if (e.key === 'Escape') show(false); });
 }
+$('#dur').addEventListener('keydown', e => {
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  e.preventDefault(); const v = durParse(e.target.value);
+  e.target.value = durF(Math.max(0, (isNaN(v) ? 0 : v) + (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 10 : 1)));
+  e.target.dispatchEvent(new Event('change'));
+});
 $('#dur').addEventListener('change', e => {
-  const v = parseFloat(String(e.target.value).replace(',', '.'));
-  if (slides() > 1) { if (v >= 0) setSlideDur(curSlide(), v); updDur(true); return; }
+  const v = durParse(e.target.value);
+  if (slides() > 1) { if (v >= 0) setSlideDur(curSlide(), v); durNote(e.target.value, v); updDur(true); return; }
+  durNote(e.target.value, v);
   if (v === 0) setStill(true);
   else if (v > 0) {
     pushUndo();
@@ -11589,6 +12483,71 @@ function markAt(edge) {
   const L = ls.includes(selL()) ? selL() : ls[0];
   toast(edge === 'start' ? `${L.name} entra em ${fmtSec(L.start)}` : `${L.name} sai em ${fmtSec(L.end ?? S.duration)}`, 2600, UNDO_ACT);
 }
+/* ------------ dividir na agulha (S; pedido do usuário: cortar o vídeo da timeline sem arrastar a borda da barra) ------------
+   O vídeo vira dois (a primeira metade fica com a camada e o id, a segunda é uma cópia) e o som que segue ele divide junto, cada
+   metade com o som dela. A conta é a das bordas da barra (vidTrim): a 1ª termina na agulha (como puxar a borda direita até ali), a
+   2ª começa nela (como puxar a esquerda), então corte, pausas, cortes secos, velocidade e barra que repete saem iguais ao arrasto.
+   O corte é seco: a 1ª não sai com animação e a 2ª não entra com ela (a entrada fica na 1ª e a saída na 2ª). Vídeo solto ou com
+   o som sozinho no grupo (`av`): a 2ª metade ganha um grupo `av` próprio, então clicar nela escolhe só ela. Vídeo que está num
+   frame com layout: a 2ª fica fora da fila (flowFree), senão ocupava um segundo lugar nela. Peso: cada metade é outra camada,
+   com o próprio <video> e decodificador quando toca (o arquivo continua um só na memória, VDEM); muitos cortes = mais deles. */
+const SPLIT_MIN = .1; // cada metade tem pelo menos isso (s)
+// vídeos (e sons soltos) que a divisão atinge: o som que segue um vídeo vale pelo vídeo
+function splitTargets(ls) {
+  const out = new Set();
+  for (const l of ls) {
+    if (l.type === 'audio') out.add(linkOf(l) || l);
+    else if (l.type === 'image' && l.video) out.add(l);
+  }
+  return [...out];
+}
+const splitHit = (V, t) => t > V.start + SPLIT_MIN && t < (V.end ?? S.duration) - SPLIT_MIN;
+function splitOne(V, t) {
+  const snap = vidSnap(V, S.duration), mates = S.layers.filter(a => a !== V && linkOf(a) === V), flow = inFlow(V);
+  const clone = o => { const c = JSON.parse(JSON.stringify(o)); delete c._bounds; c.id = uid(); return c; };
+  const B = clone(V), Cs = mates.map(clone), grp = V.grp;
+  const [at0, held0] = vidRun(snap.P, t - V.start), inFreeze = held0 && at0 >= snap.b - 1e-3 && t - V.start < snap.P.cyc; // cortou no congelado do fim
+  V.end = t; vidTrim(V, snap, 'r');
+  // cortou no meio de uma pausa: a 1ª termina congelada e o motor mostra o quadro .02 s antes do fim do trecho (vidTime), um quadro
+  // antes do que a pausa mostrava. Um pouco mais de trecho (fica além da barra) mantém o mesmo quadro
+  const P1 = vidPlan(V), last = P1.ps[P1.ps.length - 1];
+  if (last && !last.jump && last.at >= P1.b - 1e-3 && last.at < snap.b - 1e-3 && P1.b < P1.d - 1e-3) V.vOut = +Math.min(P1.d, P1.b + .02).toFixed(3);
+  if (V.out && V.out !== 'cut') { V.out = 'cut'; V.outDur = 0; }
+  B.start = t; vidTrim(B, snap, 'l'); delete B.xin; // a transição do clipe anterior fica com a 1ª metade
+  if (inFreeze) { // o trecho tem no mínimo .1 s e a 2ª só tem o congelado: ela começa .1 s antes do fim e pula esse pedaço (senão ele tocaria de novo)
+    const P2 = vidPlan(B); if (P2.b - P2.a <= SPLIT_MIN + 1e-3) B.vSkip = [...(B.vSkip || []), { at:+P2.a.toFixed(3), len:+(P2.b - P2.a).toFixed(3) }];
+  }
+  if (B.in && B.in !== 'cut') { B.in = 'cut'; B.inDur = 0; }
+  if (grp) {
+    const m = S.groups && S.groups[grp];
+    // grupo só do vídeo e do som dele: a cópia leva um grupo igual, para escolher cada metade sozinha (cópia da meta, pai mantido)
+    const own = m && m.av && !gkids(grp).length && gleaves(grp).every(l => l === V || mates.includes(l));
+    B.grp = own ? groupMapper(gmeta, () => false, true)(grp) : grp;
+  }
+  if (flow) B.flowFree = true;
+  S.layers.splice(S.layers.indexOf(V) + 1, 0, B);
+  for (const c of Cs) { c.link = B.id; if (B.grp) c.grp = B.grp; S.layers.splice(S.layers.indexOf(B), 0, c); }
+  return { B, Cs };
+}
+function splitAtPlayhead() {
+  if (S.still) { toast('Imagem estática não tem tempo para dividir'); return; }
+  const picked = pickedLayers();
+  let ls = splitTargets(picked);
+  if (picked.length && !ls.length) { toast('Dividir vale para vídeo e som. Escolha um vídeo na timeline', 4500); return; }
+  if (!picked.length) ls = splitTargets(S.layers.filter(l => l.visible)); // nada escolhido: o que toca na agulha
+  const t = Math.round(clamp(Math.round(T * fps()) / fps(), 0, S.duration) * 1000) / 1000;
+  const hit = ls.filter(V => splitHit(V, t));
+  if (!hit.length) { toast(ls.length ? 'Leve a agulha para dentro da barra do vídeo (não nas pontas) para dividir' : 'Não há vídeo para dividir', 4500); return; }
+  const free = hit.filter(V => !V.locked);
+  if (!free.length) { lockedNote(hit); return; }
+  pushUndo();
+  const out = free.map(V => splitOne(V, t));
+  linkSync();
+  const news = out.map(o => o.B);
+  RT.picks = new Set(news.map(l => l.id)); RT.selected = news[news.length - 1].id; RT.itemPicks = RT.picks; // as segundas metades, cada uma sozinha
+  RT.layout.clear(); changed({ layers:true, props:true }); renderTimeline(); needs = true;
+  toast(news.length > 1 ? `${news.length} vídeos divididos em ${fmtSec(t)}` : `"${free[0].name}" dividido em ${fmtSec(t)}`, 4000, UNDO_ACT);
+}
 function selectAll() {
   const ls = S.layers.filter(l => l.type !== 'bg'); if (!ls.length) return;
   RT.picks = new Set(ls.map(l => l.id)); if (!RT.picks.has(RT.selected)) RT.selected = ls[ls.length - 1].id;
@@ -11624,6 +12583,8 @@ document.addEventListener('keydown', e => {
   }
   if (mod && !e.altKey) {
     if (k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+    // Ctrl+X: no Chrome o evento `cut` não dispara sem texto editável selecionado (o `copy` dispara), então recorta direto pelo teclado
+    else if (k === 'x' && !e.shiftKey && !String(getSelection() || '').trim().length) { if (clipPayload()) { e.preventDefault(); copyMenu('cut'); } }
     else if (k === 'e' && !e.shiftKey && pfTargets().length) { e.preventDefault(); pathfinder('flatten'); }
     else if (k === 'y') { e.preventDefault(); redo(); }
     else if (k === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); }
@@ -11663,12 +12624,13 @@ document.addEventListener('keydown', e => {
   if (k === 'g' && e.shiftKey) { e.preventDefault(); cleanToggle(); return; }
   if (k === 'p') { e.preventDefault(); penToolStart(e.shiftKey ? 'free' : null); return; }
   if (k === 'i' || k === 'o') { e.preventDefault(); markAt(k === 'i' ? 'start' : 'end'); return; }
+  if (k === 's' && !e.shiftKey) { e.preventDefault(); splitAtPlayhead(); return; }
   if (e.key === 'Enter' && el && (e.target === document.body || e.target === cv)) { e.preventDefault(); editText(L); }
 });
 /* ------------ painel de atalhos (tecla ?) ------------ */
 const KEYS = [
   ['Tocar', [['Espaço', 'Tocar e pausar'], [', .', 'Um quadro para trás / para frente'], ['Shift + , .', 'Um segundo para trás / para frente'], ['← →', 'Quadro a quadro, com nada selecionado'], ['Home End', 'Início / último quadro']]],
-  ['Tempo do elemento', [['I', 'Entra na agulha'], ['O', 'Sai na agulha'], ['Clique duplo na barra', 'Leva a agulha até ele'], ['Shift ao arrastar', 'Desliga o ímã da timeline'], ['Esc ao arrastar', 'Cancela']]],
+  ['Tempo do elemento', [['I', 'Entra na agulha'], ['O', 'Sai na agulha'], ['S', 'Divide o vídeo (e o som dele) na agulha'], ['Clique duplo na barra', 'Leva a agulha até ele'], ['Shift ao arrastar', 'Desliga o ímã da timeline'], ['Esc ao arrastar', 'Cancela']]],
   ['Palco', [['← ↑ → ↓', 'Move 1 px (Shift: 10 px)'], ['Arrastar no vazio', 'Seleciona por área'], ['Shift + clique', 'Soma ou tira da seleção'], ['Ctrl + clique', 'Escolhe um item dentro do grupo'], ['Clique duplo / Enter', 'Edita o texto'], ['Ctrl ao arrastar', 'Desliga as guias'], ['Alt + arrastar imagem', 'Move a imagem na máscara'], ['Roda na imagem', 'Zoom na máscara'], ['Alças (8 pontos)', 'Cantos escalam; lados mudam largura, altura ou quebra do texto'], ['Alt ao puxar a alça', 'Escala a partir do centro']]],
   ['Zoom e painéis', [['+ −  ou Ctrl + roda', 'Zoom do palco'], ['Shift + 1 / Shift + 0', 'Ajustar ao espaço / 100%'], ['Botão do meio', 'Arrasta o palco'], ['Ctrl + \\', 'Esconde ou mostra todos os painéis'], ['Shift + G', 'Palco limpo: sem margem nem divisas e nomes dos slides']]],
   ['Caneta e pontos', [['P', 'Caneta (modos Caneta, Curvas e Mão livre no topo do palco)'], ['Shift + P', 'Caneta à mão livre'], ['Clique duplo na forma', 'Edita os pontos (qualquer forma vira vetor)'], ['Arrastar a linha', 'Curva o trecho (na edição de pontos)'], ['Clique duplo no ponto', 'Curva / canto']]],
@@ -11710,6 +12672,7 @@ const ADD_KINDS = [
   { id:'shape', label:'Forma', gl:'<svg width="20" height="18" viewBox="0 0 20 18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="6" width="10" height="10" rx="2"/><circle cx="13" cy="6" r="5"/></svg>', mk:() => mkComp('shape') },
   { id:'pen', label:'Caneta', gl:'<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M9 1.5l5 7-5 8-5-8z"/><circle cx="9" cy="9" r="1.3"/><path d="M9 1.5v6.2"/></svg>', add:() => penToolStart() },
   { id:'cta', label:'Botão', gl:'<span style="border:1.5px solid currentColor;border-radius:9px;padding:1px 7px;font-size:10px;font-weight:700">ir</span>', mk:() => mkComp('cta') },
+  { id:'caption', label:'Legenda', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="1" y="1.5" width="18" height="13" rx="2.5"/><path d="M4.5 9.5h4M10.5 9.5h5M4.5 12h7"/></svg>', add:() => capGenerate() },
   { id:'box', label:'Caixa', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="1" y="2" width="18" height="12" rx="3.5"/><path d="M5.5 7h9M5.5 10h5.5"/></svg>', add:() => addBox() },
 ];
 // Caixa: texto dentro de um frame com layout automático, preenchimento, espaço interno e cantos (o frame do Figma). É o "digitar dentro
@@ -11781,7 +12744,7 @@ function flowAppend(L, si) {
   L.y = +((bot + (S.flow.gap ?? 24) + me.h / 2) / Hb).toFixed(5);
 }
 function addLayer(L, opts = {}) {
-  pushUndo();
+  if (!opts.noUndo) pushUndo(); // noUndo: quem chama já fez (vários de uma vez = um desfazer)
   const vis0 = S.layers.filter(l => l.type !== 'bg' && l.visible && !NOBOX(l) && phase(l, T)); // quem está na tela agora (continua depois de adicionar)
   // frame selecionado: entra nele, no mesmo tempo que ele (solto num ponto do palco continua onde caiu)
   const fr = opts.x == null ? insertTarget() : null, win = fr && gwin(fr);
@@ -12221,8 +13184,8 @@ function vidCutFields(L) {
   const d = L.vdur || 60, step = .05;
   const fix = o => { const od = o.vdur || d; o.vIn = clamp(o.vIn || 0, 0, od - .1); if (o.vOut != null) { o.vOut = clamp(o.vOut, 0, od); if (o.vOut - o.vIn < .1) o.vOut = Math.min(od, o.vIn + .1); if (o.vOut >= od - 1e-3) o.vOut = null; } if (!o.vIn) delete o.vIn; if (o.vOut == null) delete o.vOut; vidFitEnd(o); };
   const look = edge => {
-    pause(); const { a, b } = vidCut(L), s = L.start, e = (L.end ?? S.duration) - 1e-3;
-    T = clamp(edge ? s + (b - a) - 1 / fps() : restTime(L), s, e); needs = true;
+    pause(); const s = L.start, e = (L.end ?? S.duration) - 1e-3;
+    T = clamp(edge ? s + vidPlan(L).cyc - 1 / fps() : restTime(L), s, e); needs = true;
   };
   const len = () => { const { a, b } = vidCut(L); return b - a; };
   const edit = edge => { peersOf(L).filter(o => o.video || o.type === 'audio').forEach(fix); look(edge); upd(); renderTimeline(); };
@@ -12231,26 +13194,189 @@ function vidCutFields(L) {
   const inR = inF.querySelector('input[type=range]'), outR = outF.querySelector('input[type=range]'), nums = [inF, outF].map(f => f.querySelector('.num'));
   const note = h('p', { class:'hint' });
   const upd = () => {
-    const n = len(), on = (L.end ?? S.duration) - L.start;
+    const n = len(), P = vidPlan(L), c = P.cyc, on = (L.end ?? S.duration) - L.start, hold = P.ps.reduce((s, p) => s + p.len, 0);
     inR.value = L.vIn || 0; outR.value = L.vOut ?? d;
     if (document.activeElement !== nums[0]) nums[0].value = fmtSec(L.vIn || 0);
     if (document.activeElement !== nums[1]) nums[1].value = fmtSec(L.vOut ?? d);
-    note.textContent = `Trecho de ${fmtSec(n)} (o vídeo tem ${fmtSec(d)}). ${n < on - .05 ? 'Repete até a camada sair.' : n > on + .05 ? 'O vídeo final acaba antes do fim do trecho.' : 'As bordas da barra na timeline também cortam.'}`;
+    note.textContent = `Trecho de ${fmtSec(n)}${P.cut > .005 ? ` − ${fmtSec(P.cut)} de silêncio` : ''}${P.sp !== 1 ? `, ${fmtSec((n - P.cut) / P.sp)} a ${fmtX(P.sp)}` : ''}${hold > .005 ? ` + ${fmtSec(hold)} parado` : ''} (o vídeo tem ${fmtSec(d)}). ${c < on - .05 ? 'Repete até a camada sair.' : c > on + .05 ? 'O vídeo final acaba antes do fim do trecho.' : 'As bordas da barra na timeline também cortam.'}`;
   };
   upd();
-  return [inF, outF, note];
+  return [inF, outF, note, ...vidSpeedFields(L, upd), splitRow(L), ...vidPauseFields(L), ...silenceFields(L)];
+}
+// "Dividir na agulha" (splitAtPlayhead): uma linha só, no painel do vídeo e do som
+function splitRow(L) {
+  return h('div', { class:'row' }, [h('button', { class:'btn small', text:'Dividir na agulha', title:'Corta o vídeo em dois no quadro da agulha (atalho S). O som que segue o vídeo divide junto',
+    onclick:() => { if (!isPicked(L.id)) select(L.id, true); splitAtPlayhead(); } })]);
+}
+/* velocidade (vSpd, pedido do usuário: acelerar o vídeo): atalhos numa linha e o valor livre embaixo. A barra acompanha (o trecho
+   ocupa (b − a) / sp); se a barra já repetia o trecho, continua do mesmo tamanho. O som com sync acelera junto (linkSync) */
+const fmtX = v => String(+(+v || 1).toFixed(2)).replace('.', ',') + '×';
+function vidSpeedFields(L, upd) {
+  const PRE = [.5, 1, 1.5, 2, 3];
+  const peers = () => peersOf(L).filter(o => o.video || o.type === 'audio');
+  const put = v => {
+    v = clamp(+v || 1, VSPD_MIN, VSPD_MAX);
+    for (const o of peers()) { const loop = vidLoops(o); if (Math.abs(v - 1) < 1e-3) delete o.vSpeed; else o.vSpeed = +v.toFixed(3); if (!loop) vidFitEnd(o); }
+  };
+  const cur = vSpd(L), mode = modeF('Velocidade', PRE.map(v => [v, fmtX(v), v === 1 ? 'Velocidade normal' : v < 1 ? 'Câmera lenta' : 'Acelerado']),
+    PRE.find(v => Math.abs(v - cur) < 1e-3), v => { pushUndo(); put(v); changed({ layers:true, props:true }); renderTimeline(); needs = true; });
+  mode.querySelector('.segs').classList.add('spd');
+  const f = rangeF(L, 'vSpeed', 'Velocidade', VSPD_MIN, VSPD_MAX, .05, fmtX, { get:() => vSpd(L), put, onInput:() => { renderTimeline(); upd(); needs = true; }, after:() => renderProps() });
+  f.classList.add('cont');
+  return [mode, f];
+}
+/* Tirar silêncios (pedido do usuário: um botão, não uma regra): acha as pausas da fala no som do próprio arquivo e o vídeo pula
+   por cima delas (cortes secos, L.vSkip; o som com sync pula junto). Silêncio no começo e no fim do trecho vira corte das bordas
+   (vIn/vOut). A barra encurta; se o vídeo ocupava o arquivo inteiro e nada vem depois, o arquivo encurta junto.
+   speechRuns: energia a cada 10 ms em dB; fala = acima de um limiar `db` dB abaixo da voz (95%) e pelo menos 6 dB acima do chão de ruído (5%), com uma folga antes
+   e depois para não comer o começo/fim das palavras. Pausa = abaixo do limiar por SIL.min s ou mais. Devolve os trechos que tocam
+   [[s, e], …] dentro de [a, b], [] sem fala, null quando fala e fundo têm quase o mesmo volume (música alta, ruído) */
+// SIL = o modo escolhido: min = pausa mínima (s) para cortar, padA/padB = folga que fica antes/depois da fala, blip = estalo que não conta,
+// db = quantos dB abaixo da voz (95% das energias) ainda é pausa (nunca abaixo do chão de ruído + 6 dB). O modo vem de localStorage 'mola-sil' (Suave | Normal | Apertado)
+const SIL_MODES = { soft:{ name:'Suave', min:.5, padA:.1, padB:.15, blip:.12, db:30 }, normal:{ name:'Normal', min:.3, padA:.08, padB:.12, blip:.1, db:26 },
+  tight:{ name:'Apertado', min:.18, padA:.05, padB:.08, blip:.08, db:22 } };
+const silMode = () => { try { return SIL_MODES[localStorage.getItem('mola-sil')] ? localStorage.getItem('mola-sil') : 'normal'; } catch (e) { return 'normal'; } };
+const SIL = { ...SIL_MODES[silMode()] };
+function speechRuns(buf, a, b) {
+  const sr = buf.sampleRate, hop = Math.max(1, Math.round(sr / 100)), i0 = Math.max(0, Math.floor(a * sr)), i1 = Math.min(buf.length, Math.ceil(b * sr)), F = Math.floor((i1 - i0) / hop);
+  if (F < 30) return null;
+  const chs = []; for (let c = 0; c < buf.numberOfChannels; c++) chs.push(buf.getChannelData(c));
+  const db = new Float32Array(F), k = Math.ceil(hop / 2) * chs.length;
+  for (let f = 0; f < F; f++) {
+    let s = 0; const st = i0 + f * hop;
+    for (const c of chs) for (let i = st, e = st + hop; i < e; i += 2) s += c[i] * c[i];
+    db[f] = 10 * Math.log10(s / k + 1e-12);
+  }
+  const srt = Float32Array.from(db).sort(), q = x => srt[Math.min(F - 1, Math.floor(x * F))], lo = q(.05), hi = q(.95);
+  if (hi - lo < 14) return null;
+  const thr = Math.min(Math.max(hi - SIL.db, lo + 6), hi - 10), tAt = f => (i0 + f * hop) / sr;
+  const runs = [];
+  for (let f = 0; f < F;) { if (db[f] <= thr) { f++; continue; } let g = f; while (g < F && db[g] > thr) g++; runs.push([f, g]); f = g; }
+  const minF = Math.round(SIL.min * 100), m = [];
+  for (const r of runs) { const l = m[m.length - 1]; if (l && r[0] - l[1] < minF) l[1] = r[1]; else m.push([...r]); }
+  const out = [];
+  for (const [f, g] of m) {
+    if (g - f < SIL.blip * 100) continue; // estalo ou respiração solta
+    const s = Math.max(a, tAt(f) - SIL.padA), e = Math.min(b, tAt(g) + SIL.padB), l = out[out.length - 1];
+    if (l && s <= l[1] + .05) l[1] = e; else out.push([s, e]);
+  }
+  return out;
+}
+async function cutSilence(L) {
+  const media = L.type === 'audio' ? L.aud : L.video; if (!media) return;
+  toast('Procurando os silêncios…', 30000);
+  let buf = null; try { buf = await musicBuffer(media); } catch (e) {}
+  if (!S.layers.includes(L)) return;
+  if (!buf || buf.duration < .2) { toast(L.type === 'audio' ? 'Esse som está vazio' : 'Esse vídeo não tem som para achar os silêncios', 4000); return; }
+  const P0 = vidPlan({ ...L, vSkip:null }), runs = speechRuns(buf, P0.a, Math.min(P0.b, buf.duration));
+  if (!runs) { toast('Não consegui separar a fala do fundo: o som tem quase o mesmo volume o tempo todo', 5000); return; }
+  if (!runs.length) { toast('Não achei fala neste trecho', 4000); return; }
+  const a = runs[0][0], b = runs[runs.length - 1][1], sk = [];
+  for (let i = 1; i < runs.length; i++) sk.push({ at:+runs[i - 1][1].toFixed(3), len:+(runs[i][0] - runs[i - 1][1]).toFixed(3) });
+  const gone = (P0.b - P0.a) - (b - a) + sk.reduce((s, x) => s + x.len, 0), n = sk.length + (a > P0.a + .01) + (b < P0.b - .01);
+  if (gone < .2) { toast('Não achei silêncio para tirar', 4000); return; }
+  pushUndo();
+  const loop = vidLoops(L), end0 = L.end ?? S.duration, whole = L.type === 'image' && L.start < .05 && end0 > S.duration - .05; // fundo/forma com vídeo não mexem no arquivo
+  if (a > 1e-3) L.vIn = +a.toFixed(3); else delete L.vIn;
+  if (b < P0.d - 1e-3) L.vOut = +b.toFixed(3); else delete L.vOut;
+  if (sk.length) L.vSkip = sk; else delete L.vSkip;
+  if (!loop) vidFitEnd(L);
+  // o vídeo era o arquivo inteiro (um corte, por exemplo) e nada começa depois: o arquivo acaba junto com ele
+  const mates = new Set([L, ...linkPeers(L)]), e1 = L.end ?? S.duration;
+  if (whole && !loop && slides() === 1 && !S.still && e1 < S.duration - .05 && !S.layers.some(o => !mates.has(o) && o.type !== 'bg' && o.start > e1 - .05)) setDuration(Math.max(.5, +e1.toFixed(2)));
+  changed({ layers:true, props:true }); renderTimeline(); needs = true;
+  toast(`${n} ${n === 1 ? 'silêncio tirado' : 'silêncios tirados'}: ${fmtSec(gone / vSpd(L))} a menos`, 6000, UNDO_ACT);
+}
+function silenceFields(L) {
+  if (L.type === 'audio' && linkOf(L)) return []; // o som que segue o vídeo pula junto com ele
+  const P = vidPlan(L), n = P.ps.filter(p => p.jump).length;
+  // quão apertado: Suave só tira as pausas longas, Apertado também as curtas de respiro entre as frases (vale para o próximo clique)
+  // modo, botão e resultado são uma coisa só (o modo é o que o botão usa): ficam juntos num cartão, e o botão diz qual modo vai usar
+  const how = modeF('Quão apertado', Object.entries(SIL_MODES).map(([k, m]) => [k, m.name, k === 'soft' ? 'Só as pausas longas, deixa uma folga maior' : k === 'normal' ? 'Pausas a partir de 0,3 s' : 'Também as pausas curtas, bem seco']),
+    silMode(), v => { try { localStorage.setItem('mola-sil', v); } catch (e) {} Object.assign(SIL, SIL_MODES[v]); renderProps(); });
+  how.classList.add('stack');
+  const mode = SIL_MODES[silMode()].name;
+  return [h('div', { class:'sil-card' }, [
+    h('div', { class:'sil-head', text:'Tirar silêncios' }),
+    h('p', { class:'hint', text:'Acha as pausas da fala e o vídeo pula por cima delas. O som pula junto.' }),
+    how,
+    h('button', { class:'btn primary sil-go', text:n ? `Refazer no modo ${mode}` : `Tirar silêncios no modo ${mode}`, title:'Acha as pausas da fala e o vídeo pula por cima delas (cortes secos), com o modo escolhido acima', onclick:() => cutSilence(L) }),
+    n ? h('div', { class:'sil-res' }, [
+      h('p', { class:'hint', text:`${n} ${n === 1 ? 'corte seco' : 'cortes secos'}, ${fmtSec(P.cut / P.sp)} de silêncio a menos. Cada um é um risco na barra da timeline.` }),
+      h('button', { class:'btn small', text:'Devolver os silêncios', title:'Tira os cortes secos (o começo e o fim continuam cortados: puxe as bordas da barra)', onclick:() => {
+        pushUndo(); const loop = vidLoops(L); delete L.vSkip; if (!loop) vidFitEnd(L); changed({ layers:true, props:true }); renderTimeline(); needs = true; toast('Os silêncios do meio voltaram', 4000, UNDO_ACT);
+      } })]) : null])];
+}
+// pausas (vidPlan): parar o quadro da agulha por um tempo (o vídeo continua de onde parou) ou congelar até o fim da barra;
+// um campo por pausa com o tempo parado (0 tira). Barra que não repete cresce/encolhe junto (vidFitEnd)
+function vidPauseFields(L) {
+  const isVid = L.type !== 'audio';
+  const fit = fn => { const loop = vidLoops(L); fn(); if (!loop) { vidGrow(L); vidFitEnd(L); } };
+  const done = msg => { changed({ layers:true, props:true }); renderTimeline(); needs = true; if (msg) toast(msg, 4000, UNDO_ACT); };
+  // segundos desde o começo da camada até a agulha (null = a agulha está fora dela)
+  const here = () => {
+    const u = T - L.start; if (u >= 0 && T < (L.end ?? S.duration) - .02) return u;
+    toast(`Leve a agulha para um quadro em que ${isVid ? 'o vídeo aparece' : 'o som toca'}.`); return null;
+  };
+  const addPause = () => {
+    const u = here(); if (u == null) return;
+    const P = vidPlan(L), [at, held] = vidRun(P, u % P.cyc);
+    pushUndo();
+    fit(() => {
+      const ps = (L.vPause || []).map(p => ({ ...p })), q = held && ps.find(p => Math.abs(clamp(p.at, P.a, P.b) - at) < 1e-3);
+      if (q) q.len = +(q.len + 1).toFixed(3); else ps.push({ at:+at.toFixed(3), len:1 });
+      L.vPause = ps.sort((x, y) => x.at - y.at);
+    });
+    done(isVid ? 'O vídeo fica parado 1s na agulha e continua de onde parou' : 'O som para 1s na agulha e continua de onde parou');
+  };
+  const freeze = () => {
+    const u = here(); if (u == null) return;
+    const P = vidPlan(L); if (u >= P.cyc - .02) { toast('Aqui o vídeo já está repetindo. Congele dentro da primeira passada.'); return; }
+    const end = L.end, rest = (end ?? S.duration) - T; if (rest < .05) { toast('A agulha está no fim do vídeo.'); return; }
+    pushUndo();
+    // corta o trecho na agulha (como a borda direita da barra) e o quadro de lá fica até o fim da barra, que não muda
+    const v = vidSnap(L, S.duration); L.end = T; vidCutP(L, { ...v, e:v.s + v.P.cyc }, false, true); L.end = end; if (end === undefined) delete L.end;
+    const b = vidCut(L).b, ps = L.vPause || [], q = ps.find(p => p.at >= b - 1e-3);
+    if (q) q.len = +(q.len + rest).toFixed(3); else ps.push({ at:+b.toFixed(3), len:+rest.toFixed(3) });
+    L.vPause = ps;
+    done('O vídeo congela no quadro da agulha até o fim da barra');
+  };
+  const P = vidPlan(L), out = [h('div', { class:'row' }, [
+    h('button', { class:'btn small', text:'Pausar na agulha', title:`${isVid ? 'O quadro da agulha fica parado' : 'O som para'} 1s e continua de onde parou. A barra cresce junto, e o arquivo também se faltar tempo`, onclick:addPause }),
+    isVid ? h('button', { class:'btn small', text:'Congelar até o fim', title:'O vídeo para no quadro da agulha e fica parado até o fim da barra', onclick:freeze }) : null])];
+  // um campo por pausa, na ordem da barra; o nome diz quando ela começa na timeline (primeira passada)
+  let t = L.start, pos = P.a;
+  for (const p of P.ps) {
+    t += (p.at - pos) / P.sp; pos = p.at;
+    if (p.jump) { pos += p.jump; continue; } // corte seco (silenceFields)
+    const i = (L.vPause || []).findIndex(q => Math.abs(clamp(q.at, P.a, P.b) - p.at) < 1e-3 && q.len > .005); if (i < 0) continue;
+    const end = p.at >= P.b - 1e-3;
+    out.push(rangeF(L, 'vp' + i, end && isVid ? 'Congelado' : `Pausa ${fmtSec(t)}`, 0, Math.max(5, Math.ceil(p.len)), .05, fmtSec, {
+      get:() => (L.vPause && L.vPause[i] ? L.vPause[i].len : 0), cap:DUR_MAX, // sem limite de tempo: o arquivo cresce (vidGrow)
+      put:v => fit(() => { L.vPause = L.vPause.map((q, j) => j === i ? { ...q, len:+v.toFixed(3) } : q); }),
+      onInput:() => renderTimeline(),
+      after:() => { if (!L.vPause || L.vPause.every(q => q.len > .005)) return; L.vPause = L.vPause.filter(q => q.len > .005); if (!L.vPause.length) delete L.vPause; done(); renderProps(); } }));
+    t += p.len;
+  }
+  if (P.ps.some(p => !p.jump)) out.push(h('p', { class:'hint', text:'Tempo parado de cada pausa. Em 0 a pausa sai.' }),
+    h('div', { class:'row' }, [h('button', { class:'btn small', text:'Tirar as pausas', onclick:() => { pushUndo(); fit(() => { delete L.vPause; }); done(); renderProps(); } })]));
+  return out;
 }
 // topo da seção Imagem/Vídeo: trocar o arquivo, remover fundo, moldura
 function mediaFields(L) {
   return [
     ...(L.video ? soundNote(L) : []),
-    ...(L.video ? vidCutFields(L) : []),
+    ...(L.video ? (() => { const vs = peersOf(L).filter(o => o.video); if (vs.length < 2) return vidCutFields(L);
+      // vários vídeos escolhidos (Shift + clique na timeline): a velocidade vale para todos; corte, pausas e silêncios são de cada um
+      return [h('p', { class:'hint', text:`${vs.length} vídeos escolhidos: a velocidade vale para todos (o som de cada um acompanha). Corte, pausas e silêncios: escolha um vídeo só.` }),
+        ...vidSpeedFields(L, () => {}), splitRow(L)]; })() : []),
     L.video ? uploadF('Trocar vídeo', 'video/*', async f => {
+      const got = await videoGate(f, { one:true }), g = got && got[0]; if (!g) return; f = g.file; // longo: só o trecho (js/trecho.js)
       toast('Abrindo o vídeo…');
       try {
         const id = await putMedia(f), u = await mediaUrl(id), [p, an] = await Promise.all([videoPoster(u), videoSound(id)]);
         pushUndo(); const olds = S.layers.filter(a => linkOf(a) === L); if (olds.length) S.layers = S.layers.filter(a => !olds.includes(a)); // o som do vídeo antigo sai junto
-        L.video = id; L.src = p.src; L.vdur = p.dur; delete L.vIn; delete L.vOut; vidFitEnd(L); if (an) addVideoAudio(L, an);
+        L.video = id; L.src = p.src; L.vdur = p.dur; delete L.vIn; delete L.vOut; delete L.vPause; delete L.vSkip; if (g.cut) Object.assign(L, g.cut); vidFitEnd(L); if (an) addVideoAudio(L, an);
         await getImage(L.src); changed({ layers:true, props:true }); renderTimeline(); toast(an ? 'Vídeo trocado, com o som numa camada separada' : 'Vídeo trocado'); }
       catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
     }) : uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem', 'image/*', async f => { const src = await imageSrc(f); pushUndo(); L.src = src; delete L.cut; await getImage(L.src); changed({ props:true }); }),
@@ -12358,7 +13484,7 @@ function audioRow() {
 }
 function drawWave(c, lane) {
   const A = S.audio, r = lane.getBoundingClientRect(), dpr = devicePixelRatio || 1; if (!A || !A.peaks || !r.width) return;
-  c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
+  c.width = Math.min(8192, Math.round(r.width * dpr)); c.height = Math.round(r.height * dpr);
   const x = c.getContext('2d'), sk = audioSkip(), len = Math.max(.1, A.dur - sk), d = S.duration;
   x.fillStyle = uiA('sel', .35);
   for (let px = 0; px < c.width; px++) {

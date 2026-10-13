@@ -761,13 +761,13 @@ async function svgImage(L, X) {
   const k = b.w / G.w, cx = b.x + b.w / 2, cy = b.y + b.h / 2, [iw, ih] = imgNat(G.img);
   let body;
   if (masked(L)) {
-    const pn = panOf(L), s = Math.max(G.w / iw, G.h / ih) * pn.zoom, dw = iw * s, dh = ih * s;
+    const pn = panOf(L), s = imgCover(L, G.w, G.h, iw, ih, pn.zoom), dw = iw * s, dh = ih * s;
     const r4 = radii4(radOf(L), G.w, G.h);
     const el = L.mask === 'circle' ? a => `<ellipse cx="0" cy="0" rx="${sn(G.w / 2)}" ry="${sn(G.h / 2)}" ${a}/>`
       : r4.every(v => Math.abs(v - r4[0]) < .01) ? a => `<rect x="${sn(-G.w / 2)}" y="${sn(-G.h / 2)}" width="${sn(G.w)}" height="${sn(G.h)}"${r4[0] > .01 ? ` rx="${sn(r4[0])}"` : ''} ${a}/>`
         : a => `<path d="${vecD(shapePts({ ...L, kind:'rect' }, G))}" ${a}/>`;
     const id = X.id(); X.defs.push(`<clipPath id="${id}">${el('')}</clipPath>`);
-    const fl = ` transform="translate(${sn(pn.ix * G.w)} ${sn(pn.iy * G.h)})${L.flipX || L.flipY ? ` scale(${L.flipX ? -1 : 1} ${L.flipY ? -1 : 1})` : ''}"`;
+    const fl = ` transform="translate(${sn(pn.ix * G.w)} ${sn(pn.iy * G.h)})${L.irot ? ` rotate(${sn(L.irot)})` : ''}${L.flipX || L.flipY ? ` scale(${L.flipX ? -1 : 1} ${L.flipY ? -1 : 1})` : ''}"`;
     body = `<g clip-path="url(#${id})"><image${fl} x="${sn(-dw / 2)}" y="${sn(-dh / 2)}" width="${sn(dw)}" height="${sn(dh)}" preserveAspectRatio="none" xlink:href="${data}"/></g>${svgStroke(L, el, X)}`;
   } else body = `<image${L.flipX || L.flipY ? ` transform="scale(${L.flipX ? -1 : 1} ${L.flipY ? -1 : 1})"` : ''} x="${sn(-G.w / 2)}" y="${sn(-G.h / 2)}" width="${sn(G.w)}" height="${sn(G.h)}" preserveAspectRatio="none" xlink:href="${data}"/>`;
   return svgWrap(L, `<g transform="translate(${sn(cx)} ${sn(cy)})${Math.abs(k - 1) > 1e-4 ? ` scale(${+k.toFixed(5)})` : ''}">${body}</g>`, X);
