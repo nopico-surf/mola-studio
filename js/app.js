@@ -7932,11 +7932,31 @@ function videoEl(L) {
     v = { el, ok:false, media:L.video }; VIDS.set(L.id, v);
     el.addEventListener('loadeddata', () => { v.ok = true; needs = true; });
     // quanto a busca leva (segundos): tocando, a busca mira esse tanto à frente para não chegar atrasada
-    el.addEventListener('seeking', () => { v.s0 = performance.now(); v.mt = null; v.gOk = false; });
+    // a cópia do caminho do <video> (vidGrab) deixa de valer; a do decodificador (v.pv) não depende dele (senão, na conferência
+    // do 1º quadro, vdecCheck, o palco voltava ao <video> no meio da busca)
+    el.addEventListener('seeking', () => { v.s0 = performance.now(); v.mt = null; if (!v.pv) v.gOk = false; });
     el.addEventListener('seeked', () => { if (v.s0) v.lag = clamp(.6 * (v.lag ?? .3) + .4 * (performance.now() - v.s0) / 1000, .05, 3); v.s0 = 0; needs = true; });
     mediaUrl(L.video).then(u => { if (u) el.src = u; else v.missing = true; });
+    vidSeed(L, v);
   }
-  return v.ok ? ((RT.exporting || v.pv) && v.gOk ? v.grab : v.el) : null; // exportando ou prévia decodificada: o quadro copiado (seekVideos / pvDec)
+  if ((RT.exporting || v.pv) && v.gOk && v.grab) return v.grab; // exportando ou prévia decodificada: o quadro copiado (seekVideos / pvDec)
+  if (!v.ok) return null;
+  // prévia decodificada esperando o 1º quadro: o <video> só serve se já está no tempo pedido. Camada nova (2ª metade de uma
+  // divisão, cópia, refazer) tem o <video> parado no começo do arquivo, e aparecia o que ficou para trás (reclamação do usuário)
+  if (v.pv && !RT.exporting) { const el = v.el; return !el.seeking && v.pvAt != null && Math.abs(el.currentTime - v.pvAt) < .05 ? el : null; }
+  return v.el;
+}
+// camada nova (2ª metade de uma divisão, cópia, colar, refazer) nasce com o quadro que outra camada do mesmo arquivo já mostra
+// no tempo dela: o <video> e o decodificador são novos e, até o 1º quadro decodificado, ela ficava vazia ou mostrava o começo
+// do arquivo (reclamação do usuário: "aparecem frames do que ficou para trás"). Sem esse quadro, videoEl não desenha nada
+function vidSeed(L, v) {
+  if (RT.exporting || !phase(L, T)) return;
+  const vt = vidTime(L, T);
+  const a = [...VIDS.values()].find(o => o !== v && o.media === L.video && o.pv && o.gOk && o.grab && o.grab.width && Math.abs(o.gAt - vt) < .05);
+  if (!a) return;
+  vidGrab(v, a.gAt, a.gT, false);
+  const c = v.grab; c.width = a.grab.width; c.height = a.grab.height; c.getContext('2d').drawImage(a.grab, 0, 0);
+  v.pv = true; v.gAt = -1; // pede o quadro de verdade no próximo tick (e confere o decodificador dela)
 }
 // camada que toca vídeo agora: a de imagem com vídeo, ou fundo/forma com preenchimento "Vídeo"
 const vidOn = L => !!L.video && (L.type === 'image' || (L.type === 'shape' || L.type === 'bg') && L.mode === 'video');
@@ -7989,11 +8009,14 @@ const vidLoops = L => (L.end ?? S.duration) - L.start > vidPlan(L).cyc + .05;
 // + VID_EPS: o tempo exato do quadro às vezes cai uns décimos de ms antes dele (WebM guarda em ms) e mostrava o anterior
 const VID_EPS = 1 / 240;
 function vidTime(L, t, el) { const x = xfVidTime(L, t, el); return x != null ? x : vidTime0(L, t, el); } // na transição entre clipes, o resto do arquivo
+// tempo dentro da passada; no fim exato dela (a agulha no fim da barra: a camada ainda conta como na tela) segura o último quadro.
+// Antes dava a volta e mostrava o começo do trecho: com um clipe colado depois (Dividir), aparecia o que ficou para trás
+const vidLap = (vt, cyc) => vt < cyc ? vt : vt < cyc + 1e-3 ? Math.max(0, cyc - .02) : vt % cyc;
 function vidTime0(L, t, el) {
   const vt = Math.max(0, t - L.start);
-  if (L.vPause || L.vSkip) { const P = vidPlan(L, el); if (P.ps.length) return Math.min(vidRun(P, vt < P.cyc - .02 ? vt : vt % P.cyc)[0], P.b - .02) + VID_EPS; }
+  if (L.vPause || L.vSkip) { const P = vidPlan(L, el); if (P.ps.length) return Math.min(vidRun(P, vidLap(vt, P.cyc))[0], P.b - .02) + VID_EPS; }
   const { a, b, sp } = vidCut(L, el), len = (b - a) / sp;
-  return a + (vt < len - .02 ? vt : vt % len) * sp + VID_EPS;
+  return a + vidLap(vt, len) * sp + VID_EPS;
 }
 // a camada dura o trecho (como um clipe num editor de vídeo): o fim da barra acompanha o corte (e as pausas)
 function vidFitEnd(o) {
@@ -8087,6 +8110,10 @@ function vidTrim(o, v, mode) {
 // de novo antes de a busca anterior terminar (buscar a cada 0,25 s de atraso virava uma cascata e o vídeo congelava),
 // diferença pequena se acerta na velocidade, e fora da tela o vídeo já espera parado no começo do trecho.
 const vidRate = (el, r) => { if (Math.abs(el.playbackRate - r) > .01) el.playbackRate = r; };
+const VID_PREROLL = 1.5; // s antes de a camada entrar em que o 1º quadro dela é decodificado (syncVideos)
+// segundos até a camada entrar; tocando com Repetir, perto do fim, quem está no começo entra depois da volta (senão entrava com o
+// último quadro da passada anterior)
+const vidAhead = L => { const a = L.start - T; return a <= 0 && playing && S.loop ? a + S.duration : a; };
 /* Prévia decodificada (pedido do usuário: o vídeo travava/congelava na timeline, principalmente editando; na exportação não).
    O <video> anda no relógio dele: com o palco pesado ele adiantava, pausava esperando e voltava, e cada busca no meio do vídeo
    decodifica desde o quadro-chave. Na prévia o quadro vem do mesmo decodificador da exportação (vdecFrame): é sempre o quadro
@@ -8098,8 +8125,11 @@ function pvDec(v, vt) {
   if (v.noDec || !window.VideoDecoder || !window.EncodedVideoChunk) { v.pv = false; return false; }
   v.pv = true;
   if (!v.el.paused) v.el.pause();
+  v.pvAt = vt;
   if (v.pvBusy) return true; // o próximo tick pede o tempo de agora
   if (v.gOk && Math.abs(v.gAt - vt) < .0005) return true;
+  // ainda sem quadro decodificado: o <video> vai para o mesmo tempo, para ter o que mostrar enquanto isso (videoEl)
+  if (!v.gOk && v.ok && !v.el.seeking && Math.abs(v.el.currentTime - vt) > .02) v.el.currentTime = vt;
   v.pvBusy = true;
   (async () => {
     if (!await vdecFrame(v, vt)) throw new Error('sem quadro');
@@ -8113,6 +8143,8 @@ function syncVideos() {
   // acabou a exportação: o decodificador e a cópia recomeçam na prévia
   if (RT.exporting) RT.vexp = true;
   else if (RT.vexp) { RT.vexp = false; vdecCloseAll(); for (const v of VIDS.values()) v.gOk = false; }
+  // quem entra logo ganha o <video> e o decodificador antes (o 1º quadro é preparado abaixo)
+  if (!RT.exporting) for (const L of S.layers) if (vidOn(L) && L.visible && !VIDS.has(L.id)) { const a = vidAhead(L); if (a > 0 && a < VID_PREROLL) videoEl(L); }
   for (const [id, v] of VIDS) {
     const L = S.layers.find(l => l.id === id);
     if (!L || !vidOn(L) || L.video !== v.media) {
@@ -8124,6 +8156,10 @@ function syncVideos() {
     if (!L.visible || RT.exporting) { if (!el.paused) el.pause(); continue; }
     if (!phase(L, T)) {
       if (!el.paused) el.pause(); vidRate(el, 1);
+      // a camada entra daqui a pouco: o 1º quadro dela já fica pronto. Senão, ao entrar, aparecia por uns quadros o último que ela
+      // mostrou (da outra vez que a agulha passou por ali) enquanto o decodificador voltava ao quadro-chave (reclamação do usuário)
+      const ahead = vidAhead(L);
+      if (ahead > 0 && ahead < VID_PREROLL && !v.noDec) { pvDec(v, vidTime(L, L.start, el)); continue; }
       if (v.pv) continue; // decodificado: espera; o quadro é pedido quando a camada entra
       const a = vidCut(L, el).a; if (!el.seeking && Math.abs(el.currentTime - a) > .02) el.currentTime = a;
       continue;
@@ -8376,6 +8412,7 @@ function vdecDraw(v, fr, rot, vt) {
 const vdecSig = src => { const c = document.createElement('canvas'); c.width = 16; c.height = 9; const x = c.getContext('2d', { willReadFrequently:true }); x.drawImage(src, 0, 0, 16, 9); return x.getImageData(0, 0, 16, 9).data; };
 async function vdecCheck(v, vt) {
   const el = v.el;
+  if (el.seeking) await vidSeek(el); // a busca que o pvDec começou (senão comparava com o quadro de antes dela)
   if (Math.abs(el.currentTime - vt) > .0005) { const w = vidSeek(el); el.currentTime = vt; await w; }
   const a = vdecSig(el), b = vdecSig(v.grab); let e = 0;
   for (let i = 0; i < a.length; i += 4) e += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
@@ -11702,7 +11739,7 @@ function renderProps() {
   if (propTab !== 'anim') box.append(...[alignBar(), pathfinderSec(), pickedLayers().length > 1 ? scaleBar() : null, flowSec()].filter(Boolean));
 
   if (propTab === 'anim' && gid) { box.append(...groupAnimSecs(gid, head, box)); return; }
-  if (gid) { box.append(...groupStyleSecs(gid)); return; }
+  if (gid) { box.append(...groupStyleSecs(gid)); const vf = videoSelFields(); if (vf.length) box.append(h('section', { class:'sec' }, vf)); return; } // vídeos dentro do grupo: velocidade para todos
   if (propTab === 'anim') {
     const inKeys = L.type === 'text' ? TEXT_IN : BLOCK_IN[L.type];
     const outKeys = L.type === 'text' ? TEXT_OUT : BLOCK_OUT[L.type];
@@ -11865,6 +11902,7 @@ function styleProps(L) {
     const tw = tpPair(); // texto + forma: o texto passa a seguir o contorno da forma
     if (tw) put(h('h3', { text:'Texto na forma' }), h('div', { class:'row' }, [h('button', { class:'btn small', text:'Pôr o texto na forma', title:'O texto segue o contorno da forma (como o texto no caminho do Illustrator)', onclick:() => { tpAttach(tw.t, tw.s); select(tw.t.id); } })]),
       h('p', { class:'hint', text:'O texto passa a correr pelo contorno da forma e acompanha quando ela muda.' }));
+    put(...videoSelFields());
     put(h('h3', { text:'Aparência' }),
       h('p', { class:'hint', text:`${peersAny(L).length} elementos de tipos diferentes: aqui ficam só as opções em comum. Escolha um tipo só para ver as demais.` }),
       ...lookFields(L));
@@ -13363,9 +13401,19 @@ function vidPauseFields(L) {
   return out;
 }
 // topo da seção Imagem/Vídeo: trocar o arquivo, remover fundo, moldura
+// vários vídeos na seleção (Shift + clique na timeline, grupo/frame inteiro, Ctrl + A): a velocidade vale para todos, o som de cada um
+// acompanha (linkSync). Corte, pausas e silêncios são de cada vídeo, então ficam para quando se escolhe um só (pedido do usuário)
+function videoSelFields() {
+  const vs = pickedLayers().filter(o => o.type === 'image' && o.video);
+  if (vs.length < 2) return [];
+  const V = vs.includes(selL()) ? selL() : vs[0];
+  return [h('h3', { text:'Vídeos' }),
+    h('p', { class:'hint', text:`${vs.length} vídeos escolhidos: a velocidade vale para todos (o som de cada um acompanha). Corte, pausas e silêncios: escolha um vídeo só.` }),
+    ...vidSpeedFields(V, () => {}), splitRow(V)];
+}
 function mediaFields(L) {
   return [
-    ...(L.video ? soundNote(L) : []),
+    ...(L.video ? soundNote(L) : videoSelFields()),
     ...(L.video ? (() => { const vs = peersOf(L).filter(o => o.video); if (vs.length < 2) return vidCutFields(L);
       // vários vídeos escolhidos (Shift + clique na timeline): a velocidade vale para todos; corte, pausas e silêncios são de cada um
       return [h('p', { class:'hint', text:`${vs.length} vídeos escolhidos: a velocidade vale para todos (o som de cada um acompanha). Corte, pausas e silêncios: escolha um vídeo só.` }),
