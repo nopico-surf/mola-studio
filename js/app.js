@@ -11429,7 +11429,7 @@ function cornersF(L, fmt) {
 }
 function textF(L, k, label, multi) {
   const id = fid(L, k);
-  const inp = h(multi ? 'textarea' : 'input', multi ? { id, rows:3 } : { id, type:'text' });
+  const inp = h(multi ? 'textarea' : 'input', multi ? { id, rows:3, spellcheck:'true', lang:'pt-BR' } : { id, type:'text', spellcheck:'true', lang:'pt-BR' }); // erro de português sublinhado em vermelho, sugestão no botão direito
   inp.value = L[k];
   inp.addEventListener('focus', pushUndo);
   inp.addEventListener('input', () => { L[k] = inp.value; RT.layout.clear(); changed(); });
@@ -11439,7 +11439,7 @@ function textF(L, k, label, multi) {
 const WEIGHTS = [[300, 'Light'], [400, 'Regular'], [500, 'Medium'], [600, 'Semibold'], [700, 'Bold'], [800, 'Extrabold'], [900, 'Black']];
 function richF(L, label) {
   const id = fid(L, 'text');
-  const ed = h('div', { class:'rich', id, contenteditable:'true', role:'textbox', 'aria-multiline':'true', 'aria-label':label, spellcheck:'false' });
+  const ed = h('div', { class:'rich', id, contenteditable:'true', role:'textbox', 'aria-multiline':'true', 'aria-label':label, spellcheck:'true', lang:'pt-BR' }); // erro de português sublinhado em vermelho, sugestão no botão direito
   // cada letra guarda peso e itálico; null = segue o da camada
   const toChars = () => { const cs = []; for (const x of runsOf(L) || [{ t:L.text }]) for (const ch of x.t) cs.push({ ch, w:x.w ?? null, i:x.i ?? null, c:x.c ?? null }); return cs; };
   const fromChars = cs => {

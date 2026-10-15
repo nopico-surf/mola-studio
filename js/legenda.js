@@ -675,7 +675,7 @@ function capSecs(L) {
   const only = !!RT.capOnlyDub && dub > 0, list = h('div', { class:'leg-list', id:fid(L, 'caplist') });
   for (const b of bl) {
     const bad = b.ws.some(w => w.c != null && w.c < CAP_DUB); if (only && !bad) continue;
-    const tx = h('div', { class:'leg-tx', contenteditable:'plaintext-only', spellcheck:'true', 'aria-label':'Texto do trecho', 'data-s':String(b.s) });
+    const tx = h('div', { class:'leg-tx', contenteditable:'plaintext-only', spellcheck:'true', lang:'pt-BR', 'aria-label':'Texto do trecho', 'data-s':String(b.s) });
     b.ws.forEach((w, k) => { if (k) tx.append(' '); tx.append(w.c != null && w.c < CAP_DUB ? h('mark', { text:w.w, title:`Conferir: o som combina pouco com esta palavra (${Math.round(w.c * 100)}%)` }) : w.w); });
     const orig = tx.textContent;
     tx.addEventListener('focus', () => { pause(); T = clamp(b.s + off + .02, 0, S.duration); RT.userSeek = true; needs = true; });
