@@ -8792,12 +8792,13 @@ async function buildMix(sr = 48000, d = S.duration, sl = null, voice = false) {
     if (sl != null && slideOfL(A) !== sl) continue;
     const V = linkOf(A); if (V && !vidOn(V)) continue; // preenchimento que deixou de ser vídeo
     const t0 = A.start, t1 = Math.min(A.end ?? S.duration, d); if (t1 <= t0 + .01) continue;
+    const dst = audFade(off, A, t0, t1, riseOut(off, A)); // subida (riseOut) e, por cima, entra/sai suave (afIn/afOut) por cima de tudo: vale com repetição, pausas e cortes secos
     let buf = null; try { buf = await musicBuffer(A.aud); } catch (e) {} if (!buf) continue;
     const { a, sp } = vidCut(A), b = Math.min(vidCut(A).b, buf.duration); if (b - a < .02) continue;
     // com velocidade: o trecho [a, b] já esticado/encolhido (vidStretch); bt = segundo do vídeo → segundo nesse buffer
     let bt = x => x;
     if (sp !== 1) { const sb = vidStretch(A, buf, a, b, sp); if (!sb) continue; buf = sb; bt = x => (x - a) / sp; }
-    const P = vidPlan(A), len = (b - a) / sp, dst = riseOut(off, A);
+    const P = vidPlan(A), len = (b - a) / sp;
     if (P.ps.length) { // com pausas ou cortes secos: um pedaço por trecho que toca, silêncio nas pausas, repetindo a passada como o vídeo
       const v = A.vol ?? 1, once = t1 - t0 <= P.cyc + .01;
       for (let c = t0; c < t1 - .01; c += P.cyc) {
@@ -8834,6 +8835,17 @@ async function buildMix(sr = 48000, d = S.duration, sl = null, voice = false) {
   }
   return off.startRendering();
 }
+/* entra e sai suave (pedido do usuário: o corte do som não ficar seco). afIn/afOut = segundos no começo/fim da barra da camada,
+   cada um no máximo metade dela. Sem fade, o som vai direto (sem nó a mais) */
+function audFade(off, A, t0, t1, out = off.destination) {
+  const fi = Math.min(A.afIn || 0, (t1 - t0) / 2), fo = Math.min(A.afOut || 0, (t1 - t0) / 2);
+  if (fi < .01 && fo < .01) return out;
+  const g = off.createGain(), G = g.gain; g.connect(out);
+  G.setValueAtTime(fi >= .01 ? 0 : 1, 0);
+  if (fi >= .01) { G.setValueAtTime(0, t0); G.linearRampToValueAtTime(1, t0 + fi); }
+  if (fo >= .01) { G.setValueAtTime(1, t1 - fo); G.linearRampToValueAtTime(0, t1); }
+  return g;
+}
 async function pickAudio(sr) {
   if (!('AudioEncoder' in window)) return null;
   for (const [codec, mux] of [['mp4a.40.2', 'aac'], ['opus', 'opus']]) {
@@ -8862,7 +8874,7 @@ async function encodeAudio(buf, pick) {
 const AUD = { ctx:null, src:null, buf:null, sig:'', chk:0, building:false, c0:0, t0:0 };
 function audioSig() {
   const A = S.audio, fx = S.sfx && S.sfx !== 'off';
-  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from, riseOf()] : 0, S.sfx || 'off', audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol, l.vPause, l.vSkip, l.vSpeed, riseOf(l)]), S.layers.filter(l => l.xin).map(l => [l.id, l.xin, l.start, l.visible]), fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
+  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from, riseOf()] : 0, S.sfx || 'off', audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol, l.afIn, l.afOut, l.vPause, l.vSkip, l.vSpeed, riseOf(l)]), S.layers.filter(l => l.xin).map(l => [l.id, l.xin, l.start, l.visible]), fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
 }
 async function rebuildMix(sig) {
   AUD.building = true;
@@ -8943,21 +8955,56 @@ async function extractSound(V) {
   select(V.id, true); changed({ layers:true, props:true }); renderTimeline();
   toast(`O som entrou como "${A.name}", no grupo do vídeo`, 4000, UNDO_ACT);
 }
+/* som solto (pedido do usuário: cortar e mudar o volume de um som que não veio de vídeo). MP3/WAV/M4A vira a mesma camada de
+   Áudio do som do vídeo, sem link: barra com a onda, corte pelas bordas e pelos campos, dividir (S), velocidade, pausas e
+   "Tirar silêncios" já valem. A Trilha continua sendo a música de fundo (batidas como ímã). Entra na agulha (pausada) e vai até o
+   fim do som ou do arquivo/slide. Peso: o som decodificado fica na memória (MUSIC, ~23 MB por minuto), como o do vídeo */
+async function addAudioFile(f) {
+  if (!f) return;
+  if (S.still) { toast('Imagem estática não tem som. Digite uma duração para voltar ao vídeo.'); return; }
+  toast('Abrindo o som…', 10000);
+  try {
+    const id = await putMedia(f), an = await videoSound(id); if (!an) { toast('Esse arquivo está sem som ou o navegador não lê esse formato. Tente MP3, WAV ou M4A.'); return; }
+    const buf = await musicBuffer(id), dur = +buf.duration.toFixed(3), si = curSlide(), e = slides() > 1 ? slideEnd(si) : S.duration;
+    const st = +clamp(playing ? 0 : T, 0, Math.max(0, e - .5)).toFixed(3);
+    const A = base('audio', 'audio', { name:(f.name || 'Som').replace(/\.[^.]+$/, ''), aud:id, vdur:dur, vol:1, peaks:an.peaks, pkS:an.pkS,
+      in:'cut', out:'cut', inDur:0, outDur:0 }, { start:st, x:.5 + si });
+    pushUndo(); S.layers.push(A); vidFitEnd(A); A.end = Math.min(A.end, e);
+    select(A.id); propTab = 'style'; renderProps(); changed({ layers:true }); renderTimeline();
+    toast(st + dur > e + .05 ? `Som adicionado. Ele tem ${fmtSec(dur)} e passa do fim: aumente a Duração ou corte pelas bordas da barra` : 'Som adicionado: corte pelas bordas da barra na timeline', 5000, UNDO_ACT);
+  } catch (err) { console.warn(err); toast('Não consegui ler esse som. Tente MP3, WAV ou M4A.'); }
+}
+// o som de um vídeo: a camada que segue ele (ou, sem sync, a que usa o mesmo arquivo)
+function soundsOf(V) { const ls = S.layers.filter(a => linkOf(a) === V); return ls.length ? ls : S.layers.filter(a => a.type === 'audio' && a.aud === V.video); }
+/* volume e fade de várias camadas de som de uma vez (a camada de Áudio escolhida, ou o som dos vídeos escolhidos). Volume até
+   VOL_MAX: acima de 100% aumenta, e um som que já é alto pode distorcer */
+const VOL_MAX = 2;
+function soundFields(As) {
+  const A = As[0], put = k => v => { for (const o of As) { if (k === 'vol' || v >= .01) o[k] = +(+v).toFixed(2); else delete o[k]; } };
+  const sec = v => v >= .01 ? fmtSec(v) : '0,0s';
+  return [rangeF(A, 'vol', 'Volume', 0, VOL_MAX, .01, v => Math.round((v ?? 1) * 100) + '%', { get:() => A.vol ?? 1, put:put('vol') }),
+    rangeF(A, 'afIn', 'Entra suave', 0, 5, .05, sec, { get:() => A.afIn || 0, put:put('afIn'), cap:60 }),
+    rangeF(A, 'afOut', 'Sai suave', 0, 5, .05, sec, { get:() => A.afOut || 0, put:put('afOut'), cap:60 })];
+}
+// volume e fade do som de vários vídeos de uma vez (o primeiro com som manda no valor mostrado)
+function vidSoundAll(vs) { const As = vs.flatMap(soundsOf); return As.length ? soundFields(As) : []; }
 // painel do vídeo: onde está o som dele (ou o botão para trazer de volta)
 function soundNote(V) {
   const A = S.layers.find(a => linkOf(a) === V) || S.layers.find(a => a.type === 'audio' && a.aud === V.video);
-  if (A) return [h('p', { class:'hint', text:`O som está na camada "${A.name}"${A.grp && A.grp === V.grp ? ', no mesmo grupo' : ''}. Começa quando a camada entra.` }), ...riseFields(A)];
+  if (A) return [...soundFields(soundsOf(V)),
+    h('p', { class:'hint', text:`O som está na camada "${A.name}"${A.grp && A.grp === V.grp ? ', no mesmo grupo' : ''}. Começa quando a camada entra.` }), ...riseFields(A)];
   return [h('p', { class:'hint', text:'Vídeo sem som. Começa quando a camada entra.' }),
     h('div', { class:'row' }, [h('button', { class:'btn small', text:'Usar o som do vídeo', title:'Põe o som do arquivo numa camada de Áudio, no grupo do vídeo', onclick:() => extractSound(V) })])];
 }
 function audioProps(L) {
-  const V = L.link && S.layers.find(l => l.id === L.link && l.video === L.aud), t = h('section', { class:'sec' }, [h('h3', { text:'Tempo' })]);
+  // som que corta sozinho: a seção se chama Corte e começa aberta (Tempo começa fechada e o corte ficava escondido)
+  const V = L.link && S.layers.find(l => l.id === L.link && l.video === L.aud), t = h('section', { class:'sec' }, [h('h3', { text:V && L.sync ? 'Tempo' : 'Corte' })]);
   if (V) t.append(checkF(L, 'sync', 'Seguir o vídeo'));
   if (V && L.sync) t.append(h('p', { class:'hint', text:`Entra, sai e corta junto com "${V.name}". Desmarque para cortar o som sozinho.` }), splitRow(L));
   else t.append(...vidCutFields(L));
-  return [h('section', { class:'sec' }, [h('h3', { text:'Som' }),
-    rangeF(L, 'vol', 'Volume', 0, 1.5, .01, v => Math.round((v ?? 1) * 100) + '%'), ...riseFields(L),
-    h('p', { class:'hint', text:'Toca na prévia (espaço) e sai no MP4. Apagar esta camada deixa o vídeo mudo.' })]), t];
+  const As = peersOf(L).filter(o => o.type === 'audio');
+  return [h('section', { class:'sec' }, [h('h3', { text:'Som' }), ...soundFields(As.length ? As : [L]), ...riseFields(L),
+    h('p', { class:'hint', text:(As.length > 1 ? `${As.length} sons escolhidos: volume e fade valem para todos. ` : '') + 'Toca na prévia (espaço) e sai no MP4.' + (V ? ' Apagar esta camada deixa o vídeo mudo.' : '') })]), t];
 }
 // onda na barra da timeline: o trecho cortado, repetindo se a barra for mais longa
 function drawAudBar(bar, L) {
@@ -12839,7 +12886,7 @@ function addLayer(L, opts = {}) {
 function renderAdds() {
   const box = $('#adds'); box.innerHTML = '';
   for (const k of ADD_KINDS) {
-    if (S.still && (k.id === 'camera' || k.id === 'fx')) continue; // imagem estática: câmera e transição não existem
+    if (S.still && (k.id === 'camera' || k.id === 'fx' || k.id === 'sound')) continue; // imagem estática: câmera e transição não existem
     box.append(h('button', { class:'add', title:'Adicionar ' + k.label.toLowerCase(), onclick:() => {
     if (k.add) { k.add(); return; }
     if (k.id === 'image') { $('#imgFile').click(); return; }
@@ -12975,7 +13022,7 @@ $('#svgFile').addEventListener('change', e => { addImageFile(e.target.files[0]);
     const fs = [...e.dataTransfer.files], f = fs.find(isImg) || fs.find(isVid) || fs.find(isAud);
     dz.hidden = true; if (!f) return;
     e.preventDefault();
-    if (isAud(f)) { setMusicFile(f); return; } // música vai para a trilha
+    if (isAud(f)) { addAudioFile(f); return; } // som solto vira camada de Áudio (cortar, volume); a música de fundo é o "Enviar música" da Trilha
     const r = $('#cv').getBoundingClientRect(), inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
     (isVid(f) ? addVideoFile : addImageFile)(f, inside ? { x:clamp((e.clientX - r.left) / r.width) * slides(), y:clamp((e.clientY - r.top) / r.height) } : null);
   });
@@ -13434,16 +13481,16 @@ function videoSelFields() {
   if (vs.length < 2) return [];
   const V = vs.includes(selL()) ? selL() : vs[0];
   return [h('h3', { text:'Vídeos' }),
-    h('p', { class:'hint', text:`${vs.length} vídeos escolhidos: a velocidade vale para todos (o som de cada um acompanha). Corte, pausas e silêncios: escolha um vídeo só.` }),
-    ...vidSpeedFields(V, () => {}), splitRow(V)];
+    h('p', { class:'hint', text:`${vs.length} vídeos escolhidos: a velocidade e o volume valem para todos (o som de cada um acompanha). Corte, pausas e silêncios: escolha um vídeo só.` }),
+    ...vidSoundAll(vs), ...vidSpeedFields(V, () => {}), splitRow(V)];
 }
 function mediaFields(L) {
   return [
-    ...(L.video ? soundNote(L) : videoSelFields()),
+    ...(L.video ? (peersOf(L).filter(o => o.video).length > 1 ? [] : soundNote(L)) : videoSelFields()),
     ...(L.video ? (() => { const vs = peersOf(L).filter(o => o.video); if (vs.length < 2) return vidCutFields(L);
       // vários vídeos escolhidos (Shift + clique na timeline): a velocidade vale para todos; corte, pausas e silêncios são de cada um
-      return [h('p', { class:'hint', text:`${vs.length} vídeos escolhidos: a velocidade vale para todos (o som de cada um acompanha). Corte, pausas e silêncios: escolha um vídeo só.` }),
-        ...vidSpeedFields(L, () => {}), splitRow(L)]; })() : []),
+      return [h('p', { class:'hint', text:`${vs.length} vídeos escolhidos: a velocidade e o volume valem para todos (o som de cada um acompanha). Corte, pausas e silêncios: escolha um vídeo só.` }),
+        ...vidSoundAll(vs), ...vidSpeedFields(L, () => {}), splitRow(L)]; })() : []),
     L.video ? uploadF('Trocar vídeo', 'video/*', async f => {
       const got = await videoGate(f, { one:true }), g = got && got[0]; if (!g) return; f = g.file; // longo: só o trecho (js/trecho.js)
       toast('Abrindo o vídeo…');
@@ -13521,6 +13568,7 @@ function addPrice() {
 }
 ADD_KINDS.push(
   { id:'price', label:'Preço de/por', gl:'<span style="font-size:10px;font-weight:700"><s style="opacity:.6">9</s> 5</span>', add:addPrice },
+  { id:'sound', label:'Som', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 6v4M5.5 3.5v9M9 1.5v13M12.5 4.5v7M16 6.5v3"/></svg>', add:() => pickFile('audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac', addAudioFile) },
   { id:'video', label:'Vídeo', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="18" height="14" rx="2"/><path d="M8 5v6l5-3z" fill="currentColor"/></svg>', add:() => pickFile('video/*', addVideoFile) },
   { id:'camera', label:'Câmera', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="13" height="10" rx="2"/><path d="M14 7l5-3v8l-5-3"/></svg>', add:addCamera },
   { id:'fx', label:'Transição', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 15L9 1M6 15L14 1M11 15L19 1"/></svg>', add:addFx },
@@ -13536,14 +13584,14 @@ function renderAudio() {
   const box = $('#audioBox'); if (!box || !S) return; box.innerHTML = '';
   const A = S.audio, pick = () => pickFile('audio/*,.mp3,.wav,.m4a,.aac,.ogg', setMusicFile);
   if (!A) box.append(h('div', { class:'row' }, [h('button', { class:'btn small', text:'Enviar música', onclick:pick })]),
-    h('p', { class:'hint', text:'MP3, WAV ou M4A. As batidas viram ímã na timeline. Também dá para arrastar o arquivo para o palco.' }));
+    h('p', { class:'hint', text:'Música de fundo do arquivo todo: as batidas viram ímã na timeline. Para cortar um som, use "Som" em Adicionar ou arraste o arquivo para o palco.' }));
   else {
     box.append(h('div', { class:'aud' }, [
       h('span', { class:'aud-nm' }, [h('b', { text:A.name, title:A.name }), h('small', { text:`${A.bpm} bpm · ${fmtSec(A.dur)}` })]),
       h('button', { class:'btn small ghost', text:'Trocar', onclick:pick }),
       h('button', { class:'icon-btn', title:'Tirar a música', 'aria-label':'Tirar a música', html:ICONS.trash, onclick:() => { pushUndo(); S.audio = null; changed(); renderAudio(); renderTimeline(); toast('Música removida', 5000, UNDO_ACT); } })]),
       segSet(A, 'from', 'A música começa', [['zero', 'Do início'], ['beat', '1ª batida'], ['peak', 'Parte forte']], () => renderTimeline()),
-      rangeF(A, 'vol', 'Volume', 0, 1, .01, v => Math.round(v * 100) + '%'),
+      rangeF(A, 'vol', 'Volume', 0, VOL_MAX, .01, v => Math.round(v * 100) + '%'),
       ...riseFields(A),
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Encaixar na batida', title:'Cada elemento entra na batida mais próxima (Ctrl+Z desfaz)', onclick:snapToBeats })]));
   }
