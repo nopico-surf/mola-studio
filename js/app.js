@@ -8621,13 +8621,21 @@ async function setMusicFile(f) {
 }
 // onde a música começa: do início, na primeira batida com som ou na parte mais forte
 const audioSkip = () => { const A = S.audio; return !A ? 0 : A.from === 'beat' ? A.firstLoud || 0 : A.from === 'peak' ? A.peakAt || 0 : 0; };
-// volume que sobe num momento (A.rise = 'up'): A.riseLow (fração do Volume) até A.riseAt (s), depois sobe em A.riseDur (s) até 100%
+// volume que sobe num momento (A.rise = 'up'): A.riseLow (fração do Volume) até A.riseAt (s da timeline), depois sobe em A.riseDur (s) até 100%
+// vale para a trilha (S.audio, o padrão) e para cada camada de Áudio (o som dos vídeos)
 const RISE_DEF = { low:.2, dur:1.5 };
-const riseOf = () => { const A = S.audio; if (!A || A.rise !== 'up') return null; return { lo:clamp(A.riseLow ?? RISE_DEF.low, 0, 1), at:Math.max(0, A.riseAt ?? 0), dur:Math.max(.01, A.riseDur ?? RISE_DEF.dur) }; };
+const riseOf = (A = S.audio) => { if (!A || A.rise !== 'up') return null; return { lo:clamp(A.riseLow ?? RISE_DEF.low, 0, 1), at:Math.max(0, A.riseAt ?? 0), dur:Math.max(.01, A.riseDur ?? RISE_DEF.dur) }; };
 // fator do volume no segundo t da timeline (1 = o Volume da trilha); curva suave (smoothstep), sem degrau
-function riseGain(t) {
-  const R = riseOf(); if (!R) return 1;
+function riseGain(t, A) {
+  const R = riseOf(A); if (!R) return 1;
   const u = clamp((t - R.at) / R.dur, 0, 1); return R.lo + (1 - R.lo) * u * u * (3 - 2 * u);
+}
+// saída de uma camada de Áudio na mistura: direto, ou por um ganho com a curva da subida (tempo da timeline)
+function riseOut(off, A) {
+  const R = riseOf(A); if (!R) return off.destination;
+  const n = off.createGain(), cv = new Float32Array(128);
+  for (let i = 0; i < cv.length; i++) cv[i] = riseGain(R.at + R.dur * i / (cv.length - 1), A);
+  n.gain.value = R.lo; n.gain.setValueCurveAtTime(cv, R.at, R.dur); n.connect(off.destination); return n;
 }
 // batidas no tempo do vídeo (a música repete se for mais curta)
 function beatTimes() {
@@ -8789,7 +8797,7 @@ async function buildMix(sr = 48000, d = S.duration, sl = null, voice = false) {
     // com velocidade: o trecho [a, b] já esticado/encolhido (vidStretch); bt = segundo do vídeo → segundo nesse buffer
     let bt = x => x;
     if (sp !== 1) { const sb = vidStretch(A, buf, a, b, sp); if (!sb) continue; buf = sb; bt = x => (x - a) / sp; }
-    const P = vidPlan(A), len = (b - a) / sp;
+    const P = vidPlan(A), len = (b - a) / sp, dst = riseOut(off, A);
     if (P.ps.length) { // com pausas ou cortes secos: um pedaço por trecho que toca, silêncio nas pausas, repetindo a passada como o vídeo
       const v = A.vol ?? 1, once = t1 - t0 <= P.cyc + .01;
       for (let c = t0; c < t1 - .01; c += P.cyc) {
@@ -8799,7 +8807,7 @@ async function buildMix(sr = 48000, d = S.duration, sl = null, voice = false) {
           if (e > t + .005) {
             const s = off.createBufferSource(), g = off.createGain(); s.buffer = buf;
             g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v, t + .005); g.gain.setValueAtTime(v, Math.max(t + .005, e - .01)); g.gain.linearRampToValueAtTime(0, e);
-            s.connect(g); g.connect(off.destination); s.start(t, bt(pos)); s.stop(e);
+            s.connect(g); g.connect(dst); s.start(t, bt(pos)); s.stop(e);
           }
           t += n + p.len; pos = p.at + (p.jump || 0); // corte seco: o próximo pedaço começa depois do trecho pulado
         }
@@ -8817,7 +8825,7 @@ async function buildMix(sr = 48000, d = S.duration, sl = null, voice = false) {
     const en = Math.min(d, stop + post), up = pre ? t0 + pre : st + .01, dn = post ? Math.max(up, stop - post) : en - .01;
     // rampas de 10 ms nas pontas: sem estalo no corte
     g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(v, up); g.gain.setValueAtTime(v, Math.max(up, dn)); g.gain.linearRampToValueAtTime(0, en);
-    s.connect(g); g.connect(off.destination); s.start(st, o0); s.stop(en);
+    s.connect(g); g.connect(dst); s.start(st, o0); s.stop(en);
   }
   if (S.sfx && S.sfx !== 'off' && !voice) {
     const out = off.createGain(), comp = off.createDynamicsCompressor(), noise = sfxNoise(off);
@@ -8854,7 +8862,7 @@ async function encodeAudio(buf, pick) {
 const AUD = { ctx:null, src:null, buf:null, sig:'', chk:0, building:false, c0:0, t0:0 };
 function audioSig() {
   const A = S.audio, fx = S.sfx && S.sfx !== 'off';
-  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from, riseOf()] : 0, S.sfx || 'off', audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol, l.vPause, l.vSkip, l.vSpeed]), S.layers.filter(l => l.xin).map(l => [l.id, l.xin, l.start, l.visible]), fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
+  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from, riseOf()] : 0, S.sfx || 'off', audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol, l.vPause, l.vSkip, l.vSpeed, riseOf(l)]), S.layers.filter(l => l.xin).map(l => [l.id, l.xin, l.start, l.visible]), fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
 }
 async function rebuildMix(sig) {
   AUD.building = true;
@@ -8938,7 +8946,7 @@ async function extractSound(V) {
 // painel do vídeo: onde está o som dele (ou o botão para trazer de volta)
 function soundNote(V) {
   const A = S.layers.find(a => linkOf(a) === V) || S.layers.find(a => a.type === 'audio' && a.aud === V.video);
-  if (A) return [h('p', { class:'hint', text:`O som está na camada "${A.name}"${A.grp && A.grp === V.grp ? ', no mesmo grupo' : ''}. Começa quando a camada entra.` })];
+  if (A) return [h('p', { class:'hint', text:`O som está na camada "${A.name}"${A.grp && A.grp === V.grp ? ', no mesmo grupo' : ''}. Começa quando a camada entra.` }), ...riseFields(A)];
   return [h('p', { class:'hint', text:'Vídeo sem som. Começa quando a camada entra.' }),
     h('div', { class:'row' }, [h('button', { class:'btn small', text:'Usar o som do vídeo', title:'Põe o som do arquivo numa camada de Áudio, no grupo do vídeo', onclick:() => extractSound(V) })])];
 }
@@ -8948,7 +8956,7 @@ function audioProps(L) {
   if (V && L.sync) t.append(h('p', { class:'hint', text:`Entra, sai e corta junto com "${V.name}". Desmarque para cortar o som sozinho.` }), splitRow(L));
   else t.append(...vidCutFields(L));
   return [h('section', { class:'sec' }, [h('h3', { text:'Som' }),
-    rangeF(L, 'vol', 'Volume', 0, 1.5, .01, v => Math.round((v ?? 1) * 100) + '%'),
+    rangeF(L, 'vol', 'Volume', 0, 1.5, .01, v => Math.round((v ?? 1) * 100) + '%'), ...riseFields(L),
     h('p', { class:'hint', text:'Toca na prévia (espaço) e sai no MP4. Apagar esta camada deixa o vídeo mudo.' })]), t];
 }
 // onda na barra da timeline: o trecho cortado, repetindo se a barra for mais longa
@@ -8960,7 +8968,7 @@ function drawAudBar(bar, L) {
   for (let px = 0; px < c.width; px++) {
     // com pausas: linha reta onde o som está parado
     const [ts, held] = P.ps.length ? vidRun(P, (px / c.width * span) % P.cyc) : [a + (px / c.width * span) % len * sp, false];
-    const v = held ? 0 : PK_CH.indexOf(L.peaks[Math.floor(ts / st)] || '0') / 63, hh = Math.max(dpr, v * c.height * .8);
+    const v = held ? 0 : PK_CH.indexOf(L.peaks[Math.floor(ts / st)] || '0') / 63 * riseGain(L.start + px / c.width * span, L), hh = Math.max(dpr, v * c.height * .8);
     x.fillRect(px, (c.height - hh) / 2, 1, hh);
   }
 }
@@ -13542,23 +13550,26 @@ function renderAudio() {
   box.append(segSet(S, 'sfx', 'Sons nas entradas', Object.entries(SFX)),
     h('p', { class:'hint', text:'Sopro nos deslizes, pop nas molas, cliques na digitação. Toca na prévia (espaço) e sai no MP4.' }));
 }
-// "Sobe num momento": baixo até a agulha marcada e depois sobe suave até o Volume (riseOf/riseGain, buildMix)
+// "Sobe depois": baixo até a agulha marcada e depois sobe suave até o Volume (riseOf/riseGain, buildMix)
+// A = a trilha (S.audio, painel da coluna da esquerda) ou uma camada de Áudio (painel do som e do vídeo dele)
 function riseFields(A) {
-  const redraw = () => renderTimeline();
+  const lay = A !== S.audio, redraw = () => renderTimeline(), again = () => { if (lay) renderProps(); else renderAudio(); };
+  // a subida da camada fica dentro da barra dela; tempo sempre o da timeline
+  const t0 = lay ? A.start : 0, t1 = lay ? A.end ?? S.duration : S.duration, here = () => +clamp(T, t0, t1).toFixed(2);
   const mode = segSet(A, 'rise', 'Volume ao longo do vídeo', [['flat', 'Sempre igual'], ['up', 'Sobe depois']], v => {
-    if (v === 'up' && A.riseAt == null) A.riseAt = +clamp(T, 0, S.duration).toFixed(2);
-    renderAudio(); redraw();
+    if (v === 'up' && A.riseAt == null) A.riseAt = here();
+    again(); redraw();
   });
   if (A.rise !== 'up') return [mode];
   const put = k => v => { A[k] = v; }, opt = (k, d) => ({ get:() => A[k] ?? d, put:put(k), after:redraw });
-  const atF = rangeF(A, 'riseAt', 'Sobe em', 0, S.duration, .05, v => fmtSec(v || 0), opt('riseAt', 0));
+  const atF = rangeF(A, 'riseAt', 'Sobe em', t0, t1, .05, v => fmtSec(v || 0), opt('riseAt', t0));
   return [mode,
     rangeF(A, 'riseLow', 'Volume antes', 0, 1, .01, v => Math.round(v * 100) + '%', opt('riseLow', RISE_DEF.low)),
     atF,
     h('div', { class:'row' }, [h('button', { class:'btn small', text:'Subir na agulha', title:'Marca o momento da subida onde está a agulha',
-      onclick:() => { pushUndo(); A.riseAt = +clamp(T, 0, S.duration).toFixed(2); changed(); renderAudio(); redraw(); } })]),
+      onclick:() => { pushUndo(); A.riseAt = here(); changed(); again(); redraw(); } })]),
     rangeF(A, 'riseDur', 'Duração da subida', .1, 6, .05, v => fmtSec(v), opt('riseDur', RISE_DEF.dur)),
-    h('p', { class:'hint', text:'A música fica no "Volume antes" até o momento marcado e sobe suave até o Volume. Toca na prévia e sai no MP4.' })];
+    h('p', { class:'hint', text:`${lay ? 'O som' : 'A música'} fica no "Volume antes" até o momento marcado e sobe suave até o Volume. Toca na prévia e sai no MP4.` })];
 }
 function audioRow() {
   const A = S.audio, cv2 = h('canvas', { class:'tl-wave' }), lane = h('div', { class:'tl-lane' }, [cv2]);

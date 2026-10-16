@@ -63,6 +63,53 @@ const ok = (c, msg, extra) => { if (c) console.log('ok   ' + msg); else { falhas
   const und = await p.evaluate(() => ({ rise:S.audio && S.audio.rise, ui:$('#audioBox').textContent.includes('Volume antes') }));
   ok(und.rise !== 'up' && !und.ui, 'Ctrl+Z desliga a subida', und);
 
+  // ---- o som dos vídeos: um vídeo com som (tom de 440 Hz) entra pelo botão "Vídeo"; a subida liga pelo painel do vídeo
+  await p.evaluate(() => { S.audio = null; changed(); renderAudio(); });
+  const rec = await p.evaluate(async () => {
+    const c = document.createElement('canvas'); c.width = 320; c.height = 240; const x = c.getContext('2d');
+    const ac = new AudioContext(), o = ac.createOscillator(), d = ac.createMediaStreamDestination(); o.frequency.value = 440; o.connect(d); o.start();
+    const mime = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/webm;codecs=vp8,opus', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m));
+    const r = new MediaRecorder(new MediaStream([...c.captureStream(30).getVideoTracks(), ...d.stream.getAudioTracks()]), { mimeType:mime }), ch = [];
+    r.ondataavailable = e => e.data.size && ch.push(e.data);
+    const done = new Promise(res => r.onstop = res); r.start(100);
+    const t0 = performance.now();
+    await new Promise(res => { const f = () => { const t = performance.now() - t0; x.fillStyle = `hsl(${t / 10 % 360},70%,50%)`; x.fillRect(0, 0, 320, 240); if (t > 4000) return res(); requestAnimationFrame(f); }; f(); });
+    r.stop(); await done; ac.close();
+    const blob = new Blob(ch, { type:mime.split(';')[0] }), u8 = new Uint8Array(await blob.arrayBuffer());
+    let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+    return { b64:btoa(s), type:blob.type };
+  });
+  const fv = path.join(outDir, 'volume-video.' + (rec.type.includes('mp4') ? 'mp4' : 'webm')); fs.writeFileSync(fv, Buffer.from(rec.b64, 'base64'));
+  await p.evaluate(() => { T = 0; });
+  const [chs] = await Promise.all([p.waitForEvent('filechooser'), p.locator('#adds button.add', { hasText:'Vídeo' }).click()]);
+  await chs.setFiles(fv);
+  await p.waitForFunction(() => S.layers.some(l => l.type === 'audio'), null, { timeout:15000 }); await p.waitForTimeout(400);
+  const lay = await p.evaluate(() => { const A = S.layers.find(l => l.type === 'audio'); return { s:A.start, e:A.end ?? S.duration, vid:!!(selL() && selL().video) }; });
+  ok(lay.vid, 'o vídeo fica escolhido depois de importar', lay);
+  const mixL = () => p.evaluate(async ({ s, e }) => {
+    const m = await buildMix(48000, S.duration), d = m.getChannelData(0), m0 = (e - s) / 2 + s;
+    const rms = (t0, t1) => { let q = 0, n = 0; for (let i = Math.floor(t0 * 48000); i < t1 * 48000; i++) { q += d[i] * d[i]; n++; } return +Math.sqrt(q / n).toFixed(4); };
+    return { a:rms(s + .3, m0 - .3), b:rms(m0 + 1.2, e - .3) };
+  }, lay);
+  const vflat = await mixL();
+  // agulha no meio do clipe, subida de 0,8 s pelo painel do vídeo
+  await p.evaluate(({ s, e }) => { T = +(s + (e - s) / 2).toFixed(2); }, lay);
+  const vbtn = p.locator('#props button', { hasText:'Sobe depois' });
+  ok(await vbtn.count() > 0, 'o painel do vídeo mostra "Volume ao longo do vídeo" para o som dele');
+  await p.evaluate(() => { const b = [...document.querySelectorAll('#props button')].find(b => b.textContent === 'Sobe depois'); foldReveal(b); b.scrollIntoView({ block:'center' }); }); await vbtn.first().click(); await p.waitForTimeout(200);
+  await p.evaluate(() => { const A = S.layers.find(l => l.type === 'audio'); A.riseDur = .8; changed(); });
+  const vr = await p.evaluate(() => { const A = S.layers.find(l => l.type === 'audio'); return { rise:A.rise, at:A.riseAt, T, ui:$('#props').textContent.includes('Volume antes') }; });
+  ok(vr.rise === 'up' && Math.abs(vr.at - vr.T) < .01 && vr.ui, 'liga no som do vídeo com o momento na agulha', vr);
+  const vup = await mixL();
+  ok(vflat.a > .02 && Math.abs(vup.a - .2 * vflat.a) < .01, 'antes do momento o som do vídeo fica em 20%', { vflat, vup });
+  ok(Math.abs(vup.b - vflat.b) < .01, 'depois da subida o som do vídeo volta ao Volume', { vflat, vup });
+  ok(await p.evaluate(() => audioSig().includes('"lo"')), 'a prévia refaz a mistura quando a subida do som muda');
+  // a camada de Áudio escolhida sozinha também tem os campos
+  await p.evaluate(() => { const A = S.layers.find(l => l.type === 'audio'); select(A.id, true); renderProps(); });
+  await p.waitForTimeout(150);
+  ok(await p.evaluate(() => $('#props').textContent.includes('Volume antes')), 'o painel da camada de Áudio também mostra a subida');
+  await p.screenshot({ path:path.join(outDir, 'volume-sobe-video.png') });
+
   await b.close();
   console.log(falhas ? `\n${falhas} falha(s)` : '\ntudo certo');
   process.exit(falhas ? 1 : 0);
