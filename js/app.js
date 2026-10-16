@@ -8621,6 +8621,14 @@ async function setMusicFile(f) {
 }
 // onde a música começa: do início, na primeira batida com som ou na parte mais forte
 const audioSkip = () => { const A = S.audio; return !A ? 0 : A.from === 'beat' ? A.firstLoud || 0 : A.from === 'peak' ? A.peakAt || 0 : 0; };
+// volume que sobe num momento (A.rise = 'up'): A.riseLow (fração do Volume) até A.riseAt (s), depois sobe em A.riseDur (s) até 100%
+const RISE_DEF = { low:.2, dur:1.5 };
+const riseOf = () => { const A = S.audio; if (!A || A.rise !== 'up') return null; return { lo:clamp(A.riseLow ?? RISE_DEF.low, 0, 1), at:Math.max(0, A.riseAt ?? 0), dur:Math.max(.01, A.riseDur ?? RISE_DEF.dur) }; };
+// fator do volume no segundo t da timeline (1 = o Volume da trilha); curva suave (smoothstep), sem degrau
+function riseGain(t) {
+  const R = riseOf(); if (!R) return 1;
+  const u = clamp((t - R.at) / R.dur, 0, 1); return R.lo + (1 - R.lo) * u * u * (3 - 2 * u);
+}
 // batidas no tempo do vídeo (a música repete se for mais curta)
 function beatTimes() {
   const A = S.audio; if (!A || !A.beats || !A.beats.length) return [];
@@ -8759,7 +8767,15 @@ async function buildMix(sr = 48000, d = S.duration, sl = null, voice = false) {
       const sk = clamp(audioSkip(), 0, Math.max(0, buf.duration - .5)), s = off.createBufferSource(), g = off.createGain(), v = A.vol ?? .8, fo = Math.min(1.2, d * .2);
       s.buffer = buf; if (buf.duration - sk < d) { s.loop = true; s.loopStart = sk; s.loopEnd = buf.duration; }
       // entra sem estalo e sai em fade no fim do vídeo
-      g.gain.setValueAtTime(0, 0); g.gain.linearRampToValueAtTime(v, .04); g.gain.setValueAtTime(v, Math.max(.05, d - fo)); g.gain.linearRampToValueAtTime(0, d);
+      const R = riseOf();
+      if (!R) { g.gain.setValueAtTime(0, 0); g.gain.linearRampToValueAtTime(v, .04); g.gain.setValueAtTime(v, Math.max(.05, d - fo)); g.gain.linearRampToValueAtTime(0, d); }
+      else { // baixo até o momento, sobe suave (a mesma curva de riseGain, que a timeline desenha) e o fade do fim só depois da subida
+        const a = Math.max(.05, R.at), b = a + R.dur, cv = new Float32Array(128);
+        for (let i = 0; i < cv.length; i++) cv[i] = v * riseGain(a + R.dur * i / (cv.length - 1));
+        g.gain.setValueAtTime(0, 0); g.gain.linearRampToValueAtTime(v * R.lo, .04); g.gain.setValueAtTime(v * R.lo, a);
+        g.gain.setValueCurveAtTime(cv, a, R.dur);
+        const f0 = Math.max(b + .001, d - fo); if (f0 < d) { g.gain.setValueAtTime(v, f0); g.gain.linearRampToValueAtTime(0, d); }
+      }
       s.connect(g); g.connect(off.destination); s.start(0, sk);
     }
   }
@@ -8838,7 +8854,7 @@ async function encodeAudio(buf, pick) {
 const AUD = { ctx:null, src:null, buf:null, sig:'', chk:0, building:false, c0:0, t0:0 };
 function audioSig() {
   const A = S.audio, fx = S.sfx && S.sfx !== 'off';
-  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from] : 0, S.sfx || 'off', audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol, l.vPause, l.vSkip, l.vSpeed]), S.layers.filter(l => l.xin).map(l => [l.id, l.xin, l.start, l.visible]), fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
+  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from, riseOf()] : 0, S.sfx || 'off', audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol, l.vPause, l.vSkip, l.vSpeed]), S.layers.filter(l => l.xin).map(l => [l.id, l.xin, l.start, l.visible]), fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
 }
 async function rebuildMix(sig) {
   AUD.building = true;
@@ -13520,10 +13536,29 @@ function renderAudio() {
       h('button', { class:'icon-btn', title:'Tirar a música', 'aria-label':'Tirar a música', html:ICONS.trash, onclick:() => { pushUndo(); S.audio = null; changed(); renderAudio(); renderTimeline(); toast('Música removida', 5000, UNDO_ACT); } })]),
       segSet(A, 'from', 'A música começa', [['zero', 'Do início'], ['beat', '1ª batida'], ['peak', 'Parte forte']], () => renderTimeline()),
       rangeF(A, 'vol', 'Volume', 0, 1, .01, v => Math.round(v * 100) + '%'),
+      ...riseFields(A),
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Encaixar na batida', title:'Cada elemento entra na batida mais próxima (Ctrl+Z desfaz)', onclick:snapToBeats })]));
   }
   box.append(segSet(S, 'sfx', 'Sons nas entradas', Object.entries(SFX)),
     h('p', { class:'hint', text:'Sopro nos deslizes, pop nas molas, cliques na digitação. Toca na prévia (espaço) e sai no MP4.' }));
+}
+// "Sobe num momento": baixo até a agulha marcada e depois sobe suave até o Volume (riseOf/riseGain, buildMix)
+function riseFields(A) {
+  const redraw = () => renderTimeline();
+  const mode = segSet(A, 'rise', 'Volume ao longo do vídeo', [['flat', 'Sempre igual'], ['up', 'Sobe depois']], v => {
+    if (v === 'up' && A.riseAt == null) A.riseAt = +clamp(T, 0, S.duration).toFixed(2);
+    renderAudio(); redraw();
+  });
+  if (A.rise !== 'up') return [mode];
+  const put = k => v => { A[k] = v; }, opt = (k, d) => ({ get:() => A[k] ?? d, put:put(k), after:redraw });
+  const atF = rangeF(A, 'riseAt', 'Sobe em', 0, S.duration, .05, v => fmtSec(v || 0), opt('riseAt', 0));
+  return [mode,
+    rangeF(A, 'riseLow', 'Volume antes', 0, 1, .01, v => Math.round(v * 100) + '%', opt('riseLow', RISE_DEF.low)),
+    atF,
+    h('div', { class:'row' }, [h('button', { class:'btn small', text:'Subir na agulha', title:'Marca o momento da subida onde está a agulha',
+      onclick:() => { pushUndo(); A.riseAt = +clamp(T, 0, S.duration).toFixed(2); changed(); renderAudio(); redraw(); } })]),
+    rangeF(A, 'riseDur', 'Duração da subida', .1, 6, .05, v => fmtSec(v), opt('riseDur', RISE_DEF.dur)),
+    h('p', { class:'hint', text:'A música fica no "Volume antes" até o momento marcado e sobe suave até o Volume. Toca na prévia e sai no MP4.' })];
 }
 function audioRow() {
   const A = S.audio, cv2 = h('canvas', { class:'tl-wave' }), lane = h('div', { class:'tl-lane' }, [cv2]);
@@ -13538,7 +13573,7 @@ function drawWave(c, lane) {
   const x = c.getContext('2d'), sk = audioSkip(), len = Math.max(.1, A.dur - sk), d = S.duration;
   x.fillStyle = uiA('sel', .35);
   for (let px = 0; px < c.width; px++) {
-    const ts = sk + (px / c.width * d) % len, v = A.peaks[Math.floor(ts * 10)] || 0, hh = Math.max(dpr, v * c.height * .85);
+    const tl = px / c.width * d, ts = sk + tl % len, v = (A.peaks[Math.floor(ts * 10)] || 0) * riseGain(tl), hh = Math.max(dpr, v * c.height * .85);
     x.fillRect(px, (c.height - hh) / 2, 1, hh);
   }
   x.fillStyle = uiA('sel', .95);
