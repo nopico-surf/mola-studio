@@ -10637,6 +10637,8 @@ function renderTimeline() {
     const lane = h('div', { class:'tl-lane' }, [bar]);
     lane.addEventListener('pointerdown', e => {
       if (e.button) return; const m = tlHit(bar, e.clientX);
+      // Shift/Ctrl + clique na barra do frame: soma ou tira o frame da seleção (como no nome), sem mover nada
+      if (m && (e.shiftKey || e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); toggleGroupSel(gid); return; }
       if (m && mem.some(l => l.locked)) { e.stopPropagation(); select(mem[mem.length - 1].id); lockedNote(mem); return; } // grupo com item bloqueado não se move
       if (m) tlDragGroup(e, gid, bar, m); else tlScrub(e);
     });
