@@ -8725,7 +8725,7 @@ function playSfx(ctx, out, noise, e) {
 const STRETCH = new Map(); // id da camada → { k, buf }
 function vidStretch(A, buf, a, b, sp) {
   for (const id of STRETCH.keys()) if (!S.layers.some(l => l.id === id)) STRETCH.delete(id);
-  const key = [A.aud, a, b, sp, buf.length].join('|'), got = STRETCH.get(A.id); if (got && got.k === key) return got.buf;
+  const key = [A.aud, a, b, sp, buf.length, A.vDen || 0].join('|'), got = STRETCH.get(A.id); if (got && got.k === key) return got.buf;
   const sr = buf.sampleRate, nc = buf.numberOfChannels, i0 = Math.round(a * sr), i1 = Math.min(buf.length, Math.round(b * sr));
   const N = Math.round(sr * .04) & ~1, Hs = N / 2, tol = Math.round(sr * .012), M = Hs, out = Math.ceil((i1 - i0) / sp);
   if (out < 2 || i1 - i0 < 2) return null;
@@ -8794,6 +8794,8 @@ async function buildMix(sr = 48000, d = S.duration, sl = null, voice = false) {
     const t0 = A.start, t1 = Math.min(A.end ?? S.duration, d); if (t1 <= t0 + .01) continue;
     const dst = audFade(off, A, t0, t1, riseOut(off, A)); // subida (riseOut) e, por cima, entra/sai suave (afIn/afOut) por cima de tudo: vale com repetição, pausas e cortes secos
     let buf = null; try { buf = await musicBuffer(A.aud); } catch (e) {} if (!buf) continue;
+    const vo = voiceChain(off, A, dst, buf, A.vol ?? 1); // aprimorar a voz (vEnh): nível, equalização e compressor
+    if (A.vDen) { const dn = await denoised(A.aud, buf, A.vDen); if (dn) buf = dn; } // tirar ruído (vDen): o arquivo limpo, pronto uma vez
     const { a, sp } = vidCut(A), b = Math.min(vidCut(A).b, buf.duration); if (b - a < .02) continue;
     // com velocidade: o trecho [a, b] já esticado/encolhido (vidStretch); bt = segundo do vídeo → segundo nesse buffer
     let bt = x => x;
@@ -8808,7 +8810,7 @@ async function buildMix(sr = 48000, d = S.duration, sl = null, voice = false) {
           if (e > t + .005) {
             const s = off.createBufferSource(), g = off.createGain(); s.buffer = buf;
             g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v, t + .005); g.gain.setValueAtTime(v, Math.max(t + .005, e - .01)); g.gain.linearRampToValueAtTime(0, e);
-            s.connect(g); g.connect(dst); s.start(t, bt(pos)); s.stop(e);
+            s.connect(g); g.connect(vo); s.start(t, bt(pos)); s.stop(e);
           }
           t += n + p.len; pos = p.at + (p.jump || 0); // corte seco: o próximo pedaço começa depois do trecho pulado
         }
@@ -8826,7 +8828,7 @@ async function buildMix(sr = 48000, d = S.duration, sl = null, voice = false) {
     const en = Math.min(d, stop + post), up = pre ? t0 + pre : st + .01, dn = post ? Math.max(up, stop - post) : en - .01;
     // rampas de 10 ms nas pontas: sem estalo no corte
     g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(v, up); g.gain.setValueAtTime(v, Math.max(up, dn)); g.gain.linearRampToValueAtTime(0, en);
-    s.connect(g); g.connect(dst); s.start(st, o0); s.stop(en);
+    s.connect(g); g.connect(vo); s.start(st, o0); s.stop(en);
   }
   if (S.sfx && S.sfx !== 'off' && !voice) {
     const out = off.createGain(), comp = off.createDynamicsCompressor(), noise = sfxNoise(off);
@@ -8845,6 +8847,119 @@ function audFade(off, A, t0, t1, out = off.destination) {
   if (fi >= .01) { G.setValueAtTime(0, t0); G.linearRampToValueAtTime(1, t0 + fi); }
   if (fo >= .01) { G.setValueAtTime(1, t1 - fo); G.linearRampToValueAtTime(0, t1); }
   return g;
+}
+/* ------------ aprimorar a voz (pedido do usuário: um botão com duas coisas, ligadas separadas), nas camadas de Áudio ------------
+   L.vEnh = aprimorar a voz: a fala vai a um nível certo (VENH, o pico da fala, 95% das energias de 10 ms, a −17 dBFS), tira o grave
+   que embola (passa-alta 80 Hz, −3 dB em 300 Hz), dá presença (+3,5 dB em 3,5 kHz) e brilho (+2 dB acima de 10 kHz), compressor
+   suave e limitador no fim. Nós do WebAudio na mistura (buildMix): prévia, legenda e MP4 iguais. Sem peso (filtros na mistura;
+   os dois compressores atrasam o som ~12 ms, abaixo do que se nota na boca).
+   L.vDen = tirar ruído (1 Leve, 2 Médio, 3 Forte, DEN_LV): redução espectral. Perfil do ruído = média do espectro dos 10% de
+   quadros mais quietos do arquivo; ganho por frequência com a estimativa "decision-directed" de Ephraim-Malah (sem o chiado de
+   "água" da subtração simples), suavizado entre faixas vizinhas, com piso por força. STFT de 1024 com janela seno (raiz de Hann,
+   metade sobreposta = reconstrução exata); estéreo vai num FFT complexo só (esquerdo = real, direito = imaginário) com o mesmo
+   ganho nos dois (a imagem estéreo não muda). O arquivo inteiro é limpo uma vez (DENOISE, pelo arquivo + força) e a mistura
+   lê dele. Peso: ~0,5 s por minuto de som na primeira vez e mais uma cópia do som na memória (~23 MB por minuto) enquanto
+   alguma camada usa. Só tira ruído constante (ventilador, chiado, ar-condicionado, zumbido); barulho que vai e volta continua. */
+const DEN_LV = { 1:{ name:'Leve', b:1, fl:-12 }, 2:{ name:'Médio', b:1.6, fl:-18 }, 3:{ name:'Forte', b:2.4, fl:-26 } };
+const DENOISE = new Map(); // `${mídia}|${força}` → Promise<AudioBuffer>
+const FFTT = new Map();
+function fftTab(N) {
+  let T = FFTT.get(N); if (T) return T;
+  const bits = Math.log2(N), rev = new Uint32Array(N), c = new Float64Array(N / 2), s = new Float64Array(N / 2);
+  for (let i = 0; i < N; i++) { let r = 0; for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b); rev[i] = r; }
+  for (let k = 0; k < N / 2; k++) { c[k] = Math.cos(-2 * Math.PI * k / N); s[k] = Math.sin(-2 * Math.PI * k / N); }
+  T = { rev, c, s }; FFTT.set(N, T); return T;
+}
+// FFT complexa no lugar (radix 2); inv = inversa, já dividida por N
+function fft(re, im, inv) {
+  const N = re.length, { rev, c, s } = fftTab(N);
+  for (let i = 0; i < N; i++) { const j = rev[i]; if (j > i) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+  for (let size = 2; size <= N; size <<= 1) {
+    const half = size >> 1, step = N / size;
+    for (let i = 0; i < N; i += size) for (let j = 0, k = 0; j < half; j++, k += step) {
+      const wr = c[k], wi = inv ? -s[k] : s[k], a = i + j, b = a + half;
+      const tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr;
+      re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+    }
+  }
+  if (inv) for (let i = 0; i < N; i++) { re[i] /= N; im[i] /= N; }
+}
+function denoised(id, buf, lv) {
+  for (const k of DENOISE.keys()) { const [m, l] = k.split('|'); if (!S.layers.some(o => o.type === 'audio' && o.aud === m && String(o.vDen) === l)) DENOISE.delete(k); }
+  const key = id + '|' + lv; if (!DENOISE.has(key)) DENOISE.set(key, denoiseBuf(buf, DEN_LV[lv] || DEN_LV[2]).catch(e => { console.warn('ruído', e); DENOISE.delete(key); return null; }));
+  return DENOISE.get(key);
+}
+async function denoiseBuf(buf, P) {
+  const N = 1024, H = N / 2, B = N / 2 + 1, len = buf.length, nc = buf.numberOfChannels, F = Math.ceil(len / H) + 1;
+  const win = new Float32Array(N); for (let i = 0; i < N; i++) win[i] = Math.sin(Math.PI * (i + .5) / N);
+  const chs = []; for (let c = 0; c < nc; c++) chs.push(buf.getChannelData(c));
+  const out = chs.map(() => new Float32Array(len)), re = new Float64Array(N), im = new Float64Array(N), Pw = new Float64Array(B);
+  const at = f => f * H - H; // o 1º quadro começa meia janela antes do som (a borda reconstrói inteira)
+  // um par de canais num FFT complexo; Pw = potência do mono (média dos dois) por faixa
+  const load = (f, L, R) => {
+    const o = at(f);
+    for (let i = 0; i < N; i++) { const j = o + i, ok = j >= 0 && j < len; re[i] = ok ? L[j] * win[i] : 0; im[i] = ok && R ? R[j] * win[i] : 0; }
+    fft(re, im, false);
+    for (let k = 0; k < B; k++) {
+      const m = (N - k) % N, zr = re[k], zi = im[k], mr = re[m], mi = im[m], two = R ? 4 : 2;
+      const xr = R ? zr + mr + zi + mi : zr + mr, xi = R ? zi - mi - zr + mr : zi - mi; // mono: (X_L + X_R) / 2
+      Pw[k] = (xr * xr + xi * xi) / (two * two);
+    }
+  };
+  for (let c0 = 0; c0 < nc; c0 += 2) {
+    const L = chs[c0], R = chs[c0 + 1] || null, oL = out[c0], oR = R ? out[c0 + 1] : null;
+    // 1) perfil do ruído: os 10% de quadros mais quietos
+    const en = new Float32Array(F);
+    for (let f = 0; f < F; f++) { let s = 0; const o = at(f); for (let i = Math.max(0, o), e = Math.min(len, o + N); i < e; i += 2) { const v = R ? (L[i] + R[i]) / 2 : L[i]; s += v * v; } en[f] = s; }
+    const srt = Float32Array.from(en).sort(), thr = srt[Math.floor(F * .1)], Nz = new Float64Array(B); let nq = 0;
+    for (let f = 0; f < F; f++) { if (en[f] > thr || nq > 4000) continue; load(f, L, R); for (let k = 0; k < B; k++) Nz[k] += Pw[k]; nq++; if (nq % 1500 === 0) await sleep(0); }
+    for (let k = 0; k < B; k++) Nz[k] = Math.max(1e-12, Nz[k] / Math.max(1, nq)) * P.b;
+    // 2) ganho por faixa (decision-directed), suavizado entre vizinhas, com piso
+    const floor = Math.pow(10, P.fl / 20), prevS = new Float64Array(B), G = new Float64Array(B), Gs = new Float64Array(N);
+    for (let f = 0; f < F; f++) {
+      load(f, L, R);
+      for (let k = 0; k < B; k++) {
+        const g = Pw[k] / Nz[k], xi = .98 * prevS[k] / Nz[k] + .02 * Math.max(g - 1, 0);
+        G[k] = xi / (1 + xi);
+      }
+      for (let k = 0; k < B; k++) {
+        const v = Math.max(floor, .25 * G[Math.max(0, k - 1)] + .5 * G[k] + .25 * G[Math.min(B - 1, k + 1)]);
+        Gs[k] = v; if (k && k < N / 2) Gs[N - k] = v; prevS[k] = v * v * Pw[k];
+      }
+      for (let i = 0; i < N; i++) { re[i] *= Gs[i]; im[i] *= Gs[i]; }
+      fft(re, im, true);
+      const o = at(f);
+      for (let i = 0; i < N; i++) { const j = o + i; if (j < 0 || j >= len) continue; oL[j] += re[i] * win[i]; if (oR) oR[j] += im[i] * win[i]; }
+      if (f % 1500 === 1499) await sleep(0); // não trava a tela em som longo
+    }
+  }
+  const res = new AudioBuffer({ length:len, numberOfChannels:nc, sampleRate:buf.sampleRate });
+  out.forEach((d, c) => res.copyToChannel(d, c));
+  return res;
+}
+// ganho para o pico da fala (95% das energias de 10 ms) chegar a −17 dBFS; guardado por arquivo
+const VENH = new Map();
+function voiceGain(id, buf) {
+  if (VENH.has(id)) return VENH.get(id);
+  const sr = buf.sampleRate, hop = Math.round(sr / 100), F = Math.floor(buf.length / hop), chs = [];
+  for (let c = 0; c < buf.numberOfChannels; c++) chs.push(buf.getChannelData(c));
+  const db = new Float32Array(F);
+  for (let f = 0; f < F; f++) { let s = 0; for (const c of chs) for (let i = f * hop, e = i + hop; i < e; i += 2) s += c[i] * c[i]; db[f] = 10 * Math.log10(s / (hop / 2 * chs.length) + 1e-12); }
+  const hi = F ? Float32Array.from(db).sort()[Math.floor(F * .95)] : -17, g = clamp(Math.pow(10, (-17 - hi) / 20), .25, 8);
+  VENH.set(id, g); return g;
+}
+// cadeia da voz entre os pedaços do som (que já vêm com o volume v) e o resto; sem vEnh, direto
+function voiceChain(off, A, out, buf, v) {
+  if (!A.vEnh || !(v > 0)) return out;
+  const inp = off.createGain(), mk = off.createGain();
+  inp.gain.value = voiceGain(A.aud, buf) / v; mk.gain.value = 1.4 * v;
+  const bq = (type, f, gain, Q) => { const b = off.createBiquadFilter(); b.type = type; b.frequency.value = f; if (gain != null) b.gain.value = gain; if (Q != null) b.Q.value = Q; return b; };
+  const comp = off.createDynamicsCompressor(), lim = off.createDynamicsCompressor();
+  comp.threshold.value = -22; comp.knee.value = 8; comp.ratio.value = 3; comp.attack.value = .004; comp.release.value = .12;
+  lim.threshold.value = -2; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = .001; lim.release.value = .05;
+  const chain = [inp, bq('highpass', 80, null, .707), bq('peaking', 300, -3, 1), bq('peaking', 3500, 3.5, .9), bq('highshelf', 10000, 2), comp, mk, lim];
+  for (let i = 0; i < chain.length - 1; i++) chain[i].connect(chain[i + 1]);
+  lim.connect(out); return inp;
 }
 async function pickAudio(sr) {
   if (!('AudioEncoder' in window)) return null;
@@ -8874,7 +8989,7 @@ async function encodeAudio(buf, pick) {
 const AUD = { ctx:null, src:null, buf:null, sig:'', chk:0, building:false, c0:0, t0:0 };
 function audioSig() {
   const A = S.audio, fx = S.sfx && S.sfx !== 'off';
-  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from, riseOf()] : 0, S.sfx || 'off', audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol, l.afIn, l.afOut, l.vPause, l.vSkip, l.vSpeed, riseOf(l)]), S.layers.filter(l => l.xin).map(l => [l.id, l.xin, l.start, l.visible]), fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
+  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from, riseOf()] : 0, S.sfx || 'off', audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol, l.afIn, l.afOut, l.vPause, l.vSkip, l.vSpeed, riseOf(l), l.vEnh, l.vDen]), S.layers.filter(l => l.xin).map(l => [l.id, l.xin, l.start, l.visible]), fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
 }
 async function rebuildMix(sig) {
   AUD.building = true;
@@ -8984,7 +9099,31 @@ function soundFields(As) {
   const sec = v => v >= .01 ? fmtSec(v) : '0,0s';
   return [rangeF(A, 'vol', 'Volume', 0, VOL_MAX, .01, v => Math.round((v ?? 1) * 100) + '%', { get:() => A.vol ?? 1, put:put('vol') }),
     rangeF(A, 'afIn', 'Entra suave', 0, 5, .05, sec, { get:() => A.afIn || 0, put:put('afIn'), cap:60 }),
-    rangeF(A, 'afOut', 'Sai suave', 0, 5, .05, sec, { get:() => A.afOut || 0, put:put('afOut'), cap:60 })];
+    rangeF(A, 'afOut', 'Sai suave', 0, 5, .05, sec, { get:() => A.afOut || 0, put:put('afOut'), cap:60 }), voiceFields(As)];
+}
+// "Aprimorar a voz": duas coisas que ligam separadas (vEnh, vDen), para todos os sons escolhidos
+function voiceFields(As) {
+  const A = As[0], set = (k, v) => { pushUndo(); for (const o of As) if (v) o[k] = v; else delete o[k]; changed(); renderProps(); if (k === 'vDen' && v) denoisePrep(As); };
+  const chk = (k, label, title, on) => {
+    const id = fid(A, k), inp = h('input', { type:'checkbox', id, checked:!!A[k] });
+    inp.addEventListener('change', () => set(k, inp.checked ? on : 0));
+    return h('label', { class:'check', for:id, title }, [inp, label]);
+  };
+  const lv = A.vDen ? modeF('Força', Object.entries(DEN_LV).map(([k, m]) => [+k, m.name, k === '1' ? 'Tira pouco, a voz fica intacta' : k === '2' ? 'O ponto certo para a maioria' : 'Tira mais; a voz pode ficar um pouco abafada']), A.vDen, v => set('vDen', v)) : null;
+  if (lv) lv.classList.add('stack');
+  return h('div', { class:'sil-card voice-card' }, [
+    h('div', { class:'sil-head', text:'Aprimorar a voz' }),
+    chk('vEnh', 'Melhorar a voz', 'Volume da fala igualado, menos grave embolado, mais presença e um compressor suave', 1),
+    chk('vDen', 'Tirar ruído', 'Tira o ruído constante do fundo: ventilador, chiado, ar-condicionado', 2), lv,
+    h('p', { class:'hint', text:'Toca na prévia e sai no MP4. Tirar ruído limpa o som uma vez (alguns segundos em som longo) e só tira o ruído constante.' })].filter(Boolean));
+}
+// limpa já ao ligar, para o primeiro play não esperar calado
+async function denoisePrep(As) {
+  const ids = [...new Set(As.filter(o => o.vDen).map(o => o.aud + '|' + o.vDen))];
+  if (!ids.length) return;
+  toast('Tirando o ruído…', 60000);
+  for (const k of ids) { const [m, l] = k.split('|'); let b = null; try { b = await musicBuffer(m); } catch (e) {} if (b) await denoised(m, b, +l); }
+  toast('Ruído tirado. Toque para ouvir (espaço).', 3000);
 }
 // volume e fade do som de vários vídeos de uma vez (o primeiro com som manda no valor mostrado)
 function vidSoundAll(vs) { const As = vs.flatMap(soundsOf); return As.length ? soundFields(As) : []; }
