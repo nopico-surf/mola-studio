@@ -3968,7 +3968,7 @@ function renderFrame0(ctx, t, rs, isExport) {
 const FC = { on:true, pre:null, suf:null, sigs:null, key:'' };
 // _bounds etc. mudam a cada quadro; vec = pontos de edição (o d, que entra, é o desenho); o SVG do logo entra pela identidade (é grande)
 // capt (legenda): as palavras entram pela identidade (cap.words é trocado inteiro a cada edição, e a lista é grande)
-const SIG_SKIP = (k, v) => (k[0] === '_' || k === 'vec' ? undefined : k === 'svg' && v && typeof v === 'object' ? 'svg' + objId(v) : k === 'capt' && v && v.words ? 'capt' + objId(v.words) + '|' + v.t0 : v);
+const SIG_SKIP = (k, v) => (k[0] === '_' || k === 'vec' ? undefined : k === 'svg' && v && typeof v === 'object' ? 'svg' + objId(v) : k === 'capt' && v && v.words ? 'capt' + objId(v.words) + '|' + v.t0 + '|' + (v.bl ? objId(v.bl) + v.bk : '') : v);
 // o desenho muda com o tempo mesmo sem ninguém mexer
 function layerMoves(L, ph) {
   if (ph.mode !== 'hold') return true;
@@ -10793,10 +10793,16 @@ function placeBar(bar, L) {
   bar.querySelector('.seg.out').style.width = (ph.outD / span * 100) + '%';
   // a onda acompanha o corte: sem refazer, o desenho de antes esticava junto com a barra
   if (L.type === 'audio' && bar.querySelector('.tl-awave')) drawAudBar(bar, L);
-  // legenda: um risco onde começa cada trecho (js/legenda.js)
-  if (L.capt || bar.querySelector('.tl-cap')) {
-    bar.querySelectorAll('.tl-cap').forEach(e => e.remove());
-    if (L.capt) { const off = capOff(L); for (const b of capBlocks(L)) { const x = (b.s + off - L.start) / span; if (x > 0 && x < 1) bar.append(h('i', { class:'tl-cap', style:`left:${x * 100}%` })); } }
+  // legenda: cada trecho é um pedaço dentro da barra (arrastar as bordas, mover, Delete apaga; js/legenda.js)
+  if (L.capt || bar.querySelector('.tl-cb')) {
+    bar.querySelectorAll('.tl-cb').forEach(e => e.remove());
+    if (L.capt) {
+      const off = capOff(L), sk = capSelK(L);
+      for (const b of capBlocks(L)) {
+        const x0 = Math.max(0, (b.s + off - L.start) / span), x1 = Math.min(1, (b.e + off - L.start) / span); if (x1 <= 0 || x0 >= 1) continue;
+        bar.append(h('i', { class:'tl-cb' + (b.k === sk ? ' on' : ''), style:`left:${x0 * 100}%;width:${(x1 - x0) * 100}%` }));
+      }
+    }
   }
   // pausas do vídeo: faixa hachurada onde o quadro fica parado (repete com o trecho); corte seco (vSkip): um risco no ponto do pulo
   if (L.vPause || L.vSkip || bar.querySelector('.tl-vp,.tl-vj')) {
@@ -10885,11 +10891,14 @@ function renderTimeline() {
       const m = tlHit(bar, e.clientX);
       if (e.shiftKey && m) { e.preventDefault(); e.stopPropagation(); toggleSel(L); return; } // sem stopPropagation o .stage solta a seleção
       if (m && L.locked) { e.stopPropagation(); if (!isPicked(L.id)) select(L.id, true); tlScrub(e); return; } // bloqueada: a barra só seleciona
+      const ch = L.capt && m ? capTlHit(L, bar, e.clientX) : null; // legenda: o trecho sob o ponteiro (antes da barra inteira)
+      if (ch) { capTlDrag(e, L, bar, ch); return; }
       if (m) tlDrag(e, L, bar, m); else tlScrub(e);
     });
     lane.addEventListener('pointermove', e => {
       if (bar.classList.contains('drag')) return;
-      const m = L.locked ? null : tlHit(bar, e.clientX), c = m === 'l' || m === 'r' ? 'ew-resize' : '';
+      const ch = L.capt && !L.locked ? capTlHit(L, bar, e.clientX) : null;
+      const m = L.locked ? null : ch ? ch.m + 'c' : tlHit(bar, e.clientX), c = m === 'l' || m === 'r' || m === 'lc' || m === 'rc' ? 'ew-resize' : '';
       lane.style.cursor = c; bar.style.cursor = c;
       bar.classList.toggle('hl', m === 'l'); bar.classList.toggle('hr', m === 'r');
     });
@@ -12858,7 +12867,7 @@ document.addEventListener('keydown', e => {
   // Espaço segurado = mão (arrasta o palco); tocar e soltar sem arrastar toca/pausa, como antes
   if (e.code === 'Space') { e.preventDefault(); if (tag === 'button') e.target.blur(); if (!e.repeat) handOn(); return; }
   // atalhos do Figma: Delete / Backspace apagam a camada selecionada
-  if (e.key === 'Delete' || e.key === 'Backspace') { const L = selL(); if (L && L.type !== 'bg') { e.preventDefault(); closeMenu(); deleteLayer(L); } return; }
+  if (e.key === 'Delete' || e.key === 'Backspace') { const L = selL(); if (L && L.capt && capSelK(L) >= 0) { e.preventDefault(); closeMenu(); capDelBlock(L, capSelK(L)); return; } if (L && L.type !== 'bg') { e.preventDefault(); closeMenu(); deleteLayer(L); } return; }
   if (e.key === '?') { e.preventDefault(); showKeys(true); return; }
   if (e.key === '/') { e.preventDefault(); findPreset(); return; }
   if (e.key === '+' || e.key === '=') { e.preventDefault(); setZoom((RT.zoom || 1) * 1.25); return; }

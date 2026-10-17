@@ -434,48 +434,149 @@ function capApplyStyle(L, id) {
 }
 const capShow = (w, punct) => punct ? w : w.replace(/[.,;:]+$/, '') || w; // sem pontuação no fim (a não ser ? ! …)
 const CAPB = new WeakMap();
+// o que decide onde cada trecho é cortado (a pontuação só muda o que aparece)
+const capKey = L => [Math.max(1, Math.round(L.capWords || 4)), L.capLines === 1 ? 1 : 2, L.capCh || 18].join('|');
+// trechos editados à mão (L.capt.bl = [{ n, s, e }], n palavras cada, tempo da legenda): valem enquanto o corte é o mesmo
+// (mudar Palavras por vez/Linhas/Letras volta ao automático) e as palavras batem
+function capFrozen(L) {
+  const c = L.capt, f = c.bl;
+  return f && c.bk === capKey(L) && f.reduce((t, b) => t + b.n, 0) === c.words.length ? f : null;
+}
+// texto do trecho: duas linhas equilibradas
+function capText(parts, lines, ch) {
+  let text = parts.join(' ');
+  if (lines === 2 && text.length > ch && parts.length > 1) {
+    let best = 1, bv = Infinity;
+    for (let k = 1; k < parts.length; k++) { const a = parts.slice(0, k).join(' ').length, b = parts.slice(k).join(' ').length, v = Math.max(a, b); if (v < bv) { bv = v; best = k; } }
+    text = parts.slice(0, best).join(' ') + '\n' + parts.slice(best).join(' ');
+  }
+  return text;
+}
 function capBlocks(L) {
   const ws = L.capt.words, maxW = Math.max(1, Math.round(L.capWords || 4)), lines = L.capLines === 1 ? 1 : 2, ch = L.capCh || 18, punct = !!L.capPunct;
-  const key = [maxW, lines, ch, punct].join('|'), c = CAPB.get(ws);
-  if (c && c.key === key) return c.bl;
+  const fz = capFrozen(L), key = capKey(L) + '|' + punct, c = CAPB.get(ws);
+  if (c && c.key === key && c.fz === fz) return c.bl;
   const bl = [], lim = ch * lines;
-  let cur = [], len = 0;
-  const flush = () => {
-    if (!cur.length) return;
-    const parts = cur.map(i => capShow(ws[i].w, punct));
-    let text = parts.join(' ');
-    if (lines === 2 && text.length > ch && parts.length > 1) { // duas linhas equilibradas
-      let best = 1, bv = Infinity;
-      for (let k = 1; k < parts.length; k++) { const a = parts.slice(0, k).join(' ').length, b = parts.slice(k).join(' ').length, v = Math.max(a, b); if (v < bv) { bv = v; best = k; } }
-      text = parts.slice(0, best).join(' ') + '\n' + parts.slice(best).join(' ');
+  if (fz) {
+    let i = 0;
+    for (const f of fz) {
+      const ix = []; for (let k = 0; k < f.n; k++) ix.push(i + k);
+      bl.push({ i0:i, i1:i + f.n - 1, s:f.s, e:f.e, text:capText(ix.map(j => capShow(ws[j].w, punct)), lines, ch), ws:ix.map(j => ws[j]) });
+      i += f.n;
     }
-    bl.push({ i0:cur[0], i1:cur[cur.length - 1], s:ws[cur[0]].s, e:Math.max(ws[cur[cur.length - 1]].e, ws[cur[0]].s + .3), text, ws:cur.map(i => ws[i]) });
-    cur = []; len = 0;
-  };
-  for (let i = 0; i < ws.length; i++) {
-    const w = ws[i], n = capShow(w.w, punct).length;
-    if (cur.length) {
-      const p = ws[i - 1], gap = w.s - p.e, end = /[.!?…]["”']?$/.test(p.w), comma = /[,;:]$/.test(p.w);
-      const full = cur.length >= maxW || len + 1 + n > lim;
-      if (full && !(gap > .6 || end) && cur.length >= 3 && maxW > 2) {
-        // a frase acaba nesta palavra: leva a anterior junto, senão ela fica sozinha no bloco seguinte
-        const nx = ws[i + 1], last = !nx || /[.!?…]["”']?$/.test(w.w) || nx.s - w.e > .6;
-        if (last) { const mv = cur.pop(); len -= capShow(ws[mv].w, punct).length + 1; flush(); cur.push(mv); len = capShow(ws[mv].w, punct).length; }
-        else flush();
-      } else if (full || gap > .6 || end || (comma && cur.length >= 2 && len > lim * .4)) flush();
+    for (let k = 0; k < bl.length; k++) { const nx = bl[k + 1]; if (nx && nx.s - bl[k].e < 1e-3) bl[k].join = true; }
+  } else {
+    let cur = [], len = 0;
+    const flush = () => {
+      if (!cur.length) return;
+      bl.push({ i0:cur[0], i1:cur[cur.length - 1], s:ws[cur[0]].s, e:Math.max(ws[cur[cur.length - 1]].e, ws[cur[0]].s + .3), text:capText(cur.map(i => capShow(ws[i].w, punct)), lines, ch), ws:cur.map(i => ws[i]) });
+      cur = []; len = 0;
+    };
+    for (let i = 0; i < ws.length; i++) {
+      const w = ws[i], n = capShow(w.w, punct).length;
+      if (cur.length) {
+        const p = ws[i - 1], gap = w.s - p.e, end = /[.!?…]["”']?$/.test(p.w), comma = /[,;:]$/.test(p.w);
+        const full = cur.length >= maxW || len + 1 + n > lim;
+        if (full && !(gap > .6 || end) && cur.length >= 3 && maxW > 2) {
+          // a frase acaba nesta palavra: leva a anterior junto, senão ela fica sozinha no bloco seguinte
+          const nx = ws[i + 1], last = !nx || /[.!?…]["”']?$/.test(w.w) || nx.s - w.e > .6;
+          if (last) { const mv = cur.pop(); len -= capShow(ws[mv].w, punct).length + 1; flush(); cur.push(mv); len = capShow(ws[mv].w, punct).length; }
+          else flush();
+        } else if (full || gap > .6 || end || (comma && cur.length >= 2 && len > lim * .4)) flush();
+      }
+      cur.push(i); len += (cur.length > 1 ? 1 : 0) + n;
     }
-    cur.push(i); len += (cur.length > 1 ? 1 : 0) + n;
+    flush();
+    // tempo de cada bloco: emenda no próximo se o vão é curto (sem piscar), senão fica um pouco depois da última palavra
+    for (let k = 0; k < bl.length; k++) {
+      const b = bl[k], nx = bl[k + 1];
+      if (nx && nx.s - b.e < .35) { b.e = nx.s; b.join = true; } else b.e = nx ? Math.min(nx.s, b.e + .3) : b.e + .3;
+    }
   }
-  flush();
-  // tempo de cada bloco: emenda no próximo se o vão é curto (sem piscar), senão fica um pouco depois da última palavra
-  for (let k = 0; k < bl.length; k++) {
-    const b = bl[k], nx = bl[k + 1];
-    if (nx && nx.s - b.e < .35) { b.e = nx.s; b.join = true; } else b.e = nx ? Math.min(nx.s, b.e + .3) : b.e + .3;
-  }
-  CAPB.set(ws, { key, bl });
+  bl.forEach((b, k) => { b.k = k; });
+  CAPB.set(ws, { key, fz, bl });
   const lg = bl.reduce((m, b) => b.text.length > m.length ? b.text : m, '');
   if (lg && L.text !== lg) { L.text = lg; RT.layout.clear(); } // a caixa da camada = o bloco mais longo
   return bl;
+}
+// os trechos de agora como lista editável
+const capFz = L => capBlocks(L).map(b => ({ n:b.i1 - b.i0 + 1, s:+b.s.toFixed(3), e:+b.e.toFixed(3) }));
+const capPut = (L, bl, words) => { L.capt = { ...L.capt, words:words || L.capt.words, bl, bk:capKey(L) }; };
+// trecho escolhido na timeline (Delete apaga): vale enquanto a seleção for a mesma
+const capSelK = L => { const c = RT.capSel; return c && L && L.capt && c.id === L.id && c.picks === RT.picks && c.k < capBlocks(L).length ? c.k : -1; };
+function capDelBlock(L, k) {
+  const bl = capBlocks(L), b = bl[k]; if (!b) return;
+  RT.capSel = null;
+  if (bl.length === 1) { deleteLayer(L); return; }
+  pushUndo();
+  const fz = capFz(L), ws = L.capt.words; fz.splice(k, 1);
+  capPut(L, fz, [...ws.slice(0, b.i0), ...ws.slice(b.i1 + 1)]);
+  changed({ props:true }); renderProps(); renderTimeline();
+  toast('Trecho apagado', 4000, UNDO_ACT);
+}
+// timeline: cada trecho é um pedaço dentro da barra da legenda. Borda = mais ou menos tempo na tela, meio = mover (as palavras
+// vão junto), clique = escolher (Delete apaga). Borda colada no vizinho anda com ele (o corte entre os dois). Shift desliga o ímã.
+function capTlHit(L, bar, cx) {
+  const r = bar.getBoundingClientRect(), d = S.duration, span = Math.max(.001, (L.end ?? d) - L.start), off = capOff(L);
+  const X = t => r.left + (t + off - L.start) / span * r.width;
+  let best = null;
+  for (const b of capBlocks(L)) {
+    const x0 = X(b.s), x1 = X(b.e);
+    if (cx < x0 - 5 || cx > x1 + 5) continue;
+    const dl = Math.abs(cx - x0), dr = Math.abs(cx - x1), ed = Math.max(2, Math.min(6, (x1 - x0) / 3));
+    const m = dl <= ed && dl <= dr ? 'l' : dr <= ed ? 'r' : cx >= x0 && cx <= x1 ? 'm' : null;
+    if (!m) continue;
+    const dist = m === 'l' ? dl : m === 'r' ? dr : 99;
+    if (!best || dist < best.dist) best = { k:b.k, m, dist };
+  }
+  return best;
+}
+function capTlDrag(e, L, bar, hit) {
+  e.preventDefault(); e.stopPropagation(); pause();
+  const g = tlGeom(); if (!g) return;
+  if (!isPicked(L.id) || (RT.picks && RT.picks.size > 1)) { select(L.id, true); bar = g.tl.querySelector(`.tl-row[data-id="${L.id}"] .tl-bar`) || bar; }
+  RT.capSel = { id:L.id, k:hit.k, picks:RT.picks }; placeBar(bar, L); renderProps();
+  const d = S.duration, off = capOff(L), cap0 = L.capt, fz0 = capFz(L), b0r = capBlocks(L)[hit.k], k = hit.k, mode = hit.m, MIN = .2, x0 = e.clientX;
+  const lo = L.start - off, hi = (L.end ?? d) - off, b0 = fz0[k], pv = fz0[k - 1], nx = fz0[k + 1];
+  const tieL = mode === 'l' && pv && Math.abs(pv.e - b0.s) < 1e-3, tieR = mode === 'r' && nx && Math.abs(nx.s - b0.e) < 1e-3;
+  const pts = [T - off, lo, hi]; fz0.forEach((f, j) => { if (j !== k) pts.push(f.s, f.e); });
+  const tol = 7 / g.w * d, snap = (v, free) => { if (free) return v; let p = null; for (const q of pts) if (Math.abs(q - v) <= tol && (p === null || Math.abs(q - v) < Math.abs(p - v))) p = q; return p ?? v; };
+  const lane = bar.parentElement, tip = h('div', { class:'tl-tip' });
+  const fmtS = v => v.toFixed(2).replace('.', ',') + 's', r3 = v => Math.round(v * 1000) / 1000;
+  let moved = false;
+  const show = f => {
+    tip.textContent = `${fmtS(f.s + off)} – ${fmtS(f.e + off)} · ${fmtS(f.e - f.s)}`;
+    tip.style.left = clamp((mode === 'r' ? f.e : f.s) + off, 0, d) / d * g.w + 6 + 'px';
+  };
+  const mv = ev => {
+    if (!moved && Math.abs(ev.clientX - x0) <= 3) return;
+    if (!moved) { pushUndo(); moved = true; lane.append(tip); }
+    const dt = (ev.clientX - x0) / g.w * d, fz = fz0.map(f => ({ ...f })), f = fz[k];
+    let words = cap0.words;
+    if (mode === 'm') {
+      const a = pv ? pv.e : lo, z = nx ? nx.s : hi, len = b0.e - b0.s;
+      let s = snap(b0.s + dt, ev.shiftKey); if (s === b0.s + dt) s = snap(b0.e + dt, ev.shiftKey) - len;
+      s = clamp(s, a, Math.max(a, z - len)); const sh = r3(s - b0.s);
+      f.s = r3(b0.s + sh); f.e = r3(b0.e + sh);
+      // as palavras do trecho andam junto (a fala fica com o texto dela)
+      words = cap0.words.map((w, i) => i >= b0r.i0 && i <= b0r.i1 ? { ...w, s:r3(w.s + sh), e:r3(w.e + sh) } : w);
+    } else if (mode === 'l') {
+      f.s = r3(clamp(snap(b0.s + dt, ev.shiftKey), tieL ? pv.s + MIN : pv ? pv.e : lo, b0.e - MIN)); if (tieL) fz[k - 1].e = f.s;
+    } else {
+      f.e = r3(clamp(snap(b0.e + dt, ev.shiftKey), b0.s + MIN, tieR ? nx.e - MIN : nx ? nx.s : hi)); if (tieR) fz[k + 1].s = f.e;
+    }
+    L.capt = { ...cap0, words, bl:fz, bk:capKey(L) };
+    placeBar(bar, L); show(f); needs = true;
+  };
+  const done = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); removeEventListener('keydown', key, true); tip.remove(); bar.classList.remove('drag'); };
+  const up = () => {
+    done();
+    if (moved) { changed({ props:true }); renderProps(); }
+    else { const b = capBlocks(L)[k]; if (b) { T = clamp(b.s + off + .02, 0, d); RT.userSeek = true; needs = true; } } // clique: a agulha vai até o trecho
+  };
+  const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); L.capt = cap0; placeBar(bar, L); done(); needs = true; };
+  bar.classList.add('drag');
+  addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up); addEventListener('keydown', key, true);
 }
 function capAt(bl, tl) {
   let lo = 0, hi = bl.length - 1, r = -1;
@@ -647,8 +748,9 @@ function capEdit(L, b, text) {
     nw = toks.map(x => { const d = (e1 - s0) * (x.length + 1) / tot, w = { w:x, s:+t.toFixed(3), e:+(t + d).toFixed(3), c:1 }; t += d; return w; });
   }
   if (old[0].seg && nw.length) nw[0] = { ...nw[0], seg:1 };
-  const all = [...ws.slice(0, b.i0), ...nw, ...ws.slice(b.i1 + 1)];
-  L.capt = { ...L.capt, words:all }; changed(); renderProps();
+  const all = [...ws.slice(0, b.i0), ...nw, ...ws.slice(b.i1 + 1)], fz = capFz(L);
+  if (nw.length) fz[b.k].n = nw.length; else fz.splice(b.k, 1);
+  capPut(L, fz, all); changed(); renderProps(); renderTimeline();
   if (nw.length && toks.length !== old.length) capRealign(L, all, b.i0, nw.length);
 }
 // .srt (para subir no Instagram/YouTube ou usar em outro editor)
@@ -673,6 +775,7 @@ function capSecs(L) {
   out.push(rangeF(L, 'wsp', 'Entre palavras', 0, 1, .01, v => (v || 0).toFixed(2) + 'em', { layout:true, get:() => L.wsp || 0 }), checkF(L, 'capPunct', 'Mostrar a pontuação'));
   // texto: um bloco por linha, com a hora; palavra duvidosa marcada. Clicar leva a agulha até ele, ▶ toca só ele
   const only = !!RT.capOnlyDub && dub > 0, list = h('div', { class:'leg-list', id:fid(L, 'caplist') });
+  const sk = capSelK(L);
   for (const b of bl) {
     const bad = b.ws.some(w => w.c != null && w.c < CAP_DUB); if (only && !bad) continue;
     const tx = h('div', { class:'leg-tx', contenteditable:'plaintext-only', spellcheck:'true', lang:'pt-BR', 'aria-label':'Texto do trecho', 'data-s':String(b.s) });
@@ -681,14 +784,15 @@ function capSecs(L) {
     tx.addEventListener('focus', () => { pause(); T = clamp(b.s + off + .02, 0, S.duration); RT.userSeek = true; needs = true; });
     tx.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tx.blur(); } else if (e.key === 'Escape') { e.preventDefault(); tx.textContent = orig; tx.blur(); } e.stopPropagation(); });
     tx.addEventListener('blur', () => { const v = tx.textContent.replace(/\s+/g, ' ').trim(); if (v !== orig.replace(/\s+/g, ' ').trim()) capEdit(L, b, v); });
-    list.append(h('div', { class:'leg-row' + (bad ? ' bad' : '') }, [
+    list.append(h('div', { class:'leg-row' + (bad ? ' bad' : '') + (b.k === sk ? ' on' : '') }, [
       h('button', { type:'button', class:'leg-t', text:fmtSec(b.s + off), title:'Levar a agulha até aqui', onclick:() => { pause(); T = clamp(b.s + off + .02, 0, S.duration); RT.userSeek = true; needs = true; } }),
       tx,
-      h('button', { type:'button', class:'icon-btn', html:ICON_PLAY, title:'Ouvir este trecho', 'aria-label':'Ouvir este trecho', onclick:() => play(b.s + off, b.e + off) })]));
+      h('button', { type:'button', class:'icon-btn', html:ICON_PLAY, title:'Ouvir este trecho', 'aria-label':'Ouvir este trecho', onclick:() => play(b.s + off, b.e + off) }),
+      h('button', { type:'button', class:'icon-btn', html:ICONS.trash, title:'Apagar este trecho', 'aria-label':'Apagar este trecho', onclick:() => capDelBlock(L, b.k) })]));
   }
   const s = dub > 1 ? 's' : '';
   out.push(h('h3', { text:'Texto da legenda', 'data-sum':dub ? `${dub} para conferir` : `${bl.length} trechos` }),
-    h('p', { class:'hint', text:dub ? `${dub} palavra${s} marcada${s}: o som combina pouco com ela${s}. Ouça (▶) e corrija se precisar. Enter confirma; o tempo é acertado sozinho.` : 'Clique num trecho para corrigir. Enter confirma; o tempo de cada palavra é acertado sozinho.' }),
+    h('p', { class:'hint', text:dub ? `${dub} palavra${s} marcada${s}: o som combina pouco com ela${s}. Ouça (▶) e corrija se precisar. Enter confirma; o tempo é acertado sozinho.` : 'Clique num trecho para corrigir. Enter confirma; o tempo de cada palavra é acertado sozinho. Na timeline, arraste a borda de um trecho para ele ficar mais ou menos tempo na tela; clique e Delete apaga.' }),
     dub ? (() => { const id = fid(L, 'caponly'), i = h('input', { type:'checkbox', id, checked:only }); i.addEventListener('change', () => { RT.capOnlyDub = i.checked; renderProps(); }); return h('label', { class:'check', for:id }, [i, 'Mostrar só os trechos para conferir']); })() : null,
     list,
     h('div', { class:'row' }, [h('button', { class:'btn small', text:'Baixar .srt', title:'Arquivo de legenda para Instagram, YouTube ou outro editor', onclick:() => capSrt(L) }),
