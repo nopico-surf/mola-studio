@@ -66,15 +66,33 @@ function wav(nz, amp, sr = 48000) {
     return { vEnh:A.vEnh, vDen:A.vDen, pk };
   });
   const loud = await rms(2.5, 3.5);
-  ok(r2.vEnh === 1 && r2.vDen === undefined, 'Melhorar a voz liga sem ligar o ruído', r2);
+  ok(r2.vEnh === 2 && r2.vDen === undefined, 'Melhorar a voz liga sozinho (Médio) sem ligar o ruído', r2);
   ok(loud > quiet * 1.5 && r2.pk < 1, 'fala baixa fica mais alta e não estoura', { quiet, loud, pk:r2.pk });
+  // força do Melhorar a voz: uma linha só dele, logo abaixo; Leve, Médio e Forte dão sons diferentes, nenhum estoura
+  const enhRow = p.locator('#props .voice-card .field', { hasText:'Força' });
+  ok(await enhRow.count() === 1, 'só o Melhorar a voz ligado: uma linha de Força', await enhRow.count());
+  const lvl = {};
+  for (const [nm, v] of [['Leve', 1], ['Forte', 3], ['Médio', 2]]) {
+    await enhRow.first().locator('button', { hasText:nm }).click(); await p.waitForTimeout(150);
+    lvl[nm] = await p.evaluate(async () => { const A = S.layers.find(l => l.type === 'audio'), m = await buildMix(48000, S.duration), d = m.getChannelData(0);
+      let s = 0, pk = 0; for (let i = 0; i < d.length; i++) { pk = Math.max(pk, Math.abs(d[i])); if (i > 2.5 * 48000 && i < 3.5 * 48000) s += d[i] * d[i]; } return { v:A.vEnh, rms:Math.sqrt(s / 48000), pk }; });
+    ok(lvl[nm].v === v, `Força ${nm} grava ${v}`, lvl[nm]);
+  }
+  ok(lvl.Leve.rms !== lvl.Médio.rms && lvl.Médio.rms !== lvl.Forte.rms && Object.values(lvl).every(o => o.pk < 1), 'os três níveis soam diferentes e nenhum estoura', lvl);
   await p.screenshot({ path:path.join(outDir, 'voz-2-melhorar.png') });
 
   // 3) as duas juntas, e o sinal da prévia muda (refaz a mistura)
   const sig0 = await p.evaluate(() => audioSig());
   await p.locator('#props .voice-card label.check', { hasText:'Tirar ruído' }).click(); await p.waitForTimeout(300);
   const r3 = await p.evaluate(() => { const A = S.layers.find(l => l.type === 'audio'); return { vEnh:A.vEnh, vDen:A.vDen, sig:audioSig() }; });
-  ok(r3.vEnh === 1 && r3.vDen === 2 && r3.sig !== sig0, 'as duas ligadas juntas e a prévia refaz o som', r3);
+  ok(r3.vEnh === 2 && r3.vDen === 2 && r3.sig !== sig0, 'as duas ligadas juntas e a prévia refaz o som', r3);
+  // duas linhas de Força, cada uma mexe só na sua
+  const rows = p.locator('#props .voice-card .field', { hasText:'Força' });
+  ok(await rows.count() === 2, 'as duas ligadas: uma Força para cada', await rows.count());
+  await rows.nth(1).locator('button', { hasText:'Leve' }).click(); await p.waitForTimeout(150);
+  const r3b = await p.evaluate(() => { const A = S.layers.find(l => l.type === 'audio'); return { vEnh:A.vEnh, vDen:A.vDen }; });
+  ok(r3b.vEnh === 2 && r3b.vDen === 1, 'a Força do ruído não mexe na da voz', r3b);
+  await p.screenshot({ path:path.join(outDir, 'voz-3-as-duas.png') });
 
   // 4) o vídeo com som mostra o mesmo cartão (painel do vídeo)
   const r4 = await p.evaluate(() => { const A = S.layers.find(l => l.type === 'audio'); return soundFields([A]).some(n => n.classList && n.classList.contains('voice-card')); });

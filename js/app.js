@@ -8948,16 +8948,20 @@ function voiceGain(id, buf) {
   const hi = F ? Float32Array.from(db).sort()[Math.floor(F * .95)] : -17, g = clamp(Math.pow(10, (-17 - hi) / 20), .25, 8);
   VENH.set(id, g); return g;
 }
+// força do "Melhorar a voz" (vEnh): mud = corte em 300 Hz, pres = presença em 3,5 kHz, air = brilho acima de 10 kHz (dB),
+// thr/ratio = compressor, mk = ganho depois dele. Médio = o de antes
+const ENH_LV = { 1:{ name:'Leve', mud:-1.5, pres:2, air:1, thr:-18, ratio:2, mk:1.2 }, 2:{ name:'Médio', mud:-3, pres:3.5, air:2, thr:-22, ratio:3, mk:1.4 },
+  3:{ name:'Forte', mud:-4.5, pres:5, air:3, thr:-26, ratio:4.5, mk:1.7 } };
 // cadeia da voz entre os pedaços do som (que já vêm com o volume v) e o resto; sem vEnh, direto
 function voiceChain(off, A, out, buf, v) {
   if (!A.vEnh || !(v > 0)) return out;
-  const inp = off.createGain(), mk = off.createGain();
-  inp.gain.value = voiceGain(A.aud, buf) / v; mk.gain.value = 1.4 * v;
+  const E = ENH_LV[A.vEnh] || ENH_LV[2], inp = off.createGain(), mk = off.createGain();
+  inp.gain.value = voiceGain(A.aud, buf) / v; mk.gain.value = E.mk * v;
   const bq = (type, f, gain, Q) => { const b = off.createBiquadFilter(); b.type = type; b.frequency.value = f; if (gain != null) b.gain.value = gain; if (Q != null) b.Q.value = Q; return b; };
   const comp = off.createDynamicsCompressor(), lim = off.createDynamicsCompressor();
-  comp.threshold.value = -22; comp.knee.value = 8; comp.ratio.value = 3; comp.attack.value = .004; comp.release.value = .12;
+  comp.threshold.value = E.thr; comp.knee.value = 8; comp.ratio.value = E.ratio; comp.attack.value = .004; comp.release.value = .12;
   lim.threshold.value = -2; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = .001; lim.release.value = .05;
-  const chain = [inp, bq('highpass', 80, null, .707), bq('peaking', 300, -3, 1), bq('peaking', 3500, 3.5, .9), bq('highshelf', 10000, 2), comp, mk, lim];
+  const chain = [inp, bq('highpass', 80, null, .707), bq('peaking', 300, E.mud, 1), bq('peaking', 3500, E.pres, .9), bq('highshelf', 10000, E.air), comp, mk, lim];
   for (let i = 0; i < chain.length - 1; i++) chain[i].connect(chain[i + 1]);
   lim.connect(out); return inp;
 }
@@ -9109,11 +9113,13 @@ function voiceFields(As) {
     inp.addEventListener('change', () => set(k, inp.checked ? on : 0));
     return h('label', { class:'check', for:id, title }, [inp, label]);
   };
-  const lv = A.vDen ? modeF('Força', Object.entries(DEN_LV).map(([k, m]) => [+k, m.name, k === '1' ? 'Tira pouco, a voz fica intacta' : k === '2' ? 'O ponto certo para a maioria' : 'Tira mais; a voz pode ficar um pouco abafada']), A.vDen, v => set('vDen', v)) : null;
-  if (lv) lv.classList.add('stack');
+  // força de cada um logo abaixo da caixa dele (só quando ligado)
+  const force = (k, L, tips) => { if (!A[k]) return null; const f = modeF('Força', Object.entries(L).map(([n, m], i) => [+n, m.name, tips[i]]), A[k], v => set(k, v)); f.classList.add('stack'); return f; };
+  const ev = force('vEnh', ENH_LV, ['Só um toque: a voz fica natural', 'O ponto certo para a maioria', 'Voz bem na frente, como em rádio; pode soar mais comprimida']);
+  const lv = force('vDen', DEN_LV, ['Tira pouco, a voz fica intacta', 'O ponto certo para a maioria', 'Tira mais; a voz pode ficar um pouco abafada']);
   return h('div', { class:'sil-card voice-card' }, [
     h('div', { class:'sil-head', text:'Aprimorar a voz' }),
-    chk('vEnh', 'Melhorar a voz', 'Volume da fala igualado, menos grave embolado, mais presença e um compressor suave', 1),
+    chk('vEnh', 'Melhorar a voz', 'Volume da fala igualado, menos grave embolado, mais presença e um compressor suave', 2), ev,
     chk('vDen', 'Tirar ruído', 'Tira o ruído constante do fundo: ventilador, chiado, ar-condicionado', 2), lv,
     h('p', { class:'hint', text:'Toca na prévia e sai no MP4. Tirar ruído limpa o som uma vez (alguns segundos em som longo) e só tira o ruído constante.' })].filter(Boolean));
 }
