@@ -7098,18 +7098,21 @@ function seditDy(font, size, lineH, base) {
 }
 // onde o campo fica na tela, com o tamanho e o espaçamento que o canvas usou (câmera, giro do texto e dos grupos entram)
 function seditGeo(L) {
-  const r = cv.getBoundingClientRect(), b = L._bounds; if (!r.width || !b) return null;
+  const r = cv.getBoundingClientRect(); if (!r.width) return null;
+  const ph = phase(L, T), rr = ph && ph.mode !== 'hold' ? restRect(L) : null; // entrando/saindo, o _bounds é o do quadro animado (escala e deslocamento): o campo usa a caixa assentada
+  const b = rr ? { ...L._bounds, ...rr.b } : L._bounds; if (!b || b.w == null) return null;
   const sc = r.width / FW(), cm = camOf(L), one = L.type === 'cta';
-  let size = L.size, lineH, w, k, font = fontStr(L, size);
+  let size = L.size, lineH, w, k, font = fontStr(L, size), nowrap = false;
   if (one) { const G = geomNow(L); k = G && G.w ? b.w / G.w : 1; lineH = size * 1.2; w = b.w / k; }
   else {
     const lay = layoutText(L, caseTxt(L, seditShow(L))); size = lay.size; lineH = lay.lineH; w = lay.innerW; k = b.k || 1; font = lay.font;
+    nowrap = lay.nLines <= seditShow(L).split('\n').length; // sem quebra automática o campo também não quebra (o DOM mede uma fração a mais que o canvas e a seleção virava blocos soltos)
   }
   const f = k * sc * (cm ? cm.s : 1), dy = seditDy(font, size, lineH, lineH / 2 + size * (one ? .35 : .34));
   const cen = camFwd(cm, { x:b.x + b.w / 2, y:b.y + b.h / 2 }), bx = $('#stageBox').getBoundingClientRect();
   const deg = (rotOf(L) || 0) + (cm ? (cm.r + (cm.ga || 0)) * 180 / Math.PI : 0);
   return { x:r.left - bx.left + cen.x * sc, y:r.top - bx.top + cen.y * sc + dy * f, w:Math.max(8, w * f), size:size * f, lh:lineH * f,
-    ls:(L.ls || 0) * size * f, wsp:(L.wsp || 0) * size * f, deg, one, align:one ? 'center' : (L.align || 'center') };
+    ls:(L.ls || 0) * size * f, wsp:(L.wsp || 0) * size * f, deg, one:one || nowrap, align:one ? 'center' : (L.align || 'center') };
 }
 function seditPlace() {
   const el = SED.el, L = seditL(); if (!el || !L) return;
@@ -7118,7 +7121,12 @@ function seditPlace() {
     `transform:translate(-50%,-50%)${g.deg ? ` rotate(${g.deg.toFixed(2)}deg)` : ''};` +
     `font:${fontStr(L, g.size)};line-height:${g.lh.toFixed(2)}px;letter-spacing:${g.ls.toFixed(2)}px;word-spacing:${g.wsp.toFixed(2)}px;` +
     `text-align:${g.align};text-transform:${L.upper ? 'uppercase' : L.lower ? 'lowercase' : L.title ? 'capitalize' : 'none'}`;
-  if (css !== SED.css) { SED.css = css; el.style.cssText = css; }
+  const fr = RT.fontRev || 0;
+  if (css !== SED.css || fr !== SED.fr) {
+    const fresh = fr !== SED.fr && SED.fr !== undefined; // a fonte acabou de carregar: o campo foi medido com a fonte de reserva e a seleção ficava em blocos soltos até mexer no elemento
+    SED.css = css; SED.fr = fr; el.style.cssText = css;
+    if (fresh) { el.style.display = 'none'; void el.offsetHeight; el.style.display = ''; if (SED.range && document.activeElement === el) seditSelect(SED.range[0], SED.range[1]); }
+  }
   el.classList.toggle('one', !!g.one);
 }
 // o texto do campo sai dos nós, não do innerText: com "Caixa alta" (text-transform) o innerText devolve o texto já em maiúsculas
@@ -7161,7 +7169,7 @@ function stageEdit(L) {
   if (!isPicked(L.id) || (RT.picks && RT.picks.size > 1)) select(L.id, true);
   ensureBounds([L]);
   if (!L._bounds) return false;
-  SED.id = L.id; SED.k = b ? b.k : null; SED.dirty = false; SED.realign = false; SED.css = '';
+  SED.id = L.id; SED.k = b ? b.k : null; SED.dirty = false; SED.realign = false; SED.css = ''; SED.fr = undefined;
   const el = h('div', { class:'sedit', contenteditable:'plaintext-only', spellcheck:'true', lang:'pt-BR', role:'textbox', 'aria-label':'Texto no palco' });
   SED.el = el;
   el.textContent = SED.orig = seditTxt(L);
