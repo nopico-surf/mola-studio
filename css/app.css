@@ -778,7 +778,7 @@ button.chip-cat{gap:8px}
 .sec > h3.sub:not(:first-child){margin-top:4px}
 
 /* a barra de rolagem das colunas não empurra o conteúdo quando aparece (antes dava um tranco para o lado ao abrir uma seção) */
-.left,.right{scrollbar-gutter:stable}
+.left,.right{scrollbar-gutter:stable;overflow-anchor:none}
 .pfrow{display:flex;flex-wrap:wrap;gap:6px}
 .pfrow .btn{display:inline-flex;align-items:center;gap:5px}
 .pfrow .btn svg{width:14px;height:14px;flex:none}

@@ -22,7 +22,7 @@ const ok = (c, msg, extra) => { if (c) console.log('ok   ' + msg); else { falhas
   await p.evaluate(() => {
     S.layers = S.layers.filter(l => l.type === 'bg'); S.groups = {}; S.flow = null; S.audio = null; setDuration(8); T = 0;
     changed({ layers: true, props: true });
-    addLayer(mkComp('titulo'));
+    addLayer(mkComp('title'));
     const L = S.layers.find(l => l.type === 'text');
     L.text = 'Oferta de hoje'; L.in = 'cut'; L.out = 'cut'; L.start = 0; L.end = 8;
     ensureBounds([L]); changed({ layers: true, props: true });
@@ -79,10 +79,53 @@ const ok = (c, msg, extra) => { if (c) console.log('ok   ' + msg); else { falhas
   const r4 = await p.evaluate(() => ({ el: !!document.querySelector('.sedit'), txt: S.layers.find(l => l.type === 'text').text }));
   ok(!r4.el && r4.txt === 'So hoje', 'clicar fora confirma o texto digitado', r4);
 
+  // palavras selecionadas: Ctrl+B e o peso do painel valem só para elas (pedido do usuário)
+  await p.evaluate(() => {
+    const L = S.layers.find(l => l.type === 'text');
+    L.text = 'tres palavras aqui'; L.runs = null; L.weight = 500; ensureBounds([L]); changed({ layers: true, props: true });
+  });
+  await p.waitForTimeout(300);
+  c = await mid('text');
+  await p.mouse.dblclick(c.x, c.y);
+  await p.waitForTimeout(300);
+  // clique duplo dentro do campo escolhe a palavra do meio
+  const w2 = await p.evaluate(() => {
+    const el = document.querySelector('.sedit'), r = document.createRange(), t = el.firstChild;
+    r.setStart(t, 6); r.setEnd(t, 14); const b = r.getBoundingClientRect();
+    return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+  });
+  await p.mouse.dblclick(w2.x, w2.y);
+  await p.waitForTimeout(250);
+  const selTxt = await p.evaluate(() => String(getSelection()));
+  ok(selTxt.trim() === 'palavras', 'clique duplo no campo escolhe a palavra', selTxt);
+  await p.keyboard.press('Control+b');
+  await p.waitForTimeout(300);
+  const neg = await p.evaluate(() => { const L = S.layers.find(l => l.type === 'text'); return { runs: (L.runs || []).map(r => [r.t, r.w || null]), weight: L.weight, aberto: !!document.querySelector('.sedit') }; });
+  ok(neg.weight === 500 && neg.runs.some(r => r[0].trim() === 'palavras' && r[1] === 700) && neg.runs.length === 3,
+    'Ctrl+B deixa só a palavra escolhida em negrito (L.runs), sem mexer no peso da camada', neg);
+  ok(neg.aberto, 'a edição continua aberta depois de mudar a propriedade do trecho');
+  await p.screenshot({ path: path.join(outDir, 'texto-no-palco-5.png') });
+
+  // o peso do painel (com o trecho ainda escolhido) também vale só para o trecho e não fecha a edição
+  const wid = await p.evaluate(() => { const L = S.layers.find(l => l.type === 'text'); const el = document.getElementById('f-' + L.id + '-weight'); return el ? '#f-' + L.id + '-weight' : null; });
+  ok(!!wid, 'o painel tem o peso da fonte à mão', wid);
+  if (wid) {
+    const vals = await p.evaluate(sel => [...document.querySelector(sel).options].map(o => o.value), wid);
+    const alvo = vals.includes('300') ? '300' : vals.find(v => v !== '500');
+    await p.selectOption(wid, alvo);
+    await p.waitForTimeout(400);
+    const r6 = await p.evaluate(() => { const L = S.layers.find(l => l.type === 'text'); return { runs: (L.runs || []).map(r => [r.t, r.w || null]), weight: L.weight, aberto: !!document.querySelector('.sedit') }; });
+    ok(r6.weight === 500 && r6.runs.some(r => r[0].trim() === 'palavras' && String(r[1]) === alvo),
+      'o Peso do painel vale só para o trecho escolhido no palco', { r6, alvo });
+    ok(r6.aberto, 'mexer no painel não fecha a edição no palco');
+  }
+  await p.evaluate(() => seditClose());
+  await p.waitForTimeout(200);
+
   // botão: clique duplo abre na tela, em uma linha
   await p.evaluate(() => {
     S.layers = S.layers.filter(l => l.type === 'bg'); changed({ layers: true, props: true });
-    addLayer(mkComp('botao'));
+    addLayer(mkComp('cta'));
     const L = S.layers.find(l => l.type === 'cta'); L.in = 'cut'; L.out = 'cut'; L.start = 0; L.end = 8;
     ensureBounds([L]); changed({ layers: true, props: true });
   });

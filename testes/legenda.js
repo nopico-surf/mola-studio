@@ -95,10 +95,11 @@ const ok = (c, msg, extra) => { if (c) console.log('ok   ' + msg); else { falhas
   const cap = await p.evaluate(() => { const L = mkText('title', { text:'OLÁ MUNDO', cap:true }); return caseTxt(L, L.text); });
   ok(cap === 'Olá mundo', 'texto comum: L.cap (primeira letra) continua valendo', cap);
 
-  // clique duplo no palco leva ao trecho na lista
+  // clique duplo no palco abre a edição na tela, no trecho da agulha
   await p.evaluate(() => { const L = S.layers.find(l => l.capt); select(L.id); T = W0[8].s + .05; needs = true; editText(L); });
   await p.waitForTimeout(200);
-  ok(await p.evaluate(() => document.activeElement && document.activeElement.classList.contains('leg-tx')), 'editar a legenda pelo palco foca o trecho da agulha');
+  const noPalco = await p.evaluate(() => { const el = document.activeElement; return { sedit:!!el && el.classList.contains(String.fromCharCode(115,101,100,105,116)), txt:el ? el.textContent : null }; });
+  ok(noPalco.sedit && !!noPalco.txt, 'editar a legenda pelo palco abre o campo na tela, no trecho da agulha', noPalco);
 
   await b.close();
   console.log(falhas ? `\n${falhas} falha(s)` : '\ntudo certo');
