@@ -502,13 +502,17 @@ async function textVecs(L) {
   const lay = layoutText(L, caseTxt(L, L.text)), fk = bd.k || bd.w / lay.blockW || 1;
   const T0 = { ax:bd.x + bd.w / 2, ay:bd.y + bd.h / 2, k:fk }, byCol = new Map(); let missing = 0;
   for (const line of lay.lines) {
-    const items = line.glyphs.filter(g => !g.space).map(g => {
+    const byFam = new Map(); // trecho com outra fonte (g.fm): o desenho vem do arquivo dela
+    for (const g of line.glyphs) {
+      if (g.space) continue;
       const m = /^(italic )?(\d+)/.exec(g.f) || [], it = { ch:g.ch, x:line.x0 + g.x, y:line.baseline, w:+m[2] || L.weight, it:!!m[1], c:g.c || L.color };
       if (lay.tp) { const q = g.tp; it.x = q.x - Math.cos(q.a) * g.w / 2; it.y = q.y - Math.sin(q.a) * g.w / 2; it.r = q.a; } // texto em curva: a letra no caminho
-      return it;
-    });
-    const r = await glyphsD(L.font, lay.size, items, T0); missing += r.missing;
-    for (const [c, d] of r.map) byCol.set(c, (byCol.get(c) || '') + d);
+      const fam = g.fm || L.font; if (!byFam.has(fam)) byFam.set(fam, []); byFam.get(fam).push(it);
+    }
+    for (const [fam, items] of byFam) {
+      const r = await glyphsD(fam, lay.size, items, T0); missing += r.missing;
+      for (const [c, d] of r.map) byCol.set(c, (byCol.get(c) || '') + d);
+    }
   }
   const parts = [];
   for (const [color, d] of byCol) { const vec = vecParse(d); if (vec) parts.push({ color, d, vec }); }

@@ -1,5 +1,6 @@
 // Teste no navegador: nenhum campo do painel tem um botão extra competindo na mesma linha (pedido do usuário: "Abraçar" ao lado
 // da Largura ficava ruim). O modo (Abraçar | Largura fixa, Em px | Auto, Em pares | Cada lado) tem linha própria e funciona no clique.
+// Desde os controles no jeito do Figma, Abraçar | Fixa fica no menu dentro do campo da largura (também não compete na linha).
 // Rodar: node testes/linha-unica.js   (precisa do playwright)
 const path = require('path');
 let pw; try { pw = require('playwright'); } catch (e) { pw = require(require('child_process').execSync('npm root -g').toString().trim() + '/playwright'); }
@@ -11,6 +12,8 @@ const conf = (ok, msg) => { if (!ok) falhas++; console.log((ok ? 'ok   ' : 'FALH
 const extras = p => p.evaluate(() => [...document.querySelectorAll('#props .field:not(.stack)')].filter(f => f.children.length > 2 || f.classList.contains('flowgap'))
   .map(f => f.querySelector('label')?.textContent));
 const openSecs = p => p.evaluate(() => document.querySelectorAll('#props section.sec h3').forEach(h => { if (h.closest('.folded') || h.classList.contains('folded')) h.click(); }));
+// modo dentro do campo (menu da seta, como o W do Figma): não é botão no fim da linha
+const menuPick = async (p, label, text) => { await p.locator(`#props .nf-chev[aria-label="${label}: modo"]`).first().click(); await p.locator('.ctx.nfmenu button', { hasText:text }).first().click(); await p.waitForTimeout(150); };
 const segBtn = (p, label, text) => p.locator(`#props .field:has(> label:text-is("${label}")) .segs button:text-is("${text}")`).first();
 
 (async () => {
@@ -23,11 +26,11 @@ const segBtn = (p, label, text) => p.locator(`#props .field:has(> label:text-is(
   const id = await p.evaluate(() => { const k = ADD_KINDS.find(k => k.id === 'sub'); const L = addLayer(k.mk(S.brand, S.brand.fonts)); select(L.id); renderProps(); return L.id; });
   await openSecs(p);
   conf((await extras(p)).length === 0, 'texto: nenhum campo com botão no fim da linha ' + JSON.stringify(await extras(p)));
-  await segBtn(p, 'Caixa', 'Largura fixa').click();
+  await menuPick(p, 'Largura máx.', 'Largura fixa');
   conf(await p.evaluate(id => !!S.layers.find(l => l.id === id).fixW, id), 'texto: "Largura fixa" liga a largura fixa');
   conf(await p.locator('#props .field > label:text-is("Largura")').count() === 1, 'texto: campo "Largura" aparece');
   if (shots) await p.locator('#props').screenshot({ path:path.join(shots, 'texto.png') });
-  await segBtn(p, 'Caixa', 'Abraçar').click();
+  await menuPick(p, 'Largura', 'Abraçar');
   conf(await p.evaluate(id => !S.layers.find(l => l.id === id).fixW, id), 'texto: "Abraçar" volta a abraçar');
 
   // frame com layout automático: Espaço, Interno, Largura e Altura
@@ -38,7 +41,7 @@ const segBtn = (p, label, text) => p.locator(`#props .field:has(> label:text-is(
   });
   await openSecs(p);
   conf((await extras(p)).length === 0, 'frame: nenhum campo com botão no fim da linha ' + JSON.stringify(await extras(p)));
-  await segBtn(p, 'Largura', 'Fixa').click();
+  await menuPick(p, 'Largura', 'Fixa');
   conf(await p.evaluate(g => S.groups[g].flow.w > 0, gid), 'frame: "Fixa" fixa a largura');
   await openSecs(p);
   await segBtn(p, 'Interno', 'Cada lado').click();

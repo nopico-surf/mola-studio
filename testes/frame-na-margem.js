@@ -22,7 +22,8 @@ const url = 'file://' + path.resolve(__dirname, '..', 'index.html');
   const marcado = await p.evaluate(() => { const i = document.getElementById('frameKeep-ga'); return i ? i.checked : null; });
   ok(marcado === true, 'frame nasce com "Manter dentro da margem" marcado', { marcado });
   // slider de largura no máximo
-  const slide = (id, v) => p.evaluate(([id, v]) => { const i = document.getElementById(id); i.dispatchEvent(new Event('pointerdown')); i.value = v; i.dispatchEvent(new Event('input')); i.dispatchEvent(new Event('change')); return +i.max; }, [id, v]);
+  // campo de número (sem slider desde os controles no jeito do Figma): digita o valor e confirma
+  const slide = (id, v) => p.evaluate(([id, v]) => { const i = document.getElementById(id); i.focus(); i.value = String(v); i.blur(); return 0; }, [id, v]);
   const mx = await slide('f-flow-ga-w', 5000); await p.waitForTimeout(150);
   let c = await caixa(); ok(dentro(c), 'largura pelo slider para na margem', { mx, ...c });
   await p.evaluate(() => { flowOf('ga').w = 400; changed({ props:true }); }); await p.waitForTimeout(150);
@@ -33,9 +34,9 @@ const url = 'file://' + path.resolve(__dirname, '..', 'index.html');
   c = await caixa(); ok(dentro(c), 'arrastar o frame para na margem', c);
   // espaço interno nas laterais no máximo (frame abraçando)
   await p.evaluate(() => { delete flowOf('ga').w; changed({ props:true }); renderAll(); }); await p.waitForTimeout(150);
-  await p.evaluate(() => { const i = [...document.querySelectorAll('#props input[type=range]')].find(i => i.id.startsWith('f-flow-ga-pl')); i.dispatchEvent(new Event('pointerdown')); i.value = 400; i.dispatchEvent(new Event('input')); });
+  await p.evaluate(() => { const i = [...document.querySelectorAll('#props input.num')].find(i => i.id.startsWith('f-flow-ga-pl')); i.focus(); i.value = '400'; i.blur(); });
   await p.waitForTimeout(150);
-  c = await caixa(); ok(dentro(c), 'espaço interno pelo slider para na margem', c);
+  c = await caixa(); ok(dentro(c), 'espaço interno pelo campo para na margem', c);
   // desmarcado: a largura passa
   await p.evaluate(() => { const i = document.getElementById('frameKeep-ga'); i.checked = false; i.dispatchEvent(new Event('change')); flowOf('ga').pl = flowOf('ga').pr = undefined; flowOf('ga').w = 400; changed({ props:true }); renderAll(); });
   await p.waitForTimeout(200);

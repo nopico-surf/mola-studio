@@ -432,7 +432,11 @@ function openComps(id = 'title') {
     const tag = h('small', { class:'comp-tag', text:m ? names(+m[1]) : 'Outra' });
     return field(label, h('div', { class:'comp-colors' }, [...sws, h('span', { class:'comp-or', text:'ou' }), own, tag]), null);
   };
-  const presetSel = (P, k, label, keys, M) => selectF(P, k, label, keys.filter(key => k === 'idle' || M[key]).map(key => [key, k === 'idle' ? IDLE[key] : M[key].label]));
+  // a mesma galeria do painel (miniaturas, filtros, favoritos), gravando no padrão; sem prévia no palco (a prévia é a da janela)
+  const presetSel = (P, k, label, keys, M) => {
+    const ks = keys.filter(key => k === 'idle' ? IDLE[key] : M[key]), map = k === 'idle' ? Object.fromEntries(ks.map(key => [key, { label:IDLE[key] }])) : M;
+    return field(label, presetGrid(P, k, ks, map, null, { put:key => { pushUndo(); P[k] = key; } }), null, true);
+  };
 
   const draw = () => {
     closePicker();
@@ -442,7 +446,7 @@ function openComps(id = 'title') {
     if (d.type === 'text' || d.type === 'cta') {
       put(textF(P, 'text', d.type === 'cta' ? 'Texto inicial do botão' : 'Texto inicial'), fontPick(),
         selectF(P, 'weight', 'Peso', weightsOf(P.font).map(([v, t]) => [v, `${t} ${v}`]), { num:true }),
-        rangeF(P, 'size', 'Tamanho', 16, d.type === 'cta' ? 120 : 400, 1, px), colorPick('color', d.type === 'cta' ? 'Cor do texto' : 'Cor'));
+        rangeF(P, 'size', 'Tamanho', 16, d.type === 'cta' ? 120 : 400, 1, px, { presets:FONT_SIZES, ico:'nf_fs', low:8 }), colorPick('color', d.type === 'cta' ? 'Cor do texto' : 'Cor'));
       if (d.type === 'text') {
         put(rangeF(P, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em'),
           rangeF(P, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2)),
@@ -618,7 +622,7 @@ function compApplyMenu(anchor, id, after) {
   closeMenu();
   const d = COMP_DEF[id], marg = id === 'margin', one = d.label.toLowerCase(), many = compPl(id), nm = k => k > 1 ? many : one;
   const here = marg ? [] : S.layers.filter(l => compKindOf(l) === id), um = d.fem ? 'Nenhuma' : 'Nenhum';
-  const item = (text, sub, fn, off) => h('button', { disabled:off || null, onclick:() => { closeMenu(); fn(); } }, [h('span', {}, [text, h('small', { class:'ctx-sub', text:sub })])]);
+  const item = (text, sub, fn, off) => h('button', { disabled:off || null, onclick:e => { closeMenu(e.currentTarget); fn(); } }, [h('span', {}, [text, h('small', { class:'ctx-sub', text:sub })])]);
   const fls = k => `${k} arquivo${k > 1 ? 's' : ''}`, scene = d.grp != null; // fundo, transição e câmera: sem animação de entrada nem texto
   const what = scene ? 'O estilo' : 'O estilo e a animação', verb = scene ? 'passa' : 'passam', keeps = scene ? 'O tempo fica.' : 'Texto, posição e tempo ficam.';
   const m = h('div', { class:'ctx', role:'menu' }, [
@@ -641,7 +645,8 @@ function compApplyMenu(anchor, id, after) {
     }, !marg && !here.length),
   ]);
   document.body.append(m);
-  const r = anchor.getBoundingClientRect(), mr = m.getBoundingClientRect();
+  const r = anchor.getBoundingClientRect(), mr = { width:m.offsetWidth, height:m.offsetHeight };
   m.style.left = Math.max(8, Math.min(r.left, innerWidth - mr.width - 8)) + 'px';
   m.style.top = (r.bottom + 4 + mr.height > innerHeight ? Math.max(8, r.top - mr.height - 4) : r.bottom + 4) + 'px';
+  if (typeof popGrow === 'function') popGrow(m, anchor);
 }

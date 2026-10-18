@@ -3,7 +3,7 @@
   --bg:#010409; --panel:#0D1117; --raised:#151B23; --raised-2:#212830; --line:#262C36; --line-2:#3D444D; /* Cinzas da marca: Noite, Fundo, Cartão, Elevado, Borda */
   --fg:#D1D7E0; --muted:#9198A1; --faint:#656C76; /* Claro, Texto apagado, Neutro */
   /* o verde (--accent) aparece na seleção, no foco e nos botões principais (--btn, um verde mais vivo) */
-  --accent:#6A9C79; --accent-ink:#08150C; --accent-soft:rgba(106,156,121,.14);
+  --accent:#6A9C79; --accent-ink:#08150C; --accent-soft:rgba(106,156,121,.14); --accent-on:color-mix(in srgb,var(--accent) 22%,var(--raised-2)); /* marcado dentro de um cartão (fundo --raised) */
   --btn:#4FB574; --btn-ink:#06130A; /* botão principal e avisos com ação */
   --sel:var(--accent); --sel-ink:var(--accent-ink); --sel-rgb:106,156,121; --margin-rgb:160,140,230; --frame-rgb:122,160,230; /* seleção e guias do palco: o canvas lê estes (uiC/uiA em app.js) */
   --danger:#E5645D;
@@ -28,7 +28,7 @@ button{cursor:pointer}
 .logo-word i{width:14px;height:14px;border-radius:50% 50% 50% 0;background:var(--fg);display:inline-block;transform:rotate(-45deg)}
 .seg{display:inline-flex;background:var(--raised);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px}
 .seg button{border:0;background:transparent;padding:5px 12px;border-radius:999px;color:var(--muted);font-weight:600;font-size:12px;white-space:nowrap}
-.seg button[aria-pressed="true"]{background:var(--fg);color:var(--bg)}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--fg);box-shadow:inset 0 0 0 1px var(--accent)} /* marcado = verde, como todo item escolhido */
 /* formato principal (os outros se reorganizam a partir dele) */
 #fmt button.base::after{content:'';display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--muted);margin-left:5px;vertical-align:2px}
 .posnote{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;color:var(--faint);font-size:11px;margin:2px 0 4px}
@@ -99,6 +99,9 @@ input.sw-lbl:focus{color:var(--fg)}
 .row{display:flex;gap:6px;align-items:center;min-width:0}
 .row > *{min-width:0}
 .row > .btn{flex:none}
+/* ações do painel: linha só de botões = botões da mesma altura dos campos, dividindo a largura (um padrão só, como o "Tirar silêncios") */
+#props .row:not(:has(> :not(.btn))){flex-wrap:wrap}
+#props .row:not(:has(> :not(.btn))) > .btn{flex:1 1 0;min-width:max-content;height:var(--ctl);justify-content:center} /* não cabe lado a lado: desce para a linha de baixo, nunca corta */
 .row > input{flex:1 1 auto}
 .row.row-wrap{flex-wrap:wrap}
 .hint.hint-pad{padding:8px var(--pad) 0}
@@ -120,6 +123,8 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .lnm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1 1 auto}
 .lnm small{color:var(--faint);margin-left:4px;font:10.5px var(--f-mono)}
 .tl-nm .lnm small{display:none}
+/* na timeline subir/descer não aparecem (arrastar a linha ou Ctrl+] / Ctrl+[ reordenam): o nome não vira "Te…" com o mouse em cima */
+.tl-nm .acts .icon-btn.ud{display:none!important}
 .acts{display:flex;gap:0;flex:none;margin-left:auto}
 .acts .icon-btn{width:20px;height:20px}
 .acts .icon-btn svg{width:13px;height:13px}
@@ -279,6 +284,29 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .mwrap #mSum{font:500 11px var(--f-mono);color:var(--faint)}
 .mpop{position:absolute;top:calc(100% + 8px);left:0;z-index:50;width:250px;background:var(--raised);border:1px solid var(--line-2);border-radius:9px;padding:12px;box-shadow:0 16px 40px -8px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:10px}
 .mpop[hidden]{display:none}
+/* abrir e fechar: menu, lista de select e janelinha entram e saem com um movimentinho curto (sem isso ficava seco).
+   Quem sai leva .pop-out (não pega o mouse e os seletores de "está aberto" ignoram); .pop-up = abriu para cima */
+/* "Smart animate": o painel cresce da caixa de quem o abriu (o botão, o campo, o ponto do clique) até o tamanho
+   dele, e ao fechar volta a encolher para lá. O recorte é um clip-path, então o conteúdo não estica nem reflui e a
+   sombra entra junto. `popGrow` escreve --pop-t/rr/b/l (a caixa de origem, em px, dentro do painel); sem isso vale o
+   padrão: desdobra do alto (ou de baixo, com .pop-up). */
+@keyframes popIn{from{opacity:0;clip-path:inset(var(--pop-t,0px) var(--pop-rr,0px) var(--pop-b,100%) var(--pop-l,0px) round var(--pop-r,9px))}
+  45%{opacity:1}
+  to{opacity:1;clip-path:inset(0 0 0 0 round var(--pop-r,9px))}}
+@keyframes popInUp{from{opacity:0;clip-path:inset(var(--pop-t,100%) var(--pop-rr,0px) var(--pop-b,0px) var(--pop-l,0px) round var(--pop-r,9px))}
+  45%{opacity:1}
+  to{opacity:1;clip-path:inset(0 0 0 0 round var(--pop-r,9px))}}
+@keyframes popOut{from{opacity:1;clip-path:inset(0 0 0 0 round var(--pop-r,9px))}
+  55%{opacity:1}
+  to{opacity:0;clip-path:inset(var(--pop-t,0px) var(--pop-rr,0px) var(--pop-b,100%) var(--pop-l,0px) round var(--pop-r,9px))}}
+@keyframes popOutUp{from{opacity:1;clip-path:inset(0 0 0 0 round var(--pop-r,9px))}
+  55%{opacity:1}
+  to{opacity:0;clip-path:inset(var(--pop-t,100%) var(--pop-rr,0px) var(--pop-b,0px) var(--pop-l,0px) round var(--pop-r,9px))}}
+.ctx,.pop,.cp-pop,.gf-pop:not([hidden]),.mpop:not([hidden]){animation:popIn .15s cubic-bezier(.25,.7,.35,1)}
+.ctx.pop-up,.gf-pop.pop-up:not([hidden]){animation-name:popInUp}
+.ctx.pop-out,.pop.pop-out,.cp-pop.pop-out,.gf-pop.pop-out,.mpop.pop-out{animation:popOut .11s cubic-bezier(.45,.05,.75,.5) forwards;pointer-events:none}
+.ctx.pop-up.pop-out,.gf-pop.pop-up.pop-out{animation-name:popOutUp}
+@media (prefers-reduced-motion:reduce){.ctx,.pop,.cp-pop,.gf-pop:not([hidden]),.mpop:not([hidden]),.pop-out{animation-duration:.01s}}
 .gf-pop{position:fixed;z-index:60;background:var(--raised);border:1px solid var(--line-2);border-radius:9px;padding:4px;box-shadow:0 16px 40px -8px rgba(0,0,0,.6);overflow-y:auto;overscroll-behavior:contain}
 .gf-pop[hidden]{display:none}
 .gf-pop button{display:block;width:100%;border:0;background:transparent;text-align:left;padding:6px 8px;border-radius:6px;font-size:11px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -336,6 +364,12 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .rich{background:var(--bg);border:1px solid var(--line-2);border-radius:6px;padding:6px 8px;min-height:58px;max-height:180px;overflow:auto;white-space:pre-wrap;word-break:break-word;line-height:1.35;font-size:14px;cursor:text}
 .rich:focus{border-color:var(--accent);outline:none}
 .edit-flash{animation:editFlash .7s ease-out}
+/* edição do texto direto no palco (stageEdit): campo por cima do quadro, no lugar do texto. A letra é transparente — quem desenha
+   continua sendo o canvas — e só o cursor e a seleção aparecem, na mesma fonte e tamanho que o texto tem na tela. */
+.sedit{position:absolute;z-index:2;margin:0;padding:0;border:0;outline:0;background:none;color:transparent;
+  white-space:pre-wrap;overflow-wrap:normal;word-break:normal;caret-color:var(--accent);cursor:text;-webkit-text-fill-color:transparent}
+.sedit.one{white-space:pre;overflow:visible}
+.sedit::selection{background:rgba(var(--sel-rgb),.35);color:transparent;-webkit-text-fill-color:transparent}
 @keyframes editFlash{0%{box-shadow:0 0 0 0 rgba(var(--sel-rgb),.7)}100%{box-shadow:0 0 0 10px rgba(var(--sel-rgb),0)}}
 .richbar{display:flex;gap:4px;align-items:center}
 .richbar .btn{width:30px;justify-content:center;padding-inline:0}
@@ -547,8 +581,9 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .sil-card{display:grid;gap:8px;padding:10px;border-radius:var(--r);background:var(--raised)}
 .sil-card .sil-head{font-size:12px;font-weight:600;color:var(--fg)}
 .sil-card .field .segs button{background:var(--raised-2)}
-.sil-card .field .segs button[aria-pressed="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 22%,var(--raised-2))}
-.sil-card .sil-go{width:100%;height:var(--ctl)}
+.sil-card .field .segs button[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-on)}
+.sil-card .sil-go{width:100%;height:var(--ctl);justify-content:center;background:var(--raised-2)}
+.sil-card .sil-go:hover{background:var(--line-2)}
 .sil-card .sil-res{display:grid;gap:8px;padding-top:8px;border-top:1px solid var(--line-2)}
 .sil-card .sil-res .btn{justify-self:start}
 
@@ -569,7 +604,7 @@ textarea{border-color:transparent;background:var(--raised);border-radius:5px;pad
 .stage-hint .hseg{flex:none;display:flex;gap:2px;padding:2px;border-radius:999px;background:var(--raised)}
 .stage-hint .hseg button{background:transparent;color:var(--muted);font-weight:500;height:18px;padding:0 9px}
 .stage-hint .hseg button:hover{color:var(--fg);filter:none}
-.stage-hint .hseg button[aria-pressed="true"]{background:var(--line-2);color:var(--fg)}
+.stage-hint .hseg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--fg);box-shadow:inset 0 0 0 1px var(--accent)}
 .sec h3 .see{margin-left:auto;display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border-radius:var(--r);border:1px solid var(--line-2);background:transparent;color:var(--muted);font-size:11px;font-weight:600}
 .sec h3 .see svg{width:9px;height:9px}
 .sec h3 .see:hover{color:var(--fg);background:var(--raised-2);border-color:var(--line-2)}
@@ -735,7 +770,7 @@ button.chip-cat{gap:8px}
 .cat-box > .chip-cat{grid-column:1/-1}
 .cat-box .chip{background:var(--raised-2)}
 .cat-box .chip:hover{background:var(--line-2)}
-.cat-box .chip[aria-pressed="true"],.cat-box .chip[aria-pressed="true"]:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 22%,var(--raised-2))}
+.cat-box .chip[aria-pressed="true"],.cat-box .chip[aria-pressed="true"]:hover{border-color:var(--accent);background:var(--accent-on)}
 .sec > h3.sub.sub-open{margin-left:-8px;margin-right:-8px;padding:0 8px;border-radius:6px 6px 0 0;background:var(--raised)}
 .sec > .in-sub{margin:-8px -8px 0;padding:8px 8px 0;background:var(--raised)}
 .sec > .in-sub-end{padding-bottom:8px;border-radius:0 0 6px 6px}
@@ -842,3 +877,128 @@ input.slide-nm{position:fixed;z-index:40;width:180px;height:var(--ctl);backgroun
 #undo:disabled,#redo:disabled{opacity:.35;cursor:default;background:transparent}
 .comp-play{gap:5px}
 .comp-play svg{width:9px;height:9px}
+
+/* Galeria de animações: quadradinhos com miniatura ("Aa" com o preset) e o nome embaixo, todos à vista; pílulas filtram por categoria */
+.chips.pgal{grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:6px}
+.pcats{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:4px;margin-bottom:2px}
+.pcat{height:24px;padding:0 9px;border:1px solid transparent;border-radius:999px;background:var(--raised);color:var(--muted);font:500 11px var(--f-ui);cursor:pointer}
+.pcat:hover{color:var(--fg);border-color:var(--line-2)}
+.pcat[aria-pressed="true"]{color:var(--fg);border-color:var(--accent);background:var(--accent-soft)}
+.chips.pgal .chip-w{flex-direction:column}
+.chips.pgal .chip.pt{height:auto;flex-direction:column;align-items:stretch;justify-content:flex-start;gap:3px;padding:4px 4px 5px;border:1px solid transparent;border-radius:var(--r);background:var(--raised)}
+.chips.pgal .chip.pt:hover{border-color:var(--line-2);background:var(--raised-2)}
+.chips.pgal .chip.pt[aria-pressed="true"],.chips.pgal .chip.pt[aria-pressed="true"]:hover{border-color:var(--accent);background:var(--accent-soft)}
+.chips.pgal .chip-w:hover .chip.pt,.chips.pgal .chip-w.on .chip.pt,.chips.pgal .chip-w:focus-within .chip.pt{padding-right:4px}
+.pt-cv{display:block;width:100%;aspect-ratio:76/44;border-radius:3px;background:var(--bg)}
+.chips.pgal .chip.pt span{font-size:10.5px;line-height:1.2;text-align:center;color:var(--muted)}
+.chips.pgal .chip.pt[aria-pressed="true"] span,.chips.pgal .chip.pt:hover span{color:var(--fg)}
+.chips.pgal .chip.pt em{position:absolute;left:7px;top:7px;background:var(--bg)}
+.chips.pgal .fav{top:6px;right:6px;transform:none;background:var(--bg)}
+.chips.pgal .fav:hover{background:var(--raised-2)}
+
+/* ===== Controles no jeito do Figma (fase 1, pedido do usuário) =====
+   Nome em cima de cada campo; número = caixa com ícone que se arrasta (↔) e o valor digitável, sem slider; os campos de número
+   seguidos ficam dois por linha sozinhos (a seção é uma grade de 2 colunas; o resto ocupa a linha inteira) */
+.sec,.pop-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:8px;row-gap:8px;align-content:start}
+.sec > *,.pop-body > *{grid-column:1 / -1;min-width:0}
+.sec > .field.nfield,.pop-body > .field.nfield{grid-column:auto}
+.comp-body > .field.nfield .nf{max-width:calc(50% - 4px)} /* janela Componentes: coluna simples (em grade a galeria de presets se sobrepunha) */
+.field,.field.stack{grid-template-columns:minmax(0,1fr);gap:4px;min-height:0;align-items:start}
+.field > label{font-size:11px;color:var(--muted);line-height:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.field.nfield > label{cursor:ew-resize;user-select:none;justify-self:start;max-width:100%}
+.field.cont > label{display:none}
+.nf{display:flex;align-items:center;height:var(--ctl);background:var(--raised);border:1px solid transparent;border-radius:var(--r);min-width:0}
+.nf:hover{border-color:var(--line-2)}
+.nf:focus-within{border-color:var(--accent)}
+.nf-ic{flex:none;width:24px;height:100%;display:grid;place-items:center;color:var(--faint);cursor:ew-resize;user-select:none;touch-action:none}
+.nf-ic svg{width:14px;height:14px}
+.nf-ic.txt{font:600 11px var(--f-ui);color:var(--faint)}
+.nf-ic.none{width:8px}
+.nf:hover .nf-ic{color:var(--muted)}
+.nf input.num{flex:1;min-width:0;height:100%;border:0;background:transparent;padding:0 6px 0 0;color:var(--fg);font:11px var(--f-ui);font-variant-numeric:tabular-nums;text-align:left;outline:none;cursor:text}
+.nf input.num:hover,.nf input.num:focus{border:0;background:transparent}
+.nf.word input.num{color:var(--fg)}
+.nf-chev{flex:none;width:22px;height:100%;border:0;background:transparent;color:var(--muted);padding:0;display:grid;place-items:center;border-radius:0 var(--r) var(--r) 0;cursor:pointer}
+.nf-chev svg{width:12px;height:12px}
+.nf-chev:hover{color:var(--fg);background:var(--raised-2)}
+body.nf-scrub,body.nf-scrub *{cursor:ew-resize !important;user-select:none}
+.ctx.nfmenu{min-width:120px;overflow:auto}
+.ctx.nfmenu button{justify-content:flex-start;gap:8px}
+.ctx.nfmenu button b{width:12px;font-weight:400;color:var(--fg)}
+.ctx.nfmenu .nfm-ic{display:grid;place-items:center;color:var(--muted)}
+.ctx.nfmenu .nfm-ic svg{width:14px;height:14px}
+/* linha de propriedade: [amostra hex | %] olho − */
+.prop{display:flex;align-items:center;gap:2px;min-width:0}
+.prop-box{flex:1;min-width:0;display:flex;align-items:center;height:var(--ctl);background:var(--raised);border:1px solid transparent;border-radius:var(--r);padding-left:4px}
+.prop-box:hover{border-color:var(--line-2)}
+.prop-box:focus-within{border-color:var(--accent)}
+.prop-box .cpick{flex:none;width:20px;height:20px;border-radius:3px;border:1px solid var(--line-2);margin:0 2px}
+.prop-box .hexwrap{flex:1;min-width:0;height:100%;background:transparent;border:0;border-radius:0;padding:0 6px}
+.prop-box .hexwrap:hover{border:0}
+.prop-box .hexwrap i{color:var(--faint)}
+.prop-box .hexwrap input.hex{flex:1;width:auto;min-width:0}
+.prop-box .pctwrap{flex:none;display:inline-flex;align-items:center;height:100%;padding:0 8px 0 6px;border-left:1px solid var(--panel);font:11px var(--f-mono);color:var(--faint)}
+.prop-box .pctwrap i{font-style:normal}
+.prop-box .pctwrap input[type=number]{width:28px;height:auto;min-width:0;border:0;border-radius:0;background:transparent;color:var(--fg);font:11px var(--f-mono);padding:0;outline:none;text-align:right;-moz-appearance:textfield;appearance:textfield}
+.prop-box .pctwrap input::-webkit-outer-spin-button,.prop-box .pctwrap input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.prop-b{flex:none;width:var(--ctl);height:var(--ctl);border:0;border-radius:var(--r);background:transparent;color:var(--muted);padding:0;display:grid;place-items:center;cursor:pointer}
+.prop-b svg{width:16px;height:16px}
+.prop-b:hover{background:var(--raised);color:var(--fg)}
+.prop.off .prop-box .hexwrap,.prop.off .prop-box .pctwrap{opacity:.5}
+/* janelinha de detalhes ao lado (popover) e o cabeçalho do seletor de cor */
+.pop{position:fixed;z-index:1000;width:240px;max-height:calc(100vh - 16px);overflow:auto;background:var(--raised);border:1px solid var(--line-2);border-radius:9px;box-shadow:0 16px 40px -8px rgba(0,0,0,.6)}
+.pop-head{display:flex;align-items:center;justify-content:space-between;gap:8px;height:36px;padding:0 4px 0 12px;border-bottom:1px solid var(--line);font-size:11px;font-weight:600;color:var(--fg)}
+.cp-pop > .pop-head{margin:-10px -10px 0}
+.pop-x{width:24px;height:24px;border:0;border-radius:var(--r);background:transparent;color:var(--muted);padding:0;display:grid;place-items:center;cursor:pointer}
+.pop-x svg{width:14px;height:14px}
+.pop-x:hover{background:var(--raised-2);color:var(--fg)}
+.pop-body{padding:12px}
+.pop .nf,.pop .prop-box,.pop input[type=text],.pop select,.pop .segs button{background:var(--raised-2)}
+.popped{border-color:var(--accent) !important}
+/* ===== Painel na ordem do Figma (fase 2) ===== */
+.sec h3.nofold{cursor:default}
+.sec h3 .list-b{width:24px;height:24px}
+.sec h3.nofold .h3r{margin-right:-4px}
+.sec h3 .list-b svg{width:16px;height:16px}
+.prop-det svg{width:16px;height:16px}
+.fx-box{gap:0;padding-left:0}
+.fx-ic,.fill-sw{flex:none;width:28px;height:100%;border:0;background:transparent;color:var(--muted);padding:0;display:grid;place-items:center;cursor:pointer;border-radius:var(--r) 0 0 var(--r)}
+.fx-ic svg,.fill-sw i svg{width:16px;height:16px}
+.fx-ic:hover{color:var(--fg)}
+.fill-sw{position:relative}
+.fill-sw::before{content:"";position:absolute;inset:4px;border-radius:3px;border:1px solid var(--line-2);background:var(--g,transparent),var(--checker)}
+.fill-sw i{position:relative;display:grid;place-items:center}
+.fx-nm{flex:1;min-width:0;height:100%;border:0;background:transparent;color:var(--fg);padding:0 8px 0 4px;display:flex;align-items:center;justify-content:space-between;gap:8px;font:11px var(--f-ui);text-align:left;cursor:pointer}
+.fx-nm small{color:var(--faint);font-size:11px;white-space:nowrap}
+.prop.off .fx-nm{opacity:.5}
+.exp-box{padding:0}
+.exp-box .blendbtn{background:transparent;height:100%;border:0}
+.algrid{display:grid;grid-template-columns:repeat(3,24px);grid-template-rows:repeat(3,22px);gap:2px;padding:4px;background:var(--raised);border-radius:var(--r);width:max-content}
+.alg{width:24px;height:22px;border:0;background:transparent;border-radius:4px;padding:0;display:grid;place-items:center;cursor:pointer}
+.alg i{width:3px;height:3px;border-radius:50%;background:var(--faint)}
+.alg:hover i{background:var(--fg)}
+.alg[aria-pressed="true"]{background:var(--accent-soft)}
+.alg[aria-pressed="true"] i{width:12px;height:4px;border-radius:2px;background:var(--accent)}
+.algrid.rows .alg[aria-pressed="true"] i{width:4px;height:12px}
+.pop-sec{display:contents}
+/* ===== Camadas como a árvore do Figma (fase 3) ===== */
+.lic{flex:none;width:16px;height:16px;display:grid;place-items:center;background:none!important;border-radius:0!important}
+.lic svg{width:14px;height:14px}
+.layer .dot.lic,.tl-nm .dot.lic{width:16px;height:16px}
+.tl-nm .dot.lic svg{width:13px;height:13px}
+.gic{color:var(--muted)}
+.lgroup[aria-selected="true"] .gic{color:var(--fg)}
+.tl-chev{display:grid;place-items:center;font-size:0}
+.tl-chev svg{width:12px;height:12px}
+.layer{grid-template-columns:16px minmax(0,1fr) auto;gap:6px}
+#layers .acts .icon-btn.ud{display:none!important}
+.lgroup{gap:6px;height:28px;padding:0 8px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--fg);border-radius:5px}
+.lgroup .tl-chev{width:16px;height:28px;margin:0 -2px 0 -4px}
+.layer.ingrp,.lgroup.nested{border-left:1px solid transparent;border-radius:5px}
+.lgroup.nested[aria-selected="true"],.layer.ingrp[aria-selected="true"]{border-left-color:var(--accent)}
+.layer .lnm small{color:var(--faint);margin-left:6px}
+.lcell .acts .icon-btn{width:24px;height:24px}
+.lcell .acts .icon-btn svg{width:14px;height:14px}
+.tl-nm .gic{display:none} /* na timeline o nome do frame precisa do espaço: a seta e a contagem bastam */
+/* Adicionar em grupos: o primeiro título não precisa de respiro em cima */
+.adds>.adds-sub:first-child{padding-top:0}

@@ -2697,14 +2697,24 @@ function rasterFx(ctx, st, w, h, pad, R, draw) {
    Texto: layout e desenho
    ============================================================ */
 let MCTX = document.createElement('canvas').getContext('2d');
-function fontStr(L, size, w = L.weight, it = L.italic) { return `${it ? 'italic ' : ''}${w} ${size}px "${L.font}", system-ui, sans-serif`; }
-// peso, itálico e cor por trecho: L.runs = [{ t, w?, i?, c? }]. Só vale enquanto os trechos somam exatamente L.text
+function fontStr(L, size, w = L.weight, it = L.italic, fam = L.font) { return `${it ? 'italic ' : ''}${w} ${size}px "${fam}", system-ui, sans-serif`; }
+// peso, itálico, cor e fonte por trecho: L.runs = [{ t, w?, i?, c?, f? }]. Só vale enquanto os trechos somam exatamente L.text
 function runsOf(L) { const r = L.runs; return r && r.length && r.map(x => x.t).join('') === L.text ? r : null; }
 function charStyles(L, txt) {
   const r = runsOf(L); if (!r) return null;
   const st = [];
-  for (const x of r) for (const ch of x.t) for (const _ of caseTxt(L, ch)) st.push([x.w ?? L.weight, x.i ?? !!L.italic, x.c || null]);
-  return st.length === [...txt].length && st.some(s => s[0] !== L.weight || s[1] !== !!L.italic || s[2]) ? st : null;
+  for (const x of r) for (const ch of x.t) for (const _ of caseTxt(L, ch)) st.push([x.w ?? L.weight, x.i ?? !!L.italic, x.c || null, x.f || L.font]);
+  return st.length === [...txt].length && st.some(s => s[0] !== L.weight || s[1] !== !!L.italic || s[2] || s[3] !== L.font) ? st : null;
+}
+// o texto letra a letra com o estilo de cada uma (null = segue o da camada), e de volta para L.text + L.runs
+// (o editor do painel, richF, e a edição no palco, js/editar-texto.js, usam os dois)
+const TCH_K = ['w', 'i', 'c', 'f'];
+function textChars(L) { const cs = []; for (const x of runsOf(L) || [{ t:L.text || '' }]) for (const ch of x.t) cs.push({ ch, w:x.w ?? null, i:x.i ?? null, c:x.c ?? null, f:x.f ?? null }); return cs; }
+function setTextChars(L, cs) {
+  const runs = [];
+  for (const c of cs) { const p = runs[runs.length - 1]; if (p && TCH_K.every(k => p[k] === c[k])) p.t += c.ch; else runs.push({ t:c.ch, w:c.w, i:c.i, c:c.c, f:c.f }); }
+  L.text = cs.map(c => c.ch).join('');
+  L.runs = runs.every(r => TCH_K.every(k => r[k] == null)) ? null : runs.map(r => { const o = { t:r.t }; for (const k of TCH_K) if (r[k] != null) o[k] = r[k]; return o; });
 }
 // Fundo atrás do texto (o marca-texto do Destaque; caixa colorida por linha, como nos stories, ou uma só para o bloco). null = sem fundo.
 // L.tbg ligado/desligado manda; sem escolha vale o de antes (só com o preset Marca-texto). Espaços e cantos em em (fração do tamanho da letra),
@@ -2932,28 +2942,29 @@ function layoutText(L, txt) {
   const key = [txt, font, ls, wsp, maxW, L.lh, L.align, L.fixW && !tk ? 1 : 0, sty ? sty.join(';') : '', bg ? [bg.px, bg.py].join() : '', tk ? tpSig(L) + (bg ? bg.r : '') : ''].join('|');
   let lay = RT.layout.get(key); if (lay) return lay;
   if (RT.layout.size > 400) RT.layout.clear();
-  const all = [...txt].map((ch, i) => ({ ch, c:sty ? sty[i][2] : null, f:sty ? fontStr(L, size, sty[i][0], sty[i][1]) : font }));
+  // i = posição da letra no texto mostrado (o cursor da edição no palco acha a letra por ela); fm = fonte do trecho (vetor)
+  const all = [...txt].map((ch, i) => ({ ch, i, c:sty ? sty[i][2] : null, fm:sty ? sty[i][3] : null, f:sty ? fontStr(L, size, sty[i][0], sty[i][1], sty[i][3]) : font }));
   // trechos seguidos com a mesma fonte são medidos juntos: assim o kerning entre as letras vale
   const segs = arr => { const out = []; for (const c of arr) { const s = out[out.length - 1]; if (s && s.f === c.f) s.s += c.ch; else out.push({ f:c.f, s:c.ch }); } return out; };
   let curF = null;
   const meas = (f, s) => { if (curF !== f) MCTX.font = curF = f; return MCTX.measureText(s).width; };
   const mw = arr => segs(arr).reduce((w, s) => w + meas(s.f, s.s), 0) + Math.max(0, arr.length - 1) * ls + (wsp ? arr.filter(c => c.ch === ' ').length * wsp : 0);
-  const lines = [];
-  let para = [];
+  const lines = [], i0s = []; // i0s = onde cada linha começa no texto mostrado (linha vazia também tem)
+  let para = [], pStart = 0;
   const flush = () => {
     // palavras separadas por um ou mais espaços; na linha voltam com um espaço só
     const words = []; let w = [], sp = null;
     for (const c of para) { if (c.ch === ' ') { if (!sp) { words.push({ w, sp:null }); w = []; sp = c; } } else { if (sp) { words[words.length - 1].sp = sp; sp = null; } w.push(c); } }
     words.push({ w, sp:null });
-    let cur = null;
+    let cur = null, i0 = pStart;
     words.forEach((wd, i) => {
       const gap = i ? words[i - 1].sp || { ch:' ', f:font } : null;
       const test = cur ? [...cur, gap, ...wd.w] : wd.w;
-      if (cur && mw(test) > maxW) { lines.push(cur); cur = wd.w; } else cur = test;
+      if (cur && mw(test) > maxW) { lines.push(cur); i0s.push(i0); cur = wd.w; if (wd.w.length) i0 = wd.w[0].i; } else cur = test;
     });
-    lines.push(cur || []); para = [];
+    lines.push(cur || []); i0s.push(i0); para = [];
   };
-  for (const c of all) { if (c.ch === '\n') flush(); else para.push(c); }
+  for (const c of all) { if (c.ch === '\n') { flush(); pStart = c.i + 1; } else para.push(c); }
   flush();
   const lineH = size * (L.lh || 1.1);
   const blockH = lines.length * lineH;
@@ -2968,7 +2979,7 @@ function layoutText(L, txt) {
         const w = meas(s.f, ch), x = segX + meas(s.f, pre) - w + k * ls + nsp * wsp;
         const space = ch === ' '; if (space) nsp++;
         if (space) wi++;
-        glyphs.push({ ch, x, w, k, f:s.f, c:cs[k].c, space, word:wi, ci:space ? -1 : ci++ });
+        glyphs.push({ ch, x, w, k, f:s.f, c:cs[k].c, fm:cs[k].fm, i:cs[k].i, space, word:wi, ci:space ? -1 : ci++ });
         k++;
       });
       segX += meas(s.f, s.s);
@@ -2976,7 +2987,7 @@ function layoutText(L, txt) {
     wi++;
     const width = mw(cs); blockW = Math.max(blockW, width);
     const baseline = -blockH / 2 + li * lineH + lineH / 2 + size * .34;
-    return { text:cs.map(c => c.ch).join(''), glyphs, width, baseline, li };
+    return { text:cs.map(c => c.ch).join(''), glyphs, width, baseline, li, i0:i0s[li] };
   });
   if (L.fixW && !tk) blockW = Math.max(blockW, maxW); // largura fixa (puxada pela alça lateral): a caixa tem essa largura e o texto se alinha dentro
   for (const l of out) l.x0 = L.align === 'left' ? -blockW / 2 : L.align === 'right' ? blockW / 2 - l.width : -l.width / 2;
@@ -5595,6 +5606,7 @@ function tick(now) {
     setView(viewFull()); measureGhosts(); stageRender(); drawOverlays(); updTime(); updStageHint(); needs = false; needsOv = false;
   }
   else if (needsOv && !RT.exporting) { drawOverlays(); needsOv = false; }
+  if (SED.el) seditPlace(); // edição no palco: o campo acompanha zoom, rolagem e o tamanho do texto
   requestAnimationFrame(tick);
 }
 const fmtT = s => { s = Math.max(0, s); const m = Math.floor(s / 60), ss = Math.floor(s % 60), f = Math.floor((s % 1) * fps()); return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}<span>:${String(f).padStart(2, '0')}</span>`; };
@@ -5868,7 +5880,7 @@ function tpSlideTo(D, pt, ev) {
   if (ev.shiftKey) f = Math.round(f * 24) / 24;
   f = D.closed ? ((f % 1) + 1) % 1 : clamp(f);
   D.L.tpOff = +f.toFixed(4); D.show = D.circ ? Math.round(f * 360) % 360 + '°' : Math.round(f * 100) + '%';
-  const i = document.getElementById(fid(D.L, 'tpOff')); if (i) { i.value = f; const o = i.parentElement.querySelector('.num'); if (o && document.activeElement !== o) o.value = D.show; }
+  document.getElementById(fid(D.L, 'tpOff'))?._sync?.();
 }
 // setas no texto que segue uma forma: deslizam pelo caminho (1 px de caminho, Shift 10)
 function tpNudge(L, d) {
@@ -6023,7 +6035,7 @@ function rotateTo(D, pt, ev) {
   if (ev.shiftKey) r = Math.round(r / 15) * 15;
   r = ((r + 180) % 360 + 360) % 360 - 180; r = Math.round(r * 10) / 10;
   D.O.rot = r; D.show = r;
-  const i = document.getElementById(fid(D.O, 'rot')); if (i) { i.value = r; const o = i.parentElement.querySelector('.num'); if (o && document.activeElement !== o) o.value = Math.round(r) + '°'; }
+  document.getElementById(fid(D.O, 'rot'))?._sync?.();
 }
 /* Cantos pelo mouse (pedido do usuário: o que o painel faz, o mouse também faz; como no Figma): uma bolinha dentro de cada canto
    do retângulo (forma, máscara retangular da imagem, botão); arrastar para dentro arredonda. Sem Alt, todos os cantos ficam
@@ -7016,14 +7028,15 @@ function marquee(ev) {
   };
   addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up);
 }
-// abre a edição do texto (clique duplo no palco ou Enter): aba de conteúdo, texto todo selecionado
+// abre a edição do texto (clique duplo no palco ou Enter): direto na tela, no lugar do texto (stageEdit); o painel é reserva
 function editText(L) {
   if (!L || L.type === 'bg') return;
   if (vecEdit(L)) return; // vetor: edita os pontos
   if (lockedNote(L)) return;
   if (propTab !== 'style') { propTab = 'style'; renderProps(); }
   if (L.type !== 'text' && L.type !== 'cta') return;
-  if (L.capt) { capFocus(L); return; } // legenda: o trecho da agulha na lista do painel
+  if (stageEdit(L)) return; // na tela, como no Figma
+  if (L.capt) { capFocus(L); return; } // sem caixa medida: a legenda cai na lista do painel
   const ph = phase(L, T); if (!ph || ph.mode !== 'hold') seekLayer(L); // com o texto inteiro na tela
   const el = document.getElementById(fid(L, 'text')); if (!el) return;
   paneShow('right'); foldReveal(el); // coluna escondida ou seção Texto fechada: aparece
@@ -7034,6 +7047,108 @@ function editText(L) {
   RT.editId = L.id; needs = true;
   const box = el; box.classList.remove('edit-flash'); void box.offsetWidth; box.classList.add('edit-flash');
   el.addEventListener('blur', () => { if (RT.editId === L.id) { RT.editId = null; needs = true; } }, { once:true });
+}
+
+/* ------------ edição do texto direto na tela (pedido do usuário) ------------
+   Clique duplo (ou Enter) num texto/botão abre um campo por cima do palco, no lugar exato do texto e com a mesma fonte, tamanho,
+   entrelinha e alinhamento: o cursor e a seleção aparecem na tela e cada tecla já entra no desenho. Quem mostra as letras continua
+   sendo o canvas (o campo tem a letra transparente), então fundo atrás do texto, contorno, sombra e animação ficam como são e nada
+   pode sair diferente do que vai ser exportado. Legenda: o campo edita o trecho da agulha — ou o escolhido na timeline, que já abre
+   a edição (capTlDrag) — e, ao sair, o alinhador acerta o tempo das palavras novas. Esc cancela, clicar fora confirma. */
+const SED = { el:null, id:null, k:null, orig:'', dirty:false, realign:false, css:'' };
+const seditL = () => SED.el ? S.layers.find(l => l.id === SED.id) : null;
+const seditOpen = L => !!SED.el && SED.id === L.id;
+// legenda: o trecho que o campo edita (o escolhido na timeline, senão o da agulha)
+function seditBlock(L) { const bl = capBlocks(L); const k = capSelK(L); return k >= 0 ? bl[k] : capAt(bl, T - capOff(L)) || bl[0] || null; }
+// o texto que o campo mostra: o da camada ou as palavras do trecho (com a pontuação, como na lista do painel)
+function seditTxt(L) { if (!L.capt) return L.text || ''; const b = capBlocks(L)[SED.k]; return b ? b.ws.map(w => w.w).join(' ') : ''; }
+// o texto que o canvas desenha agora (a caixa do bloco sai dele)
+const seditShow = L => L.capt ? ((capBlocks(L)[SED.k] || {}).text || L.text || ' ') : (L.text || ' ');
+// distância entre a linha de base do canvas e a da caixa de linha do CSS: sem isso o cursor fica acima ou abaixo das letras
+function seditDy(font, size, lineH, base) {
+  MCTX.font = font;
+  const m = MCTX.measureText('Hg'), asc = m.fontBoundingBoxAscent || size * .95, desc = m.fontBoundingBoxDescent || size * .25;
+  return base - ((lineH - (asc + desc)) / 2 + asc);
+}
+// onde o campo fica na tela, com o tamanho e o espaçamento que o canvas usou (câmera, giro do texto e dos grupos entram)
+function seditGeo(L) {
+  const r = cv.getBoundingClientRect(), b = L._bounds; if (!r.width || !b) return null;
+  const sc = r.width / FW(), cm = camOf(L), one = L.type === 'cta';
+  let size = L.size, lineH, w, k, font = fontStr(L, size);
+  if (one) { const G = geomNow(L); k = G && G.w ? b.w / G.w : 1; lineH = size * 1.2; w = b.w / k; }
+  else {
+    const lay = layoutText(L, caseTxt(L, seditShow(L))); size = lay.size; lineH = lay.lineH; w = lay.innerW; k = b.k || 1; font = lay.font;
+  }
+  const f = k * sc * (cm ? cm.s : 1), dy = seditDy(font, size, lineH, lineH / 2 + size * (one ? .35 : .34));
+  const cen = camFwd(cm, { x:b.x + b.w / 2, y:b.y + b.h / 2 }), bx = $('#stageBox').getBoundingClientRect();
+  const deg = (rotOf(L) || 0) + (cm ? (cm.r + (cm.ga || 0)) * 180 / Math.PI : 0);
+  return { x:r.left - bx.left + cen.x * sc, y:r.top - bx.top + cen.y * sc + dy * f, w:Math.max(8, w * f), size:size * f, lh:lineH * f,
+    ls:(L.ls || 0) * size * f, wsp:(L.wsp || 0) * size * f, deg, one, align:one ? 'center' : (L.align || 'center') };
+}
+function seditPlace() {
+  const el = SED.el, L = seditL(); if (!el || !L) return;
+  const g = seditGeo(L); if (!g) return;
+  const css = `left:${g.x.toFixed(1)}px;top:${g.y.toFixed(1)}px;width:${g.w.toFixed(1)}px;` +
+    `transform:translate(-50%,-50%)${g.deg ? ` rotate(${g.deg.toFixed(2)}deg)` : ''};` +
+    `font:${fontStr(L, g.size)};line-height:${g.lh.toFixed(2)}px;letter-spacing:${g.ls.toFixed(2)}px;word-spacing:${g.wsp.toFixed(2)}px;` +
+    `text-align:${g.align};text-transform:${L.upper ? 'uppercase' : L.lower ? 'lowercase' : L.title ? 'capitalize' : 'none'}`;
+  if (css !== SED.css) { SED.css = css; el.style.cssText = css; }
+  el.classList.toggle('one', !!g.one);
+}
+function seditInput() {
+  const el = SED.el, L = seditL(); if (!el || !L) return;
+  const txt = el.innerText.replace(/ /g, ' ').replace(/\n$/, '');
+  if (!SED.dirty) { pushUndo(); SED.dirty = true; }
+  if (L.capt) { const b = capBlocks(L)[SED.k]; if (b && txt.trim()) { if (capEdit(L, b, txt, { live:true })) SED.realign = true; } }
+  else { L.text = txt; changed(); }
+  needs = true; seditPlace();
+}
+// abre a edição no palco; devolve false quando não dá (outro tipo, bloqueada, sem caixa medida)
+function stageEdit(L) {
+  if (!L || (L.type !== 'text' && L.type !== 'cta')) return false;
+  if (lockedNote(L)) return false;
+  seditClose();
+  pause();
+  let b = null;
+  if (L.capt) { b = seditBlock(L); if (!b) return false; T = clamp(b.s + capOff(L) + .02, 0, S.duration); RT.userSeek = true; }
+  else { const ph = phase(L, T); if (!ph || ph.mode !== 'hold') seekLayer(L); } // com o texto inteiro na tela
+  if (!isPicked(L.id) || (RT.picks && RT.picks.size > 1)) select(L.id, true);
+  ensureBounds([L]);
+  if (!L._bounds) return false;
+  SED.id = L.id; SED.k = b ? b.k : null; SED.dirty = false; SED.realign = false; SED.css = '';
+  const el = h('div', { class:'sedit', contenteditable:'plaintext-only', spellcheck:'true', lang:'pt-BR', role:'textbox', 'aria-label':'Texto no palco' });
+  SED.el = el;
+  el.textContent = SED.orig = seditTxt(L);
+  $('#stageBox').append(el);
+  seditPlace();
+  el.focus();
+  const rg = document.createRange(); rg.selectNodeContents(el); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(rg);
+  el.addEventListener('pointerdown', e => e.stopPropagation()); // o clique dentro do campo não mexe na seleção do palco
+  el.addEventListener('input', seditInput);
+  el.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Escape') { e.preventDefault(); seditClose(true); }
+    // botão e legenda são de uma linha: Enter conclui (no texto, Enter quebra a linha; Ctrl+Enter conclui)
+    else if (e.key === 'Enter' && (L.type === 'cta' || L.capt || e.ctrlKey || e.metaKey)) { e.preventDefault(); seditClose(); }
+  });
+  el.addEventListener('blur', () => seditClose());
+  RT.editId = L.id; needs = true; updStageHint();
+  return true;
+}
+function seditClose(cancel) {
+  const el = SED.el; if (!el) return;
+  const L = seditL(), k = SED.k, orig = SED.orig, dirty = SED.dirty, realign = SED.realign;
+  SED.el = null; SED.dirty = false; SED.realign = false;
+  if (RT.editId === SED.id) RT.editId = null;
+  SED.id = null;
+  el.remove();
+  if (!L) { needs = true; return; }
+  if (cancel && dirty) { // Esc: volta ao texto de antes
+    if (L.capt) { const b = capBlocks(L)[k]; if (b) capEdit(L, b, orig, { live:true }); }
+    else L.text = orig;
+  }
+  if (!cancel && dirty && L.capt && realign) { const b = capBlocks(L)[k]; if (b) capRealign(L, L.capt.words, b.i0, b.i1 - b.i0 + 1); } // o tempo das palavras novas
+  changed({ props:true }); renderTimeline(); needs = true; updStageHint();
 }
 
 /* ============================================================
@@ -7059,6 +7174,7 @@ function histPrune() {
   for (const [id, v] of HIST_STR) if (!keep.has(id)) { HIST_STR.delete(id); HIST_ID.delete(v); }
 }
 function pushUndo() {
+  if (PV.on) pvEnd(); // prévia do preset no mouse: o passo é do estado de verdade
   try {
     flowBake(); // o passo começa com as posições que a tela mostra (fonte que carregou depois, por exemplo)
     const snap = histPack();
@@ -7083,12 +7199,14 @@ function applyState(s) {
   if (S.format + '|' + slides() !== prevFit) fitStage(); // desfazer a troca de formato ou do número de slides muda o tamanho do palco
 }
 function undo() {
+  if (PV.on) pvEnd(); // prévia do preset no mouse: o refazer guarda o estado de verdade
   const cur = histPack();
   let s; while ((s = undoStack.pop()) === cur) {} // pula passos idênticos ao estado atual
   if (!s) { syncHist(); return; }
   redoStack.push(cur); histT.set(cur, T); applyState(s); histSeek(s); syncHist();
 }
 function redo() {
+  if (PV.on) pvEnd();
   const s = redoStack.pop(); if (!s) { syncHist(); return; }
   const cur = histPack(); undoStack.push(cur); histT.set(cur, T); applyState(s); histSeek(s); syncHist();
 }
@@ -7163,6 +7281,7 @@ function fileThumb() {
 }
 async function flushSave() {
   clearTimeout(saveT); saveT = null;
+  if (PV.on) { saveT = setTimeout(flushSave, 400); return; } // prévia do preset no mouse: grava depois que ela acaba
   if (!FILES.id) return;
   saving = true;
   const id = FILES.id, ok = await DB.set('file:' + id, JSON.stringify(S));
@@ -7359,7 +7478,7 @@ async function moveFile(id, project) {
 // menu "mover para": Rascunhos e cada projeto (✓ = onde está), e um projeto novo
 function moveMenu(anchor, fileId, cur) {
   closeMenu();
-  const item = (text, fn, o = {}) => h('button', { disabled:o.off || null, onclick:() => { closeMenu(); fn(); } }, [h('span', { text }), o.mark ? h('kbd', { text:'✓' }) : null]);
+  const item = (text, fn, o = {}) => h('button', { disabled:o.off || null, onclick:e => { closeMenu(e.currentTarget); fn(); } }, [h('span', { text }), o.mark ? h('kbd', { text:'✓' }) : null]);
   const ps = [...PROJ_NAMES].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
   const m = h('div', { class:'ctx', role:'menu' }, [
     h('div', { class:'ctx-lbl', text:'Mover para' }),
@@ -7369,17 +7488,20 @@ function moveMenu(anchor, fileId, cur) {
     item('Novo projeto com este arquivo', async () => { const p = await projCreate(); await moveFile(fileId, p.id); FVIEW = p.id; await openFiles(p.id); renameProjInline(p.id); }),
   ]);
   document.body.append(m);
-  const r = anchor.getBoundingClientRect(), mr = m.getBoundingClientRect();
+  const r = anchor.getBoundingClientRect(), mr = { width:m.offsetWidth, height:m.offsetHeight }; // offset*: o transform da animação não entra na conta
   m.style.left = Math.max(8, Math.min(r.left, innerWidth - mr.width - 8)) + 'px';
-  m.style.top = (r.bottom + 4 + mr.height > innerHeight ? Math.max(8, r.top - mr.height - 4) : r.bottom + 4) + 'px';
+  const up = r.bottom + 4 + mr.height > innerHeight;
+  m.style.top = (up ? Math.max(8, r.top - mr.height - 4) : r.bottom + 4) + 'px';
+  m.classList.toggle('pop-up', up);
+  popGrow(m, anchor);
 }
 // botão único de arquivos e projetos na barra de cima (pedido do usuário: "Arquivos" e o projeto eram dois botões):
 // mostra o projeto do arquivo aberto; o menu abre todos os arquivos, os do projeto, cria um arquivo e move este
 function projMenu() {
   const b = $('#projBtn');
-  if (document.querySelector('.ctx.projmenu')) { closeMenu(); return; }
+  if (document.querySelector('.ctx.projmenu:not(.pop-out)')) { closeMenu(); return; }
   moveMenu(b, FILES.id, FILES.project);
-  const m = document.querySelector('.ctx'); m.classList.add('projmenu');
+  const m = document.querySelector('.ctx:not(.pop-out)'); m.classList.add('projmenu');
   m.prepend(h('button', { onclick:() => { closeMenu(); openFiles('*'); } }, [h('span', { text:'Todos os arquivos' })]),
     h('button', { onclick:() => { closeMenu(); openFiles(FILES.project || ''); } }, [h('span', { text:FILES.project ? `Arquivos de "${PROJ_NAMES.get(FILES.project) || 'Projeto'}"` : 'Ver rascunhos' })]),
     h('button', { onclick:() => { closeMenu(); newFileTab(FILES.project); } }, [h('span', { text:'Novo arquivo aqui' })]), h('hr'));
@@ -7393,9 +7515,9 @@ function showDisk() {
 async function diskApply(go) { if (!(await go())) return; toast('Pasta pronta. Reabrindo o editor…', 1600); setTimeout(() => ABAS.reloadAll(), 500); } // todas as abas recarregam: uma só gravaria no lugar antigo
 function diskMenu() {
   const b = $('#diskBtn');
-  if (document.querySelector('.ctx.diskmenu')) { closeMenu(); return; }
+  if (document.querySelector('.ctx.diskmenu:not(.pop-out)')) { closeMenu(); return; }
   closeMenu();
-  const item = (text, fn, o = {}) => h('button', { disabled:o.off || null, onclick:() => { closeMenu(); fn(); } }, [h('span', { text })]);
+  const item = (text, fn, o = {}) => h('button', { disabled:o.off || null, onclick:e => { closeMenu(e.currentTarget); fn(); } }, [h('span', { text })]);
   const kids = [h('div', { class:'ctx-lbl', text:DISK.dir ? `Pasta: ${DISK.name}` : 'Salvando só no navegador' })];
   if (!DISK.supported) kids.push(item('Este navegador não deixa escolher pasta (use Chrome ou Edge)', () => {}, { off:true }));
   else {
@@ -7408,9 +7530,10 @@ function diskMenu() {
   }
   const m = h('div', { class:'ctx diskmenu', role:'menu' }, kids);
   document.body.append(m);
-  const r = b.getBoundingClientRect(), mr = m.getBoundingClientRect();
+  const r = b.getBoundingClientRect(), mr = { width:m.offsetWidth, height:m.offsetHeight };
   m.style.left = Math.max(8, Math.min(r.left, innerWidth - mr.width - 8)) + 'px';
   m.style.top = (r.bottom + 4) + 'px';
+  popGrow(m, b);
 }
 function renameProjInline(id) {
   const el = document.querySelector(`.fproj[data-id="${id}"] .fp-nm`); if (!el) return;
@@ -9215,6 +9338,19 @@ function gview(gid) {
   g.in ??= 'cut'; g.out ??= 'cut'; g.idle ??= 'none'; g.inDur ??= .8; g.outDur ??= .5;
   return new Proxy(g, { get:(t, k) => k === 'id' ? 'g-' + gid : k === '__g' ? gid : k === 'start' ? (gwin(gid) || {}).start : k === 'end' ? (gwin(gid) || {}).end : t[k] });
 }
+// vários frames escolhidos de propósito (Shift + clique entre cartões): a aba Animação continua sendo a do frame (pedido do usuário:
+// virava a do texto de dentro) e o que se escolhe vale para todos. Lê do primeiro; escreve em todos
+function framesPicked() {
+  if (itemSel()) return null; const fs = frSel(); if (!fs || fs.length < 2) return null;
+  const cover = new Set(fs.flatMap(g => gleaves(g).map(l => l.id)));
+  return pickedLayers().every(l => cover.has(l.id)) ? fs : null;
+}
+function gviewAll(gids) {
+  const vs = gids.map(gview), ws = gids.map(gwin).filter(Boolean);
+  return new Proxy(vs[0], {
+    get:(t, k) => k === 'id' ? 'g-' + gids.join('+') : k === '__all' ? vs : k === 'start' ? Math.min(...ws.map(w => w.start)) : k === 'end' ? Math.max(...ws.map(w => w.end)) : t[k],
+    set:(t, k, v) => { vs.forEach(o => { o[k] = v; }); return true; } });
+}
 function select(id, only) {
   RT.selected = id; const L = S.layers.find(l => l.id === id);
   // grupo do vídeo com o som (av): só o vídeo aparece no palco, então o clique escolhe ele (o grupo inteiro vem pelo cabeçalho na lista/timeline)
@@ -9555,6 +9691,8 @@ function alignBar() {
   const oneGrp = ls.every(l => l.grp && l.grp === ls[0].grp);
   // grupo inteiro: só alinhar (a posição é a dos itens); o resto ganha os campos de posição e, foto/forma, "Manter dentro da margem"
   const L = selL(), pos = L && !wholeGroup() ? posFields(L) : [];
+  // rotação junto da posição (Figma): forma, texto e o grupo inteiro
+  { const wg0 = wholeGroup(); if (wg0) pos.push(rotF(gview(wg0))); else if (L && (L.type === 'shape' || L.type === 'text') && !L.capt && ls.every(l => l.type === L.type)) pos.splice(2, 0, rotF(L)); }
   const keep = pos.length && ls.every(l => l.type === L.type) && (L.type === 'image' || L.type === 'shape' || (tpFree(L) && !tpLink(L)))
     ? [checkF(L, 'keepIn', 'Manter dentro da margem'), h('p', { class:'hint', text:`Precisa da margem ligada. Se ${L.type === 'image' ? 'a imagem' : L.type === 'text' ? 'o texto' : 'a forma'} não couber, ${L.type === 'text' ? 'ele encolhe' : 'ela encolhe'}.` })] : [];
   // frame (grupo com layout) inteiro: todo frame nasce dentro da margem; desmarcar solta (a regra é do frame de cima, frameKeep)
@@ -9581,7 +9719,6 @@ function alignBar() {
     h('div', { class:'row row-wrap' }, [
       h('button', { class:'btn small', text:'Agrupar', title:'Agrupar (Ctrl+G)', disabled:ls.length < 2 || oneGrp || null, onclick:groupSel }),
       ls.some(l => l.grp) ? h('button', { class:'btn small', text:'Desagrupar', title:'Desagrupar (Ctrl+Shift+G)', onclick:ungroupSel }) : null,
-      n > 1 || (ls.length === 1 && !wholeGroup()) ? h('button', { class:'btn small', text:'Layout automático', title:n > 1 ? 'Agrupar em fila, com o mesmo espaço entre eles (Shift+A)' : 'Pôr num frame com layout automático, com espaço interno em volta (Shift+A)', onclick:flowToggle }) : null,
     ]),
     ...pos, ...keep,
     ls.length > 1 ? h('p', { class:'hint', text:`${ls.length} selecionados${pos.length ? ': a posição move todos juntos' : ''}` }) : null,
@@ -9678,11 +9815,14 @@ function flowToggle() {
 function flowSec() {
   const gid = wholeGroup();
   if (gid) { const sec = flowGroupSec(gid); if (S.flow) sec.append(frameOutCheck(gmeta(gid, true), 'free', 'g-' + gid)); return sec; }
-  const L = selL(); if (!L || L.type === 'bg' || pickedLayers().length !== 1) return null;
+  const L = selL(); if (!L || L.type === 'bg') return null;
+  // sem layout: o "+" põe a seleção num frame com layout automático (Shift+A), como no Figma
+  const plus = () => pickedLayers().some(l => !NOBOX(l)) ? h('section', { class:'sec flow' }, [listHead('Layout automático', { add:() => flowToggle(), addT:'Acrescentar layout automático (Shift+A)' })]) : null;
+  if (pickedLayers().length !== 1) return chainFlow(L.grp) && pickedLayers().every(l => l.grp === L.grp) ? null : plus();
   if (chainFlow(L.grp)) return flowItemSec(L);
   if (S.flow && !L.grp) return h('section', { class:'sec' }, [h('h3', {}, ['Layout do quadro', h('small', { text:'coluna' })]), frameOutCheck(L, 'flowFree', L.id),
     h('p', { class:'hint', text:L.flowFree ? 'Fica onde você deixar; os outros não guardam lugar para ele.' : 'Arraste (ou use ↑ ↓) para trocar de lugar na coluna. O espaço fica no painel do quadro (clique no vazio).' })]);
-  return null;
+  return plus();
 }
 // fora da coluna do quadro: o elemento solto (L.flowFree) ou o grupo inteiro (S.groups[gid].free)
 function frameOutCheck(o, k, idk) {
@@ -9818,14 +9958,11 @@ function flowGroupSec(gid) {
     changed({ props:true });
   };
   const tog = (on, t, ic, fn) => h('button', { type:'button', class:'icon-btn', 'aria-pressed':String(!!on), title:t, 'aria-label':t, html:ic, onclick:fn });
+  // como no Figma: o "+" do título liga (Shift+A), o "−" desliga sem mexer em nada; a direção é a primeira linha
   const sec = h('section', { class:'sec flow' }, [
-    h('h3', {}, ['Layout automático', h('small', { text:F ? (v ? 'em coluna' : 'em linha') : 'Shift+A' })]),
-    h('div', { class:'alrow' }, [
-      tog(!F, 'Livre: cada item fica onde você deixar', ICONS.fl_off, () => { if (F) setFlow(gid, null); }),
-      tog(F && v, 'Em coluna: um embaixo do outro', ICONS.fl_v, () => { if (!F) flowOn(gid, 'v'); else if (!v) set({ dir:'v' }); }),
-      tog(F && !v, 'Em linha: um ao lado do outro', ICONS.fl_h, () => { if (!F) flowOn(gid, 'h'); else if (v) set({ dir:'h' }); }),
-    ]),
-  ]);
+    listHead('Layout automático', F ? { remove:() => setFlow(gid, null), removeT:'Tirar o layout automático (os itens ficam onde estão)' } : { add:() => flowOn(gid), addT:'Acrescentar layout automático (Shift+A)' }),
+    F ? modeF('Direção', [['v', 'Em coluna', 'Um embaixo do outro', 'fl_v'], ['h', 'Em linha', 'Um ao lado do outro', 'fl_h']], v ? 'v' : 'h', d => set({ dir:d })) : null,
+  ].filter(Boolean));
   if (!F) { sec.append(h('p', { class:'hint', text:'Fila com o mesmo espaço entre os itens: mudar o tamanho de um empurra os outros. As animações continuam por cima.' })); return sec; }
   const autoF = modeF('Espaço', [['num', 'Em px', 'Mesmo espaço entre os itens, no valor abaixo'], ['auto', 'Auto', 'O primeiro e o último ficam onde estão e os outros se espalham entre eles']], F.auto ? 'auto' : 'num',
     () => { const r = flowNow(gid); set(F.auto ? { auto:false, gap:Math.max(0, Math.round(r ? r.gap / (r.kk || 1) : F.gap ?? 24)) } : { auto:true }); });
@@ -9851,15 +9988,18 @@ function flowGroupSec(gid) {
   // tamanho do frame: abraça o conteúdo ou fixo (puxar a alça no palco também deixa fixo)
   const sizeRow = (k, label) => {
     const minOf = () => { const its = (flowNow(gid) || {}).items || [], m = its.length ? flowMin(F, its) : { w:8, h:8 }, kk = its.length ? its.reduce((n, i) => n + i.k, 0) / its.length : 1; return Math.ceil((k === 'w' ? m.w : m.h) / kk); };
-    const fk = k === 'w' ? 'fillW' : 'fillH', fill = !!F[fk], hug = F[k] == null && !fill, cur = () => { const r = flowNow(gid); return r ? Math.round((k === 'w' ? r.box.x1 - r.box.x0 : r.box.y1 - r.box.y0) / (r.kk || 1)) : 200; };
-    const f = hug || fill ? field(label, h('div', { class:'rng' }, [h('span', { class:'hint', text:fill ? 'ocupa todo o espaço' : 'do conteúdo' }), h('span', { class:'flow-num', text:cur() + 'px' })]))
-      : (() => { const mn = minOf(), rm = room(k), mx = isFinite(rm) ? Math.max(mn, rm) : 2400;
-        return rangeF(new Proxy(F, { get:(t, kk) => kk === 'id' ? 'flow-' + gid : t[kk] }), k, label, mn, mx, 1, n => Math.round(n) + 'px', { put:v => { F[k] = Math.round(clamp(v, mn, mx)); } }); })();
-    f.classList.add('cont');
-    const ic = k === 'w' ? '_w' : '_h';
-    return [modeF(label, [['hug', 'Abraçar', 'O frame fica do tamanho do conteúdo', 'hug' + ic], ['fix', 'Fixa', 'Tamanho fixo, no valor abaixo (ou puxe a alça no palco)', 'fix' + ic],
-      ['fill', 'Preencher', 'O frame ocupa todo o espaço: o do frame de fora ou, se for o de cima, o da margem', 'fill' + ic]], fill ? 'fill' : hug ? 'hug' : 'fix',
-    m => set({ [k]:m === 'fix' ? cur() : undefined, [fk]:m === 'fill' ? true : undefined })), f];
+    const fk = k === 'w' ? 'fillW' : 'fillH', cur = () => { const r = flowNow(gid); return r ? Math.round((k === 'w' ? r.box.x1 - r.box.x0 : r.box.y1 - r.box.y0) / (r.kk || 1)) : 200; };
+    const mode = () => F[fk] ? 'fill' : F[k] == null ? 'hug' : 'fix', ic = k === 'w' ? '_w' : '_h';
+    // como o W/H do Figma: o modo (Abraçar | Fixa | Preencher) é o menu dentro do campo; abraçando/preenchendo o campo mostra a palavra,
+    // e digitar ou arrastar um número passa para Fixa
+    const mn = minOf(), rm = room(k), mx = isFinite(rm) ? Math.max(mn, rm) : 2400;
+    const f = rangeF(new Proxy(F, { get:(t, kk) => kk === 'id' ? 'flow-' + gid : t[kk] }), k, label, mn, mx, 1, n => Math.round(n) + 'px', { ico:k === 'w' ? 'W' : 'H',
+      get:() => F[k] ?? cur(), put:v => { F[k] = Math.round(clamp(v, mn, mx)); },
+      menu:{ items:[['hug', 'Abraçar', 'hug' + ic], ['fix', 'Fixa', 'fix' + ic], ['fill', 'Preencher', 'fill' + ic]], cur:mode,
+        word:() => mode() === 'hug' ? 'Abraçar' : mode() === 'fill' ? 'Preencher' : null, typed:() => { delete F[fk]; },
+        pick:m => { if (m !== mode()) set({ [k]:m === 'fix' ? cur() : undefined, [fk]:m === 'fill' ? true : undefined }); } } });
+    f.title = 'Abraçar = do tamanho do conteúdo; Fixa = no valor (ou puxe a alça no palco); Preencher = ocupa todo o espaço (o do frame de fora ou, no de cima, o da margem)';
+    return [f];
   };
   // espaço interno (padding): dois campos (laterais / em cima e embaixo) ou, com "Cada lado", os quatro
   const padF = (ks, label, title) => {
@@ -9871,10 +10011,17 @@ function flowGroupSec(gid) {
     : [padF(['pl', 'pr'], 'Interno ↔', 'Espaço interno nas laterais (padding), entre a borda do frame e o conteúdo'), padF(['pt', 'pb'], 'Interno ↕', 'Espaço interno em cima e embaixo (padding), entre a borda do frame e o conteúdo')];
   const padMode = modeF('Interno', [['pair', 'Em pares', 'Laterais iguais e em cima/embaixo iguais'], ['sep', 'Cada lado', 'Espaço interno de cada lado separado']], F.padSep ? 'sep' : 'pair',
     () => { pushUndo(); if (F.padSep) { delete F.padSep; F.pr = F.pl; F.pb = F.pt; } else F.padSep = true; changed({ props:true }); });
-  sec.append(...[autoF, gapF, padMode, ...padRows, ...sizeRow('w', 'Largura'), ...sizeRow('h', 'Altura'),
-    field('Alinhar', h('div', { class:'alrow' }, al.map(([k, ic, t]) => tog((F.align || 'center') === k, `Alinhar ${t.toLowerCase()}`, ICONS[ic], () => set({ align:k }))))),
-    F.auto ? null : (() => { const f = field('Fixo', h('div', { class:'alrow' }, pins.map(([k, ic, t]) => tog((F.pin || 'start') === k, `Fixo ${t.toLowerCase()}`, ICONS[ic], () => set({ pin:k })))));
-      f.title = 'Quando um item cresce (texto maior, outra variação), este lado fica parado e o resto se ajusta'; return f; })(),
+  // alinhamento em grade 3 × 3 (Figma): na coluna, o lado = alinhar e a altura = lado fixo; na linha, o contrário. Com Auto só o alinhar vale
+  const AX = ['start', 'center', 'end'], VN = ['em cima', 'no meio', 'embaixo'], HN = ['à esquerda', 'no centro', 'à direita'];
+  const cur = { al:F.align || 'center', pin:F.pin || 'start' };
+  const grid = h('div', { class:'algrid', role:'group', 'aria-label':'Alinhamento' }, [0, 1, 2].flatMap(r => [0, 1, 2].map(c => {
+    const cross = v ? AX[c] : AX[r], main = v ? AX[r] : AX[c], on = cur.al === cross && (F.auto || cur.pin === main);
+    const t = F.auto ? (v ? `Alinhar ${HN[c]}` : `Alinhar ${VN[r]}`) : `${VN[r][0].toUpperCase() + VN[r].slice(1)}, ${HN[c]}`;
+    return h('button', { type:'button', class:'alg', 'aria-pressed':String(on), title:t, 'aria-label':t, onclick:() => set(F.auto ? { align:cross } : { align:cross, pin:main }) }, [h('i')]);
+  })));
+  if (F.auto) grid.classList.add(v ? 'cols' : 'rows');
+  const gf = field('Alinhamento', grid); gf.title = 'Onde o conteúdo fica dentro do frame. Quando um item cresce, o lado escolhido fica parado e o resto se ajusta';
+  sec.append(...[...sizeRow('w', 'Largura'), ...sizeRow('h', 'Altura'), gf, autoF, gapF, padMode, ...padRows,
     h('p', { class:'hint', text:F.auto ? 'Os itens se espalham por todo o frame. Puxe as alças no palco para mudar o tamanho dele.'
       : 'No palco: as alças mudam o tamanho do frame e o espaço rosa muda o espaço. Para trocar a ordem, Ctrl + clique num item e arraste (ou use as setas).' })].filter(Boolean));
   return sec;
@@ -10235,7 +10382,7 @@ function renderBrand() {
     sel.onchange = () => {
       const old = B.fonts[i]; B.fonts[i] = sel.value; pushUndo();
       // troca nas camadas que usavam a fonte antiga
-      S.layers.forEach(L => { if ((L.type === 'text' || L.type === 'cta') && L.font === old) L.font = sel.value; });
+      S.layers.forEach(L => { if ((L.type === 'text' || L.type === 'cta') && L.font === old) L.font = sel.value; if (L.runs) for (const r of L.runs) if (r.f === old) r.f = sel.value; });
       RT.layout.clear(); changed({ props:true });
     };
   });
@@ -10248,7 +10395,7 @@ function renderBrand() {
    mesmas ações (subir, descer, bloquear, ocultar, desagrupar), mesmo clique, renomear e arrastar. Ação nova entra aqui, não em cada lugar. */
 function setVisible(ls, on) { if (!ls.length) return; pushUndo(); ls.forEach(l => { l.visible = on; }); changed({ layers:true }); }
 function actBtn(title, icon, fn, o = {}) {
-  return h('button', { class:'icon-btn' + (o.on ? ' on' : ''), title, 'aria-label':title, 'aria-pressed':o.pressed == null ? null : String(o.pressed), html:icon, onclick:e => { e.stopPropagation(); fn(); } });
+  return h('button', { class:'icon-btn' + (o.on ? ' on' : '') + (o.cls ? ' ' + o.cls : ''), title, 'aria-label':title, 'aria-pressed':o.pressed == null ? null : String(o.pressed), html:icon, onclick:e => { e.stopPropagation(); fn(); } });
 }
 // bloquear e ocultar de um conjunto (uma camada ou os itens de um grupo)
 function lockVisAct(ls) {
@@ -10274,17 +10421,46 @@ function layerTree(layers) {
   }
   return out;
 }
+/* Camadas como a árvore do Figma (fase 3, pedido do usuário): cada linha tem o ícone do tipo (na cor do tipo, que continua sendo a
+   pista de cor da lista e da timeline), frame com layout automático = ícone da direção, grupo sem layout = quadrado tracejado; a seta
+   recolhe; cadeado e olho só aparecem com o mouse em cima (menos quando ligados). Subir/descer saiu da lista: arrastar e Ctrl+]/[ */
+function ltIcons() { // SI só existe mais adiante no arquivo: os ícones entram na primeira vez que a lista é desenhada
+  if (ICONS.lt_text) return;
+  Object.assign(ICONS, {
+  lt_text:SI('<path d="M3 3.5h10M8 3.5v9.5M6 13h4"/>'),
+  lt_image:SI('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2.5 11.5l3.5-3.5 2.5 2.5 2-2 3.5 3.5"/><circle cx="10.5" cy="6" r="1"/>'),
+  lt_video:SI('<rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M6.8 6v4l3.4-2z" fill="currentColor" stroke="none"/>'),
+  lt_logo:SI('<circle cx="8" cy="8" r="5.5"/><path d="M5.5 9.5c1-3 4-3 5 0"/>'),
+  lt_svg:SI('<path d="M5.5 4.5 2.5 8l3 3.5M10.5 4.5l3 3.5-3 3.5M9 3 7 13"/>'),
+  lt_cta:SI('<rect x="1.5" y="4.5" width="13" height="7" rx="3.5"/><path d="M5.5 8h5"/>'),
+  lt_bg:SI('<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M2.5 9.5l4-4 7 7" stroke-opacity=".55"/>'),
+  lt_camera:SI('<rect x="1.5" y="4.5" width="9.5" height="7" rx="1.5"/><path d="M11 7l3.5-2v6L11 9"/>'),
+  lt_fx:SI('<path d="M3 13 13 3M3 8.5 8.5 3M7.5 13 13 7.5"/>'),
+  lt_audio:SI('<path d="M2.5 6.2h2.3L8 3.5v9L4.8 9.8H2.5z"/><path d="M10.5 6a3 3 0 0 1 0 4M12.3 4.3a5.5 5.5 0 0 1 0 7.4"/>'),
+  lt_group:SI('<rect x="2.5" y="2.5" width="11" height="11" rx="1" stroke-dasharray="2 1.6"/>'),
+  lt_frame:SI('<path d="M5 1.5v13M11 1.5v13M1.5 5h13M1.5 11h13"/>'),
+  chev_d:SI('<path d="M4.5 6.5 8 10l3.5-3.5"/>'),
+  });
+}
+// ícone de uma camada: o tipo; forma = o desenho dela (retângulo, círculo, estrela…)
+function layerIcon(L) {
+  ltIcons();
+  if (L.type === 'shape') return ICONS['sh_' + (L.kind || 'rect')] || ICONS.sh_rect;
+  return ICONS['lt_' + typeKey(L)] || ICONS.lt_group;
+}
+// frame com layout = a direção do layout; grupo sem layout = quadrado tracejado
+const groupIcon = gid => { ltIcons(); const F = flowOf(gid); return F ? ICONS[F.dir === 'h' ? 'fl_h' : 'fl_v'] : ICONS.lt_group; };
 // recuo por nível: lista = margem da célula; timeline = respiro à esquerda do nome
 const cellIndent = (el, list, depth, base, step) => { if (depth > 0) el.style[list ? 'marginLeft' : 'paddingLeft'] = (base + step * depth) + 'px'; };
 function layerCell(L, where, depth = L.grp ? 1 : 0) {
   const list = where === 'list', bg = L.type === 'bg', i = S.layers.indexOf(L);
   const el = h('div', { class:(list ? 'layer' : 'tl-nm') + ' lcell' + (list ? (L.visible ? '' : ' off') + (L.locked ? ' locked' : '') + (L.grp ? ' ingrp' : '') : ''),
     title:list ? null : 'Clique duas vezes para renomear. Arraste para reordenar', onclick:e => clickOrRename(L, where, e) }, [
-    h('span', { class:'dot', style:`background:${TYPE_COLOR[typeKey(L)]}` }),
+    h('span', { class:'dot lic', style:`color:${TYPE_COLOR[typeKey(L)]}`, 'aria-hidden':'true', html:layerIcon(L) }),
     h('span', { class:'lnm', title:list ? 'Clique duas vezes para renomear. Arraste para reordenar' : null }, [L.name, bg || S.still ? null : h('small', { text:`${L.start.toFixed(1)}s` })]),
     h('div', { class:'acts' }, [
-      bg ? null : actBtn('Subir', ICONS.up, () => move(i, 1)),
-      bg ? null : actBtn('Descer', ICONS.down, () => move(i, -1)),
+      bg ? null : actBtn('Subir', ICONS.up, () => move(i, 1), { cls:'ud' }),
+      bg ? null : actBtn('Descer', ICONS.down, () => move(i, -1), { cls:'ud' }),
       ...(bg ? [actBtn(L.visible ? 'Ocultar' : 'Mostrar', L.visible ? ICONS.eye : ICONS.eyeOff, () => setVisible([L], !L.visible), { on:!L.visible })] : lockVisAct([L])),
     ])]);
   if (list) {
@@ -10293,7 +10469,7 @@ function layerCell(L, where, depth = L.grp ? 1 : 0) {
     el.onmouseenter = () => setHover(L.id); el.onmouseleave = () => setHover(null);
     el.dataset.id = L.id;
   }
-  cellIndent(el, list, L.grp ? depth : 0, list ? 0 : 16, list ? 10 : 12);
+  cellIndent(el, list, L.grp ? depth : 0, list ? 0 : 16, list ? 16 : 12);
   dragReorder(el, L);
   return el;
 }
@@ -10305,7 +10481,7 @@ function selectGroup(gid) {
 function groupCell(gid, where, depth = 0) {
   const list = where === 'list', g = gmeta(gid, true), mem = gleaves(gid);
   const flip = () => { g.open = g.open === false; renderLayers(); autosave(); };
-  const chev = h('button', { class:'tl-chev', title:g.open === false ? 'Mostrar os itens do grupo' : 'Recolher o grupo', 'aria-label':'Recolher ou expandir o grupo', 'aria-expanded':String(g.open !== false), text:'▾',
+  const chev = h('button', { class:'tl-chev', title:g.open === false ? 'Mostrar os itens do grupo' : 'Recolher o grupo', 'aria-label':'Recolher ou expandir o grupo', 'aria-expanded':String(g.open !== false), html:(ltIcons(), ICONS.chev_d),
     onpointerdown:e => { e.stopPropagation(); if (e.button) return; e.preventDefault(); flip(); },
     onclick:e => { e.stopPropagation(); if (e.detail === 0) flip(); } });
   chev.style.transform = g.open === false ? 'rotate(-90deg)' : '';
@@ -10313,8 +10489,8 @@ function groupCell(gid, where, depth = 0) {
     if (e.shiftKey || e.ctrlKey || e.metaKey) { toggleGroupSel(gid); return; } // soma ou tira este frame da seleção
     if (e.detail > 1) { renameGroupInline(gid, e.currentTarget.querySelector('.lnm')); return; }
     selectGroup(gid);
-  } }, [chev, h('span', { class:'lnm', text:groupName(gid) }), h('small', { class:'tl-n', text:String(mem.length) }),
-    h('div', { class:'acts' }, [...lockVisAct(mem), actBtn('Desagrupar', '<span class="x">×</span>', () => { selectGroup(gid); ungroupSel(); })])]);
+  } }, [chev, h('span', { class:'lic gic', 'aria-hidden':'true', html:groupIcon(gid) }), h('span', { class:'lnm', text:groupName(gid) }), h('small', { class:'tl-n', text:String(mem.length) }),
+    h('div', { class:'acts' }, [...lockVisAct(mem)])]); // desagrupar: Ctrl+Shift+G, botão direito ou Posição
   if (list) {
     el.setAttribute('role', 'button'); el.tabIndex = 0; el.setAttribute('aria-selected', String(grpOn(gid)));
     el.onkeydown = e => { if (e.key === 'Enter') selectGroup(gid); };
@@ -10322,7 +10498,7 @@ function groupCell(gid, where, depth = 0) {
   }
   if (depth > 0) el.classList.add('nested');
   if (g.open === false && mem.some(m => isPicked(m.id)) && !grpOn(gid)) el.classList.add('has-sel'); // recolhido com algo escolhido dentro
-  cellIndent(el, list, depth, list ? 0 : 6, list ? 10 : 12);
+  cellIndent(el, list, depth, list ? 0 : 6, list ? 16 : 12);
   groupDrop(el, gid);
   el.draggable = true;
   el.addEventListener('dragstart', e => { dragGroupId = gid; dragLayerId = mem[0].id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', gid); setTimeout(() => el.classList.add('dragging')); });
@@ -10562,7 +10738,8 @@ function clipPayload() {
   const ids = new Set(ls.map(l => l.id)), whole = g => gleaves(g).every(l => ids.has(l.id));
   ls.forEach(l => { for (let g = l.grp, n = 0; g && !groups[g] && whole(g) && n < 20; g = gpar(g), n++) groups[g] = { ...(S.groups && S.groups[g]) }; });
   Object.values(groups).forEach(m => { if (m.parent && !groups[m.parent]) delete m.parent; });
-  return { v:1, dur:S.duration, layers:ls.map(l => { const c = JSON.parse(JSON.stringify(l)); delete c._bounds; if (c.grp && !groups[c.grp]) delete c.grp; return c; }), fonts:S.brand.loaded.filter(f => fams.has(f.family)), groups };
+  const bf = FORMATS[baseFmt()]; // tamanho do principal de origem: x/y são frações dele (pasteLayers converte para o principal de destino)
+  return { v:1, dur:S.duration, bw:bf.w, bh:bf.h, layers:ls.map(l => { const c = JSON.parse(JSON.stringify(l)); delete c._bounds; if (c.grp && !groups[c.grp]) delete c.grp; return c; }), fonts:S.brand.loaded.filter(f => fams.has(f.family)), groups };
 }
 /* ------------ inserir dentro do frame selecionado (como no Figma) ------------
    Frame/grupo inteiro selecionado: colar e "Adicionar" põem o novo dentro dele; item de dentro escolhido sozinho: ao lado dele, no mesmo frame.
@@ -10639,9 +10816,22 @@ function pasteLayers(p) {
     out.push(c);
   }
   S.layers.splice(at < 0 ? S.layers.length : at + 1, 0, ...out);
+  // veio de um arquivo com outro formato principal (reclamação do usuário: elemento salvo perdia tamanho e espaçamento em outro arquivo):
+  // x/y são frações do quadro de origem, então as distâncias esticavam com a altura (3:4 → 9:16 = 1,33×). Mantém os px entre as peças,
+  // com o centro do conjunto no mesmo ponto relativo. Os ajustes por formato (fpos/fszF) eram relativos ao principal de lá: saem
+  const tf = FORMATS[baseFmt()];
+  if (p.bw && p.bh && (p.bw !== tf.w || p.bh !== tf.h)) {
+    const mid = a => (Math.min(...a) + Math.max(...a)) / 2, cx = mid(out.map(l => +l.x || 0)), cy = mid(out.map(l => +l.y || 0));
+    for (const c of out) {
+      c.x = +(cx + ((+c.x || 0) - cx) * p.bw / tf.w).toFixed(5); c.y = +(cy + ((+c.y || 0) - cy) * p.bh / tf.h).toFixed(5);
+      delete c.fpos;
+    }
+    for (const g of Object.values(gm)) if (S.groups[g]) delete S.groups[g].fszF;
+  }
   const idm = new Map(src.map((o, i) => [o.id, out[i].id])); out.forEach(c => { if (c.link && idm.has(c.link)) c.link = idm.get(c.link); if (c.tpRef && idm.has(c.tpRef)) c.tpRef = idm.get(c.tpRef); }); // som colado junto com o vídeo (e texto com a forma que ele segue) vai com a cópia
   // carrossel: Meus elementos entram no slide atual; colado que cairia depois do último slide (veio de um carrossel maior) também
-  if (!fr) { const s0 = Math.floor(clamp(Math.min(...out.map(l => +l.x || 0)), 0, 1e3)); if (slides() > 1) toSlide(out, s0, curSlide()); }
+  // (sem carrossel aqui, o que estava no slide 3 de lá entra no quadro, e não fora dele)
+  if (!fr) { const s0 = Math.floor(clamp(Math.min(...out.map(l => +l.x || 0)), 0, 1e3)); toSlide(out, s0, curSlide()); }
   if (fr) intoFrame(fr, out);
   RT.picks = new Set(out.map(l => l.id)); RT.selected = out[out.length - 1].id;
   if (fontsAdded) renderBrand();
@@ -10680,13 +10870,43 @@ function copyMenu(kind = 'copy') {
   });
 }
 /* ------------ menu do botão direito ------------ */
-function closeMenu() { document.querySelector('.ctx')?.remove(); }
+/* Menu/janelinha saindo: toca o fecho e só então sai do DOM (abrir e fechar com um movimentinho, pedido do usuário: estava seco).
+   Enquanto sai leva .pop-out: a classe não pega o mouse e todo seletor de "está aberto" a ignora. `done` troca o sair do DOM. */
+function popGone(el, done, from) {
+  if (!el || el._popOut) return;
+  if (from) popBox(el, from); // encolhe para quem fechou (o item clicado, o X); sem isso, para quem abriu
+  el._popOut = true; el.classList.add('pop-out');
+  let over = false;
+  const end = () => { if (over) return; over = true; clearTimeout(tm); el.removeEventListener('animationend', end); done ? done() : el.remove(); };
+  const tm = setTimeout(end, 260); // sem animação (aba escondida, movimento reduzido) sai pelo relógio
+  el.addEventListener('animationend', end);
+}
+/* "Smart animate" do abrir: o painel nasce da caixa de quem o abriu (elemento ou um ponto, no menu do botão direito)
+   e cresce até o próprio tamanho; fechando, encolhe de volta para lá (as mesmas variáveis servem ao popOut).
+   Chamar depois de posicionar o painel. */
+function popBox(el, from) {
+  if (!el || !from) return false;
+  const a = from.getBoundingClientRect ? from.getBoundingClientRect() : from;
+  if (!a) return false;
+  const keep = el.style.animation;
+  el.style.animation = 'none'; // mede o painel inteiro, sem o recorte da animação
+  const r = el.getBoundingClientRect();
+  const lim = (v, max) => Math.max(0, Math.min(v, Math.max(0, max)));
+  const t = lim(a.top - r.top, r.height - 2), b = lim(r.bottom - a.bottom, r.height - 2 - t);
+  const l = lim(a.left - r.left, r.width - 2), rr = lim(r.right - a.right, r.width - 2 - l);
+  el.style.setProperty('--pop-t', t + 'px'); el.style.setProperty('--pop-rr', rr + 'px');
+  el.style.setProperty('--pop-b', b + 'px'); el.style.setProperty('--pop-l', l + 'px');
+  el.style.animation = keep;
+  return true;
+}
+function popGrow(el, from) { if (popBox(el, from)) void el.offsetWidth; } // reinicia a animação já com a caixa de origem
+function closeMenu(from) { for (const m of document.querySelectorAll('.ctx:not(.pop-out)')) popGone(m, null, from && m.contains(from) ? from : null); }
 function openMenu(ev, L) {
   ev.preventDefault(); closeMenu();
   if (!L) return;
   if (!isPicked(L.id)) select(L.id); else RT.selected = L.id;
   const i = S.layers.indexOf(L), isBg = L.type === 'bg';
-  const item = (text, fn, o = {}) => h('button', { class:o.danger ? 'danger' : null, disabled:o.off || null, onclick:() => { closeMenu(); fn(); } }, [h('span', { text }), o.kbd ? h('kbd', { text:o.kbd }) : null]);
+  const item = (text, fn, o = {}) => h('button', { class:o.danger ? 'danger' : null, disabled:o.off || null, onclick:e => { closeMenu(e.currentTarget); fn(); } }, [h('span', { text }), o.kbd ? h('kbd', { text:o.kbd }) : null]);
   const m = h('div', { class:'ctx', role:'menu' }, [
     ...(S.still ? [] : [ // imagem estática: sem tempo
       item('Ir para este elemento', () => seekLayer(L), { off:isBg }),
@@ -10725,12 +10945,15 @@ function openMenu(ev, L) {
     item('Apagar', () => deleteLayer(L), { danger:true, off:isBg, kbd:'Del' }),
   ]);
   document.body.append(m);
-  const r = m.getBoundingClientRect();
+  const r = { width:m.offsetWidth, height:m.offsetHeight };
   m.style.left = Math.min(ev.clientX, innerWidth - r.width - 8) + 'px';
   m.style.top = Math.min(ev.clientY, innerHeight - r.height - 8) + 'px';
+  popGrow(m, { left:ev.clientX, right:ev.clientX, top:ev.clientY, bottom:ev.clientY });
 }
 addEventListener('pointerdown', e => { if (!e.target.closest('.ctx')) closeMenu(); }, true);
 addEventListener('resize', closeMenu);
+// janela ou coluna mudando de tamanho: a régua da timeline refaz o passo dos números (senão ficavam uns por cima dos outros)
+if (window.ResizeObserver) { let w0 = 0, tm = 0; new ResizeObserver(() => { const w = tlLaneW(); if (Math.abs(w - w0) < 2) return; w0 = w; clearTimeout(tm); tm = setTimeout(renderTimeline, 120); }).observe($('#tl')); }
 addEventListener('wheel', e => { if (!e.target.closest('.ctx')) closeMenu(); }, { passive:true });
 cv.addEventListener('contextmenu', ev => { const L = hitTest(stagePt(ev)) || S.layers.find(l => l.type === 'bg'); RT.drag = null; openMenu(ev, L); });
 /* ------------ timeline ------------ */
@@ -11239,18 +11462,91 @@ function renderMarks() {
 
 /* ------------ propriedades ------------ */
 function fid(L, k) { return `f-${L.id}-${k}`; }
-function field(label, ctl, forId, stack) { return h('div', { class:'field' + (stack ? ' stack' : '') }, [h('label', { for:forId, text:label }), ctl]); }
+function field(label, ctl, forId, stack) { return h('div', { class:'field' + (stack ? ' stack' : '') }, [h('label', { for:forId, text:label, title:label }), ctl]); }
+/* Número como no Figma (pedido do usuário: a interface no jeito do Figma, fase 1 = controles): sem barra de slider; o ícone dentro
+   do campo (ou o nome em cima) se arrasta para os lados e muda o valor (cursor ↔, 1 passo por px, Shift ×10, Alt ÷10); o número
+   continua digitável. opts.ico = ícone/letra dentro do campo (senão NF_ICO pela chave); opts.presets = valores prontos (seta dentro
+   do campo, ex.: tamanho da fonte); opts.menu = { items:[[v, nome, ícone?]], cur(), pick(v), word(), typed() } = menu dentro do campo
+   (W "Abraçar ▾"): enquanto word() devolve texto o campo mostra a palavra, e digitar/arrastar um número chama typed() (volta ao
+   modo do número). Campos de número seguidos ficam dois por linha sozinhos (CSS: .sec é grade de 2 colunas, o resto ocupa a linha) */
+const NF_ICO = { x:'X', y:'Y', size:'W', maxW:'W', mh:'H', rot:'nf_rot', irot:'nf_rot', radius:'nf_rad', rTL:'nf_rad', rTR:'nf_rad', rBR:'nf_rad', rBL:'nf_rad',
+  opacity:'nf_op', lblur:'nf_blur', bblur:'nf_blur', ls:'nf_ls', lh:'nf_lh' };
+const FONT_SIZES = [10, 12, 16, 24, 32, 48, 64, 96, 128];
+// todo número tem ícone (pedido do usuário: sem ícone a área de arrastar era pequena demais): pela chave, pelo nome, senão o ↔ padrão
+function nfGuess(k, label) {
+  const t = String(label).toLowerCase();
+  if (/Speed$|^speed$/.test(k) || /velocidade/.test(t)) return 'nf_spd';
+  if (/Int$|^intensity$/.test(k) || /intensidade/.test(t)) return 'nf_int';
+  if (/^(start|end|vIn|vOut|duration|xinD|riseAt|riseDur|afIn|afOut|inDur|outDur)$/.test(k) || /duração|começa|termina|entra|sai |sobe em|suave/.test(t)) return 'nf_time';
+  if (/^(vol|riseLow)$/.test(k) || /volume/.test(t)) return 'nf_vol';
+  if (/zoom/i.test(k)) return 'nf_zoom';
+  if (k === 'ix' || /↔/.test(label)) return 'nf_h';
+  if (k === 'iy' || /↕/.test(label)) return 'nf_v';
+  if (/^(strokeW|drawWidth)$/.test(k) || /espessura/.test(t)) return 'nf_sw';
+  if (k === 'gap' || /^espaço|espaçamento|entre palavras|folga|interno|^p[tlrb]$/.test(t + k)) return 'nf_gap';
+  if (k === 'points' || k === 'inner') return 'nf_star';
+  if (k === 'grain') return 'nf_grain';
+  if (/^a[A-Z]/.test(k)) return 'nf_adj';
+  if (/^(tp|wave)/.test(k)) return 'nf_wave';
+  if (/raio|curvatura|cantos|arredond/.test(t)) return 'nf_rad';
+  if (/ângulo|angle|girar/.test(t + k)) return 'nf_rot';
+  return 'nf_drag';
+}
+function nfDrag(el, o) {
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return; e.preventDefault();
+    let x0 = e.clientX, acc = 0, moved = false;
+    const v0 = o.get();
+    el.setPointerCapture(e.pointerId);
+    const mv = ev => {
+      const dx = ev.clientX - x0; if (!moved && Math.abs(dx) < 2) return;
+      if (!moved) { moved = true; o.start(); document.body.classList.add('nf-scrub'); }
+      acc += dx * (ev.shiftKey ? 10 : ev.altKey ? .1 : 1); x0 = ev.clientX;
+      o.put(v0 + acc * o.step);
+    };
+    const up = () => { el.removeEventListener('pointermove', mv); document.body.classList.remove('nf-scrub'); if (moved && o.end) o.end(); if (!moved && o.click) o.click(); };
+    el.addEventListener('pointermove', mv);
+    el.addEventListener('pointerup', up, { once:true }); el.addEventListener('pointercancel', up, { once:true });
+  });
+}
+// menu pequeno preso a um campo (valores prontos, Abraçar/Fixa/Preencher): mesmo visual do .ctx; Esc ou clique fora fecha
+function nfMenu(anchor, items, cur, pick) {
+  document.querySelector('.ctx.nfmenu:not(.pop-out)')?._close?.();
+  let m;
+  const away = e => { if (!m.contains(e.target) && !anchor.contains(e.target)) close(); };
+  const key = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
+  const close = from => { popGone(m, null, from); document.removeEventListener('pointerdown', away, true); document.removeEventListener('keydown', key, true); };
+  m = h('div', { class:'ctx nfmenu', role:'menu' }, items.map(([v, t, ic]) => h('button', { type:'button', role:'menuitemradio', 'aria-checked':String(String(v) === String(cur)),
+    onclick:e => { close(e.currentTarget); pick(v); } }, [h('b', { text:String(v) === String(cur) ? '✓' : '' }), ic ? h('i', { class:'nfm-ic', html:ICONS[ic] || ic }) : null, h('span', { text:t })])));
+  m._close = close;
+  document.body.append(m);
+  const r = (anchor.closest('.nf') || anchor).getBoundingClientRect(), mh = Math.min(m.offsetHeight, innerHeight - 16);
+  m.style.minWidth = Math.max(r.width, 120) + 'px'; m.style.maxHeight = mh + 'px';
+  m.style.left = clamp(r.left, 8, innerWidth - m.offsetWidth - 8) + 'px';
+  const nfUp = innerHeight - r.bottom - 8 < mh;
+  m.style.top = (nfUp ? Math.max(8, r.top - mh - 4) : r.bottom + 4) + 'px';
+  m.classList.toggle('pop-up', nfUp);
+  popGrow(m, anchor.closest('.nf') || anchor);
+  document.addEventListener('pointerdown', away, true); document.addEventListener('keydown', key, true);
+  m.querySelector('[aria-checked="true"]')?.scrollIntoView({ block:'nearest' });
+  return m;
+}
+const NF_CHEV = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5 6 7.5l3-3"/></svg>';
 function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
   const id = fid(L, k);
-  // o número ao lado também é digitável; a escala da exibição (×100 em %, ×1 no resto) sai do próprio formato
+  // a escala da exibição (×100 em %, ×1 no resto) sai do próprio formato
   const num = v => parseFloat(String(fmt(v)).replace(',', '.'));
   let ref = max; if (!isFinite(num(ref))) ref = (min + max) / 2; if (!ref || !isFinite(num(ref))) ref = min + step;
   const scale = opts.scale || 10 ** Math.round(Math.log10(Math.abs(num(ref) / ref) || 1));
   const unit = (String(fmt(ref)).match(/[^\d.,\s-]+$/) || [''])[0];
   // posição: a do formato aberto (fora do principal, o ajuste vale só nele)
   const isPos = k === 'x' || k === 'y', val = () => opts.get ? opts.get() : isPos ? posOf(L)[k] : L[k];
-  const out = h('input', { type:'text', class:'num', inputmode:'decimal', 'aria-label':`${label} (valor)`, value:fmt(val()) });
-  const inp = h('input', { type:'range', id, min, max, step, value:val() });
+  const lo = opts.low ?? min, hi = opts.cap ?? max;
+  const M = opts.menu, word = () => M && M.word ? M.word() : null;
+  const show = () => word() ?? fmt(val());
+  const out = h('input', { type:'text', class:'num', id, inputmode:'decimal', 'aria-label':`${label} (valor)`, value:show() });
+  // quem muda o valor por fora (palco, giro, deslizar) chama out._sync()
+  out._sync = () => { if (document.activeElement !== out) out.value = show(); box.classList.toggle('word', word() != null); };
   // tamanho, opacidade, ritmo etc. valem para todas as camadas do mesmo tipo selecionadas; posição e tempo ficam só na principal
   const set = v => {
     if (opts.put) { opts.put(v); if (opts.onInput) opts.onInput(); changed(); return; }
@@ -11261,33 +11557,52 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
       if (opts.onInput) opts.onInput(); changed(); return;
     }
     for (const o of (['start', 'end'].includes(k) ? [L] : ['inSpeed', 'inInt', 'outSpeed', 'outInt', 'idleSpeed', 'idleInt', 'opacity', 'lblur', 'bblur'].includes(k) ? peersAny(L) : peersOf(L))) o[k] = v; if (opts.layout) RT.layout.clear(); if (opts.onInput) opts.onInput(); changed(); };
-  inp.addEventListener('pointerdown', pushUndo);
-  inp.addEventListener('input', () => { set(Math.max(parseFloat(inp.value), opts.low ?? -Infinity)); out.value = fmt(val()); });
-  if (opts.after) inp.addEventListener('change', opts.after);
+  const snap = v => { v = clamp(v, lo, hi); return step >= 1 ? Math.round(v) : +(Math.round(v / step) * step).toFixed(6); };
   const shown = () => { const v = val() ?? max; return +(v * scale).toFixed(opts.dec ?? Math.max(0, -Math.floor(Math.log10(step * scale)) + 1)); };
-  out.addEventListener('focus', () => { out.value = String(shown()).replace('.', ','); out.select(); });
+  out.addEventListener('focus', () => { out.value = word() != null ? '' : String(shown()).replace('.', ','); out.select(); });
   const apply = () => {
     const raw = parseFloat(out.value.replace(',', '.').replace(/[^\d.-]/g, ''));
     if (isFinite(raw)) {
-      let v = clamp(raw / scale, opts.low ?? min, opts.cap ?? max); if (step >= 1) v = Math.round(v); // cap/low: digitado pode passar das pontas da barra
-      if (v !== val()) { pushUndo(); set(v); inp.value = v; if (opts.after) opts.after(); }
+      let v = clamp(raw / scale, lo, hi); if (step >= 1) v = Math.round(v); // cap/low: digitado pode passar das pontas
+      if (word() != null && M.typed) { pushUndo(); M.typed(); set(v); if (opts.after) opts.after(); }
+      else if (v !== val()) { pushUndo(); set(v); if (opts.after) opts.after(); }
     }
-    out.value = fmt(val());
+    out._sync();
   };
   out.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); out.blur(); }
-    else if (e.key === 'Escape') { out.value = fmt(val()); out.dataset.skip = '1'; out.blur(); }
+    else if (e.key === 'Escape') { out.value = show(); out.dataset.skip = '1'; out.blur(); }
     else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      e.preventDefault();
+      e.preventDefault(); if (word() != null) return;
       const cur = parseFloat(out.value.replace(',', '.')); if (!isFinite(cur)) return;
       const d = step * scale * (e.shiftKey ? 10 : 1) * (e.key === 'ArrowUp' ? 1 : -1);
-      out.value = String(+(clamp((cur + d) / scale, opts.low ?? min, opts.cap ?? max) * scale).toFixed(4)).replace('.', ',');
-      const v = clamp((cur + d) / scale, opts.low ?? min, opts.cap ?? max); if (v !== val()) { pushUndo(); set(v); inp.value = v; }
+      const v = clamp((cur + d) / scale, lo, hi);
+      out.value = String(+(v * scale).toFixed(4)).replace('.', ',');
+      if (v !== val()) { pushUndo(); set(v); }
     }
   });
-  out.addEventListener('blur', () => { if (out.dataset.skip) { delete out.dataset.skip; out.value = fmt(val()); return; } apply(); });
-  out.title = `Digite o valor${unit && unit !== 'pílula' ? ' em ' + unit : ''}. Setas ↑↓ ajustam, Shift vai de 10 em 10.`;
-  return field(label, h('div', { class:'rng' }, [inp, out]), id);
+  out.addEventListener('blur', () => { if (out.dataset.skip) { delete out.dataset.skip; out._sync(); return; } apply(); });
+  out.title = `Digite o valor${unit && unit !== 'pílula' ? ' em ' + unit : ''}. Setas ↑↓ ajustam, Shift vai de 10 em 10. Ou arraste o ícone para os lados.`;
+  // arrastar: o ícone dentro do campo e o nome em cima
+  const scrub = { get:() => val() ?? lo, step, start:() => { pushUndo(); if (word() != null && M.typed) M.typed(); },
+    put:v => { v = snap(v); if (v !== val()) set(v); out._sync(); }, end:() => { out._sync(); if (opts.after) opts.after(); }, click:() => out.focus() };
+  const ic = opts.ico ?? NF_ICO[k] ?? nfGuess(k, label);
+  const grip = h('span', { class:'nf-ic' + (ic && ICONS[ic] ? '' : ic ? ' txt' : ' none'), title:`Arraste para os lados: ${label}`, 'aria-hidden':'true', ...(ic && ICONS[ic] ? { html:ICONS[ic] } : { text:ic || '' }) });
+  nfDrag(grip, scrub);
+  // valores prontos (tamanho da fonte…) ou modo (Abraçar | Fixa | Preencher): seta dentro do campo, abre um menu
+  let chev = null;
+  if (opts.presets || M) {
+    chev = h('button', { type:'button', class:'nf-chev', tabindex:-1, 'aria-label':M ? `${label}: modo` : `${label}: valores prontos`, title:M ? 'Modo' : 'Valores prontos', html:NF_CHEV });
+    chev.addEventListener('click', () => {
+      if (M) nfMenu(chev, M.items, M.cur(), v => { M.pick(v); out._sync(); });
+      else nfMenu(chev, opts.presets.map(v => [v, String(fmt(v))]), val(), v => { pushUndo(); set(v); out._sync(); if (opts.after) opts.after(); });
+    });
+  }
+  const box = h('div', { class:'nf' + (word() != null ? ' word' : '') }, [grip, out, chev]);
+  const f = field(label, box, id);
+  f.classList.add('nfield');
+  nfDrag(f.firstChild, scrub);
+  return f;
 }
 // largura/altura guardadas em fração da largura do quadro; o painel mostra sempre em px do vídeo (pedido do usuário: tamanho em pixel, nada em %)
 const pxF = (L, k, label, min, max, opts = {}) => rangeF(L, k, label, min, max, 1 / SU, v => Math.round(v * SU) + 'px', { ...opts, scale:SU, dec:0 });
@@ -11325,7 +11640,7 @@ function hsvToHex(hh, sat, v) {
   return '#' + [f(5), f(3), f(1)].map(x => Math.round(x * 255).toString(16).padStart(2, '0')).join('');
 }
 let openPicker = null;
-function closePicker() { if (openPicker) { openPicker.remove(); openPicker = null; document.removeEventListener('pointerdown', pickerOutside, true); } }
+function closePicker() { if (openPicker) { popGone(openPicker); openPicker = null; document.removeEventListener('pointerdown', pickerOutside, true); } }
 function pickerOutside(e) { if (openPicker && !openPicker.contains(e.target) && !e.target.closest?.('.cpick')) closePicker(); }
 // devolve o botão-amostra; .setColor(c) atualiza por fora
 function colorButton(value, label, { onStart, onInput, cls = '', alpha = true }) {
@@ -11382,6 +11697,7 @@ function colorButton(value, label, { onStart, onInput, cls = '', alpha = true })
     const brandSws = lib && lib.length ? [h('div', { class:'cp-lib' }, [libQ, libList])] : [];
     if (brandSws.length) fillLib();
     const pop = h('div', { class:'cp-pop', role:'dialog', 'aria-label':label }, [
+      h('div', { class:'pop-head' }, [h('span', { class:'pop-t', text:label.replace(' (seletor)', '') }), h('button', { type:'button', class:'pop-x', title:'Fechar', 'aria-label':'Fechar', html:ICONS.close, onclick:() => { closePicker(); btn.focus(); } })]),
       h('div', { class:'cp-row' }, [h('span', { class:'cp-lbl', text:'HEX' }), h('span', { class:'cp-rr' }, [h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hexIn]), noneBtn, eye])]),
       sv, hue,
       alpha ? h('div', { class:'cp-row' }, [h('span', { class:'cp-lbl', text:'OPAC.' }), alp, h('span', { class:'hexwrap pctwrap' }, [pct, h('i', { text:'%' })])]) : null,
@@ -11428,16 +11744,55 @@ function colorButton(value, label, { onStart, onInput, cls = '', alpha = true })
     hexIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commit(); closePicker(); } else if (e.key === 'Escape') { e.stopPropagation(); closePicker(); btn.focus(); } });
     hexIn.addEventListener('blur', commit);
     document.body.append(pop); openPicker = pop; paint();
-    const r = btn.getBoundingClientRect(), pw = pop.offsetWidth;
     let ph = pop.offsetHeight;
     // alto demais para a janela: a lista da marca encolhe (e rola) em vez de sair da tela
     if (ph > innerHeight - 16) { libList.style.maxHeight = Math.max(72, libList.offsetHeight - (ph - (innerHeight - 16))) + 'px'; ph = pop.offsetHeight; }
-    pop.style.left = clamp(r.left, 8, innerWidth - pw - 8) + 'px';
-    pop.style.top = clamp(r.bottom + 6 + ph > innerHeight ? r.top - ph - 6 : r.bottom + 6, 8, Math.max(8, innerHeight - ph - 8)) + 'px';
+    popPlace(pop, btn); // ao lado da coluna, como no Figma
+    popGrow(pop, btn);
     document.addEventListener('pointerdown', pickerOutside, true);
     hexIn.focus();
   });
   return btn;
+}
+/* Janelinha de detalhes ao lado (popover, como o seletor de cor do Figma): abre à esquerda da coluna de propriedades, na altura de
+   quem abriu; fora dela, embaixo. Título + fechar; Esc e clique fora fecham. Uma por vez (a de cor também passa por aqui) */
+let openPopEl = null;
+function popPlace(pop, anchor) {
+  const r = anchor.getBoundingClientRect(), pw = pop.offsetWidth, ph = Math.min(pop.offsetHeight, innerHeight - 16);
+  const col = anchor.closest('.pop, #props, .right, aside');
+  if (col) {
+    const c = col.getBoundingClientRect();
+    pop.style.left = clamp(col.classList.contains('left') ? c.right + 8 : c.left - pw - 8, 8, innerWidth - pw - 8) + 'px'; // coluna da esquerda: abre à direita dela
+    pop.style.top = clamp(r.top - 8, 8, Math.max(8, innerHeight - ph - 8)) + 'px';
+  } else {
+    pop.style.left = clamp(r.left, 8, innerWidth - pw - 8) + 'px';
+    pop.style.top = clamp(r.bottom + 6 + ph > innerHeight ? r.top - ph - 6 : r.bottom + 6, 8, Math.max(8, innerHeight - ph - 8)) + 'px';
+  }
+}
+function closePop() { if (openPopEl) openPopEl._close(); }
+function openPop(anchor, title, body, o = {}) {
+  if (openPopEl && (openPopEl._anchor === anchor || (o.key && openPopEl._key === o.key))) { closePop(); return null; }
+  const build = typeof body === 'function' ? body : null; if (build) body = build();
+  closePop(); closePicker();
+  const head = h('div', { class:'pop-head' }, [h('span', { class:'pop-t', text:title }),
+    h('button', { type:'button', class:'pop-x', title:'Fechar', 'aria-label':'Fechar', html:ICONS.close, onclick:e => close(e.currentTarget) })]);
+  const pop = h('div', { class:'pop', role:'dialog', 'aria-label':title }, [head, h('div', { class:'pop-body' }, [].concat(body).filter(Boolean))]);
+  const away = e => { if (!pop.contains(e.target) && !pop._anchor.contains(e.target) && !e.target.closest?.('.ctx, .cp-pop')) close(); };
+  const key = e => { if (e.key === 'Escape' && !e.target.closest?.('.cp-pop')) { e.preventDefault(); e.stopPropagation(); close(); anchor.focus?.({ preventScroll:true }); } };
+  const close = from => { if (openPopEl !== pop) return; openPopEl = null; popGone(pop, null, from); pop._anchor.classList.remove('popped'); document.removeEventListener('pointerdown', away, true); document.removeEventListener('keydown', key, true); if (o.onClose) o.onClose(); };
+  pop._close = close; pop._anchor = anchor; pop._key = o.key; pop._build = build; pop._fill = xs => { pop.lastChild.replaceChildren(...[].concat(xs).filter(Boolean)); };
+  document.body.append(pop); openPopEl = pop; anchor.classList.add('popped');
+  popPlace(pop, anchor); popGrow(pop, anchor);
+  document.addEventListener('pointerdown', away, true); document.addEventListener('keydown', key, true);
+  return pop;
+}
+/* Linha de propriedade (Figma: "■ FFFFFF 100% 👁 −"): amostra + hex + %, olho e, quando a linha pode sair, o "−". O olho esconde
+   sem apagar; o "−" tira a linha. Os detalhes abrem na janelinha ao lado (clique na amostra ou no ícone). Uma coisa por linha:
+   olho e "−" são parte da linha, como no Figma, não um botão solto no fim de um campo */
+function propRow({ box, on = true, toggle, remove, label = '', more = null }) {
+  const eye = toggle ? h('button', { type:'button', class:'prop-b prop-eye', title:on ? `Esconder ${label}` : `Mostrar ${label}`, 'aria-label':on ? `Esconder ${label}` : `Mostrar ${label}`, 'aria-pressed':String(!on), html:on ? ICONS.eye : ICONS.eye_off, onclick:toggle }) : null;
+  const rm = remove ? h('button', { type:'button', class:'prop-b prop-rm', title:`Tirar ${label}`, 'aria-label':`Tirar ${label}`, html:ICONS.minus, onclick:remove }) : null;
+  return h('div', { class:'prop' + (on ? '' : ' off') }, [box, more, eye, rm]);
 }
 // camadas do mesmo tipo selecionadas junto com L (L inclusive): a cor vale para todas
 function peersOf(L) {
@@ -11445,11 +11800,18 @@ function peersOf(L) {
   const ps = pickedLayers().filter(o => o.type === L.type);
   return ps.includes(L) ? ps : [L];
 }
-function colorF(L, k, label) {
+// cor como linha de propriedade: [amostra | hex | %] e o olho = "sem cor" (opacidade 0, o rgb fica guardado; clicar de novo devolve)
+function colorF(L, k, label, o = {}) {
   const id = fid(L, k);
-  const setAll = c => { for (const o of peersOf(L)) o[k] = c; };
+  const setAll = c => { for (const q of peersOf(L)) q[k] = c; };
   const six = () => String(L[k]).slice(1, 7).toUpperCase();
-  const show = () => { hex.value = six(); if (document.activeElement !== pct) pct.value = Math.round(colA(L[k]) * 100); row.classList.toggle('is-none', noCol(L[k])); none.setAttribute('aria-pressed', String(noCol(L[k]))); };
+  const show = () => {
+    hex.value = six(); if (document.activeElement !== pct) pct.value = Math.round(colA(L[k]) * 100);
+    if (o.vis) return;
+    const none = noCol(L[k]); row.classList.toggle('off', none);
+    const eye = row.querySelector('.prop-eye');
+    if (eye) { eye.innerHTML = none ? ICONS.eye_off : ICONS.eye; eye.setAttribute('aria-pressed', String(none)); eye.title = eye.ariaLabel = none ? `${label}: mostrar` : `${label}: sem cor`; }
+  };
   const inp = colorButton(L[k], `${label} (seletor)`, { onStart:pushUndo, onInput:c => { setAll(c); show(); changed(); } });
   inp.id = id;
   const hex = h('input', { type:'text', class:'hex', value:six(), maxlength:32, spellcheck:'false', 'aria-label':`${label} (hex)`, title:'Cole ou digite o hex, com ou sem #' });
@@ -11474,11 +11836,11 @@ function colorF(L, k, label) {
   });
   pct.addEventListener('blur', () => show());
   pct.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); pct.blur(); } else if (e.key === 'Escape') { pct.blur(); } });
-  // sem cor (amostra branca cortada de vermelho): opacidade 0, o rgb fica guardado; clicar de novo devolve a cor
-  const none = h('button', { type:'button', class:'cnone', title:'Sem cor', 'aria-label':`${label}: sem cor`, 'aria-pressed':String(noCol(L[k])),
-    onclick:() => { pushUndo(); put(withA(L[k], noCol(L[k]) ? 1 : 0)); } });
   // as cores da marca ficam na lista do seletor (colorButton)
-  const row = h('div', { class:'colorctl' + (noCol(L[k]) ? ' is-none' : '') }, [inp, h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hex]), h('span', { class:'hexwrap pctwrap' }, [pct, h('i', { text:'%' })]), none]);
+  const box = h('div', { class:'prop-box' }, [inp, h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hex]), h('span', { class:'pctwrap' }, [pct, h('i', { text:'%' })])]);
+  const row = o.vis ? propRow({ box, label:label.toLowerCase(), on:o.vis.on, toggle:o.vis.toggle, remove:o.remove, more:o.more })
+    : propRow({ box, label:label.toLowerCase(), on:!noCol(L[k]), toggle:() => { pushUndo(); put(withA(L[k], noCol(L[k]) ? 1 : 0)); }, remove:o.remove, more:o.more });
+  show();
   return field(label, row, id);
 }
 function selectF(L, k, label, opts, o = {}) {
@@ -11504,15 +11866,15 @@ function blendF(L) {
     const show = v => { for (const o of peers) o.blend = v; RT.rev++; needs = true; };
     const restore = () => { peers.forEach((o, i) => { o.blend = orig[i]; }); RT.rev++; needs = true; };
     let done = false, items = [];
-    const close = keep => {
+    const close = (keep, from) => {
       if (done) return; done = true;
       document.removeEventListener('pointerdown', away, true); document.removeEventListener('keydown', key, true);
-      window.removeEventListener('resize', away); m.remove();
+      window.removeEventListener('resize', away); popGone(m, null, from);
       if (!keep) restore();
       btn.focus({ preventScroll:true });
     };
-    const pick = v => {
-      restore(); pushUndo(); for (const o of peers) o.blend = v; close(true); tip(); changed();
+    const pick = (v, from) => {
+      restore(); pushUndo(); for (const o of peers) o.blend = v; close(true, from); tip(); changed();
     };
     const away = e => { if (!m.contains(e.target)) close(false); };
     const mark = i => { items.forEach((b, j) => b.classList.toggle('on', j === i)); if (items[i]) { items[i].scrollIntoView({ block:'nearest' }); show(items[i].dataset.v); } };
@@ -11527,7 +11889,7 @@ function blendF(L) {
       ...xs.map(([v, t]) => {
         const b = h('button', { type:'button', role:'menuitemradio', 'aria-checked':String(v === cur), 'data-v':v }, [h('b', { text:v === cur ? '✓' : '' }), h('span', { text:t })]);
         b.addEventListener('pointerenter', () => { items.forEach(x => x.classList.remove('on')); b.classList.add('on'); show(v); });
-        b.addEventListener('click', () => pick(v));
+        b.addEventListener('click', () => pick(v, b));
         return b;
       })])
     );
@@ -11538,7 +11900,10 @@ function blendF(L) {
     m.style.minWidth = Math.max(r.width, 196) + 'px'; m.style.maxHeight = mh + 'px';
     m.style.left = Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8)) + 'px';
     const below = innerHeight - r.bottom - 8;
-    m.style.top = (below >= mh || below >= r.top ? Math.min(r.bottom + 4, innerHeight - mh - 8) : Math.max(8, r.top - mh - 4)) + 'px';
+    const bUp = !(below >= mh || below >= r.top);
+    m.style.top = (bUp ? Math.max(8, r.top - mh - 4) : Math.min(r.bottom + 4, innerHeight - mh - 8)) + 'px';
+    m.classList.toggle('pop-up', bUp);
+    popGrow(m, btn);
     document.addEventListener('pointerdown', away, true); document.addEventListener('keydown', key, true);
     window.addEventListener('resize', away);
     items[Math.max(0, items.findIndex(b => b.dataset.v === cur))]?.scrollIntoView({ block:'center' });
@@ -11602,6 +11967,34 @@ Object.assign(ICONS, {
   tpv_mid:SI(`<path d="M1.5 8h13" ${SI_BAND}/><path d="M5 11.5l3-7 3 7M6.3 9h3.4"/>`),
   tpv_top:SI(`<path d="M1.5 3.5h13" ${SI_BAND}/><path d="M5 12.5l3-7 3 7M6.3 10h3.4"/>`),
 });
+// ícones dentro dos campos de número (arrastar muda o valor) e da linha de propriedade (olho, tirar), como no Figma
+Object.assign(ICONS, {
+  nf_rot:SI('<path d="M12.8 9.5A5 5 0 1 1 11.5 4.3"/><path d="M12.5 2v2.8H9.7"/>'),
+  nf_rad:SI('<path d="M3 13V8a5 5 0 0 1 5-5h5"/>'),
+  nf_op:SI('<rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M2.5 13.5l11-11"/><path d="M8 13.5 13.5 8M5.2 13.5l8.3-8.3" stroke-opacity=".5"/>'),
+  nf_blur:SI('<circle cx="8" cy="8" r="5.5" stroke-dasharray="1.5 1.8"/><circle cx="8" cy="8" r="2.5"/>'),
+  nf_ls:SI('<path d="M2 3v10M14 3v10M5 11l2-6 2 6M5.7 9h2.6"/>'),
+  nf_drag:SI('<path d="M2.5 8h11M5 5.5 2.5 8 5 10.5M11 5.5l2.5 2.5L11 10.5"/>'),
+  nf_spd:SI('<path d="M2.5 11.5a5.5 5.5 0 1 1 11 0"/><path d="M8 11.5l2.8-3.3"/>'),
+  nf_int:SI('<path d="M2.5 13.5C7 13.5 9 2.5 13.5 2.5"/>'),
+  nf_time:SI('<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.2l2 1.3"/>'),
+  nf_vol:SI('<path d="M2.5 6.2h2.3L8 3.5v9L4.8 9.8H2.5z"/><path d="M10.5 6a3 3 0 0 1 0 4M12.3 4.3a5.5 5.5 0 0 1 0 7.4"/>'),
+  nf_zoom:SI('<circle cx="7" cy="7" r="4.3"/><path d="M10.2 10.2l3.3 3.3M5.2 7h3.6M7 5.2v3.6"/>'),
+  nf_h:SI('<path d="M2.5 8h11M5 5.5 2.5 8 5 10.5M11 5.5l2.5 2.5L11 10.5"/>'),
+  nf_v:SI('<path d="M8 2.5v11M5.5 5 8 2.5 10.5 5M5.5 11 8 13.5l2.5-2.5"/>'),
+  nf_sw:SI('<path d="M2.5 4h11" stroke-width="1"/><path d="M2.5 8h11" stroke-width="2"/><path d="M2.5 12.5h11" stroke-width="3"/>'),
+  nf_gap:SI('<path d="M2.5 2.5v11M13.5 2.5v11M5.5 8h5M7 6.5 5.5 8 7 9.5M9 6.5l1.5 1.5L9 9.5"/>'),
+  nf_star:SI('<path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.6l-3.8 2 .7-4.3-3.1-3 4.3-.6z"/>'),
+  nf_grain:SI('<path d="M3.5 3.5h.01M8 3.5h.01M12.5 3.5h.01M5.8 6h.01M10.2 6h.01M3.5 8.5h.01M8 8.5h.01M12.5 8.5h.01M5.8 11h.01M10.2 11h.01M3.5 13h.01M8 13h.01M12.5 13h.01" stroke-width="1.8"/>'),
+  nf_adj:SI('<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11a5.5 5.5 0 0 0 0-11z" fill="currentColor" stroke="none"/>'),
+  nf_wave:SI('<path d="M1.5 8q1.63-3.6 3.25 0t3.25 0 3.25 0 3.25 0"/>'),
+  nf_fs:SI('<path d="M1.5 3.5h7M5 3.5v9M9.5 7.5h5M12 7.5v5"/>'),
+  nf_lh:SI('<path d="M2.5 2.5h11M2.5 13.5h11M5.5 11l2.5-6 2.5 6M6.3 9h3.4"/>'),
+  eye:SI('<path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/>'),
+  eye_off:SI('<path d="M2.5 6.5c1.2 1.6 3.1 2.8 5.5 2.8s4.3-1.2 5.5-2.8M4.6 8.6l-1.2 1.6M8 9.3v2M11.4 8.6l1.2 1.6"/>'),
+  minus:SI('<path d="M3.5 8h9"/>'), plus:SI('<path d="M8 3.5v9M3.5 8h9"/>'), close:SI('<path d="M4 4l8 8M12 4l-8 8"/>'),
+  fx_set:SI('<path d="M2.5 4.5h7M12 4.5h1.5M2.5 11.5H4M6.5 11.5h7"/><circle cx="10.7" cy="4.5" r="1.4"/><circle cx="5.2" cy="11.5" r="1.4"/>'),
+});
 for (const k of ['hug', 'fix', 'fill']) ICONS[k + '_h'] = ICONS[k + '_w'].replace(/(<path[\s\S]*<\/path>|<path[^>]*\/>)/, m => `<g transform="rotate(90 8 8)">${m}</g>`);
 // segmento só de ícones: opts = [valor, nome, ícone]; on(v) diz qual está marcado (várias = botões que ligam/desligam sozinhos)
 function icoSeg(label, opts, on, pick) {
@@ -11636,19 +12029,7 @@ function modeF(label, opts, cur, pick, title) {
     opts.map(([v, t, tt, ic]) => h('button', { type:'button', 'aria-pressed':String(cur === v), title:ico ? t + (tt ? ': ' + tt : '') : tt || '', ...(ico ? { html:ICONS[ic] || ic, 'aria-label':t } : { text:t }), onclick:() => { if (cur !== v) pick(v); } })));
   const f = field(label, wrap); if (title) f.title = title; return f;
 }
-// "Cantos": uma barra para todos; "Cada canto" abre quatro (sup. esq., sup. dir., inf. dir., inf. esq.)
-function cornersF(L, fmt) {
-  const sep = !!L.radSep, names = ['Sup. esquerdo', 'Sup. direito', 'Inf. direito', 'Inf. esquerdo'];
-  const btn = h('button', { class:'btn small', text:sep ? 'Todos iguais' : 'Cada canto', title:sep ? 'Volta a um raio só' : 'Ajusta cada canto separado', onclick:() => {
-    pushUndo();
-    for (const o of peersOf(L)) {
-      if (!o.radSep) { for (const k of RAD_KEYS) o[k] = o.radius || 0; o.radSep = true; }
-      else { o.radius = o.rTL ?? o.radius ?? 0; o.radSep = false; }
-    }
-    changed({ props:true });
-  } });
-  return [sep ? null : rangeF(L, 'radius', 'Cantos', 0, 600, 1, fmt), ...(sep ? RAD_KEYS.map((k, i) => { if (L[k] == null) L[k] = L.radius || 0; return rangeF(L, k, names[i], 0, 600, 1, fmt); }) : []), h('div', { class:'row' }, [btn])].filter(Boolean);
-}function checkF(L, k, label) {
+function checkF(L, k, label) {
   const id = fid(L, k);
   const inp = h('input', { type:'checkbox', id, checked:!!L[k] });
   inp.addEventListener('change', () => { pushUndo(); for (const o of peersOf(L)) o[k] = inp.checked; RT.layout.clear(); changed(); if (k === 'stroke' || k === 'tint' || k === 'fill' || k === 'wave' || k === 'sync') renderProps(); });
@@ -11668,13 +12049,7 @@ function richF(L, label) {
   const id = fid(L, 'text');
   const ed = h('div', { class:'rich', id, contenteditable:'true', role:'textbox', 'aria-multiline':'true', 'aria-label':label, spellcheck:'true', lang:'pt-BR' }); // erro de português sublinhado em vermelho, sugestão no botão direito
   // cada letra guarda peso e itálico; null = segue o da camada
-  const toChars = () => { const cs = []; for (const x of runsOf(L) || [{ t:L.text }]) for (const ch of x.t) cs.push({ ch, w:x.w ?? null, i:x.i ?? null, c:x.c ?? null }); return cs; };
-  const fromChars = cs => {
-    const runs = [];
-    for (const c of cs) { const p = runs[runs.length - 1]; if (p && p.w === c.w && p.i === c.i && p.c === c.c) p.t += c.ch; else runs.push({ t:c.ch, w:c.w, i:c.i, c:c.c }); }
-    L.text = cs.map(c => c.ch).join('');
-    L.runs = runs.every(r => r.w == null && r.i == null && r.c == null) ? null : runs.map(r => { const o = { t:r.t }; if (r.w != null) o.w = r.w; if (r.i != null) o.i = r.i; if (r.c != null) o.c = r.c; return o; });
-  };
+  const toChars = () => textChars(L), fromChars = cs => setTextChars(L, cs);
   const paint = () => {
     ed.innerHTML = '';
     for (const r of runsOf(L) || [{ t:L.text }]) {
@@ -11684,6 +12059,7 @@ function richF(L, label) {
       if (r.w != null) sp.dataset.w = r.w;
       if (r.i != null) sp.dataset.i = r.i ? '1' : '0';
       if (r.c) sp.dataset.c = r.c;
+      if (r.f) { sp.dataset.f = r.f; sp.style.fontFamily = `"${r.f}", var(--f-ui)`; }
       ed.append(sp);
     }
     ed.style.fontFamily = `"${L.font}", var(--f-ui)`;
@@ -11693,16 +12069,17 @@ function richF(L, label) {
   // lê o editor mantendo o estilo de cada trecho
   const read = () => {
     const cs = [];
-    const walk = (n, w, it, cl) => {
-      if (n.nodeType === 3) { for (const ch of n.data) cs.push({ ch:ch === ' ' ? ' ' : ch, w, i:it, c:cl }); return; }
-      if (n.nodeName === 'BR') { cs.push({ ch:'\n', w, i:it, c:cl }); return; }
-      if (n !== ed && /^(DIV|P)$/.test(n.nodeName) && cs.length && cs[cs.length - 1].ch !== '\n') cs.push({ ch:'\n', w, i:it, c:cl });
+    const walk = (n, w, it, cl, fm) => {
+      if (n.nodeType === 3) { for (const ch of n.data) cs.push({ ch:ch === ' ' ? ' ' : ch, w, i:it, c:cl, f:fm }); return; }
+      if (n.nodeName === 'BR') { cs.push({ ch:'\n', w, i:it, c:cl, f:fm }); return; }
+      if (n !== ed && /^(DIV|P)$/.test(n.nodeName) && cs.length && cs[cs.length - 1].ch !== '\n') cs.push({ ch:'\n', w, i:it, c:cl, f:fm });
       if (n.dataset && n.dataset.c) cl = n.dataset.c;
       if (n.dataset && n.dataset.w) w = +n.dataset.w;
       if (n.dataset && n.dataset.i) it = n.dataset.i === '1';
-      for (const c of n.childNodes) walk(c, w, it, cl);
+      if (n.dataset && n.dataset.f) fm = n.dataset.f;
+      for (const c of n.childNodes) walk(c, w, it, cl, fm);
     };
-    walk(ed, null, null, null);
+    walk(ed, null, null, null, null);
     return cs;
   };
   // seleção em índices de letra
@@ -11779,7 +12156,7 @@ function richF(L, label) {
     const rg = getSel() || sel || [toChars().length, toChars().length];
     pushUndo();
     const cs = toChars(), prev = cs[rg[0] - 1] || cs[rg[0]] || {};
-    cs.splice(rg[0], rg[1] - rg[0], ...[...txt].map(ch => ({ ch, w:prev.w ?? null, i:prev.i ?? null, c:prev.c ?? null })));
+    cs.splice(rg[0], rg[1] - rg[0], ...[...txt].map(ch => ({ ch, w:prev.w ?? null, i:prev.i ?? null, c:prev.c ?? null, f:prev.f ?? null })));
     fromChars(cs); RT.layout.clear(); paint(); changed();
     const at = rg[0] + [...txt].length; setSel(at, at); sel = [at, at];
   });
@@ -11845,69 +12222,209 @@ function findPreset() {
   paneShow('right');
   const i = $('#presetQ'); if (i) { i.focus(); i.select(); }
 }
-function presetGrid(L, k, keys, map, onPick) {
-  const wrap = h('div', { class:'chips' });
-  let dest = null; // bloco da categoria aberta (os chips entram nele)
+// troca o preset de uma camada (clique e prévia usam a mesma conta: a duração padrão do preset vem junto)
+function presetPut(q, k, key, P) {
+  const Pq = (q.type === 'text' ? TP : BP)[key] || P;
+  q[k] = key;
+  if (k === 'in' && Pq.dur != null && key !== 'cut') q.inDur = Pq.dur;
+  if (k === 'out' && key !== 'cut') q.outDur = Math.min(.8, Math.max(.35, (Pq.dur || .6) * .55));
+}
+const pvTargets = (L, k, key) => peersAny(L).filter(q => presetKeys(q, k).includes(key));
+// Prévia ao passar o mouse num preset (pedido do usuário: ver a animação antes de escolher, sem clicar e sem "Ver").
+// Troca o preset só enquanto o mouse está em cima e toca o trecho em volta (entrada, saída ou um pedaço do "na tela"), repetindo;
+// ao sair, preset, durações e agulha voltam como estavam. É gesto do usuário, como o "Ver": não quebra o "nada toca sozinho".
+// Nada vai para o desfazer nem para o arquivo: pushUndo encerra a prévia antes, e o autosave espera ela acabar (flushSave).
+// Peso: o mesmo de tocar o trecho com o ▶.
+var PV = { on:null, wait:0, loop:0, last:0 }; // var: pushUndo/flushSave leem antes desta linha rodar
+const PV_KEYS = ['in', 'out', 'idle', 'inDur', 'outDur'];
+function pvPut(on, apply) {
+  for (const [q, v] of on.saved) {
+    if (apply) presetPut(q, on.k, on.key, on.P);
+    else for (const n of PV_KEYS) { if (v[n] === undefined) delete q[n]; else q[n] = v[n]; }
+  }
+  RT.rev = (RT.rev || 0) + 1; needs = true;
+}
+function pvRange(L, k) {
+  const ph = phase(L, L.start) || { inD:0, outD:0 }, end = L.end ?? S.duration;
+  if (k === 'out') return [clamp(end - ph.outD - .6, L.start, S.duration), Math.min(S.duration - .001, end + .35)];
+  const r = restTime(L);
+  if (k === 'idle') return [r, Math.max(r + .3, Math.min(r + 2.5, end - ph.outD - .02))];
+  return [Math.max(0, L.start - .25), Math.min(end, r + .45)];
+}
+function pvStart(L, k, key, P, el) {
+  clearTimeout(PV.wait);
+  if (S.still || RT.exporting || (playing && !PV.on)) return; // tocando de verdade: o mouse não atrapalha
+  // passando de um preset para o outro, a troca é quase imediata; a primeira espera um pouco (senão atravessar a grade pisca tudo)
+  PV.wait = setTimeout(() => {
+    pvEnd(false);
+    if (!el.isConnected || overlayOpen()) return;
+    const qs = pvTargets(L, k, key); if (!qs.length) return;
+    const on = PV.on = { L, k, key, P, el, T, saved:qs.map(q => [q, Object.fromEntries(PV_KEYS.map(n => [n, q[n]]))]) };
+    pvPut(on, true);
+    const go = () => {
+      if (PV.on !== on) return;
+      if (!on.el.isConnected) { pvEnd(); return; } // o painel foi refeito embaixo do mouse
+      if (!playing) { const [a, b] = pvRange(L, k); play(a, b); PV.loop = setTimeout(go, Math.max(300, (b - a) * 1000 + 450)); }
+      else PV.loop = setTimeout(go, 150);
+    };
+    go();
+  }, performance.now() - PV.last < 400 ? 40 : 220);
+}
+// back = false: só desfaz o preset (vai começar outra prévia logo em seguida, a agulha fica)
+function pvEnd(back = true) {
+  clearTimeout(PV.loop); if (back) clearTimeout(PV.wait);
+  const on = PV.on; if (!on) return;
+  PV.on = null; PV.last = performance.now();
+  pvPut(on, false);
+  if (playing) pause();
+  if (back) { T = on.T; needs = true; }
+  else T = on.T;
+}
+/* Galeria de animações (pedido do usuário: ver o efeito sem abrir categoria e sem adivinhar pelo nome).
+   Cada preset é um quadradinho com uma miniatura: um "Aa" de mentira (fora de S) desenhado pelo próprio drawText/drawBlock,
+   parado num quadro do meio da animação. Só a miniatura com o mouse em cima se mexe (uma por vez, THUMB.live).
+   O quadro parado fica guardado (THUMB.cache, por tipo + fase + preset + intensidade + cor), então refazer o painel só copia;
+   a primeira vez desenha aos poucos, alguns por quadro (THUMB.q), para não travar ao abrir a aba. */
+const THUMB = { w:76, h:44, cache:new Map(), q:[], raf:0, live:null, smp:new Map() };
+const thumbCv = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }; // tela da interface (não vai para a exportação)
+const THUMB_SVG = new Set(['draw', 'assemble', 'handwrite']); // de logo: no "Aa" virariam Fade; mostra uma forma se desenhando
+function thumbKind(L, k, key) {
+  if (L.type === 'text' && !L.__g) return 'text';
+  if (k !== 'idle' && THUMB_SVG.has(key)) return 'shape';
+  return 'block';
+}
+function thumbSample(kind) {
+  const fg = getComputedStyle(document.documentElement).getPropertyValue('--fg').trim() || '#D1D7E0';
+  const sk = kind + fg + S.brand.fonts[0];
+  let o = THUMB.smp.get(sk); if (o) return o;
+  const L = kind === 'text' ? mkText('title', { text:'Aa', font:S.brand.fonts[0], weight:700, size:300, color:fg, hl:fg, lineColor:fg, maxW:.84 })
+    : kind === 'shape' ? mkShape({ kind:'circle', size:.3, mh:.3, mode:'solid', c1:fg + '33', stroke:true, strokeColor:fg, strokeW:14, drawColor:fg, lineColor:fg })
+    : mkCta({ text:'Aa', font:S.brand.fonts[0], weight:700, size:300, color:fg, bg:fg + '00', padX:0, padY:0, lineColor:fg });
+  Object.assign(L, { x:.5, y:.5, start:0, end:10, in:'cut', out:'cut', idle:'none' });
+  o = { L, fg, fit:null }; THUMB.smp.set(sk, o);
+  return o;
+}
+// prepara a camada de mentira com o preset e devolve o quadro parado e o trecho que toca no mouse
+function thumbSet(src, k, key, kind) {
+  const o = thumbSample(kind), L = o.L;
+  L.in = 'cut'; L.out = 'cut'; L.idle = 'none'; L.start = 0; L.end = 10;
+  for (const m of ['in', 'out', 'idle']) { const [a, b] = RHY[m]; L[a] = spdOf(src, m); L[b] = intOf(src, m); }
+  L.inSlide = src.inSlide; L.outSlide = src.outSlide;
+  if (key !== 'cut' && key !== 'none') {
+    if (k === 'idle') L.idle = key;
+    else { const P = (kind === 'text' ? TP : BP)[key]; if (P) presetPut(L, k, key, P); }
+  }
+  const ph = phase(L, 0) || { inD:0, outD:0 };
+  if (k === 'in' && ph.inD) return { o, t:ph.inD * .4, a:-.15, b:ph.inD + .45 };
+  if (k === 'out' && ph.outD) return { o, t:L.end - ph.outD * .5, a:L.end - ph.outD - .4, b:L.end + .2 };
+  if (k === 'idle' && L.idle !== 'none') return { o, t:ph.inD + .7, a:ph.inD, b:ph.inD + 2.6 };
+  return { o, t:ph.inD + .5, a:0, b:0 };
+}
+function thumbPaint(cv, src, k, key, kind, t) {
+  const s = thumbSet(src, k, key, kind), o = s.o, L = o.L, x = cv.getContext('2d'), cw = cv.width, ch = cv.height;
+  x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.filter = 'none'; x.globalCompositeOperation = 'source-over'; x.clearRect(0, 0, cw, ch);
+  const draw = (c, tt, R) => { try { if (L.type === 'text') drawText(c, L, tt, R); else drawBlock(c, L, tt, R); } catch (e) {} };
+  if (!o.fit || o.fit.cw !== cw) { // mede o "Aa" em repouso uma vez por tipo e tamanho
+    const m = thumbCv(2, 2).getContext('2d'), keep = [L.in, L.out, L.idle]; L.in = L.out = 'cut'; L.idle = 'none';
+    draw(m, 1, { rs:1, export:true }); [L.in, L.out, L.idle] = keep;
+    const b = L._bounds || { x:W() / 2 - 100, y:H() / 2 - 100, w:200, h:200 };
+    o.fit = { cw, k:Math.min(.58 * cw / b.w, .62 * ch / b.h), cx:b.x + b.w / 2, cy:b.y + b.h / 2 };
+  }
+  const f = o.fit;
+  x.setTransform(f.k, 0, 0, f.k, cw / 2 - f.cx * f.k, ch / 2 - f.cy * f.k);
+  draw(x, t ?? s.t, { rs:f.k, export:true });
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  return s;
+}
+const thumbKey = (src, k, key, kind) => [kind, k, key, intOf(src, k), k === 'idle' ? spdOf(src, k) : '', k === 'out' ? src.outSlide : src.inSlide, thumbSample(kind).fg, S.brand.fonts[0], devicePixelRatio].join('|');
+function thumbStill(cv, src, k, key) {
+  const kind = thumbKind(src, k, key), ck = thumbKey(src, k, key, kind), hit = THUMB.cache.get(ck);
+  const put = img => { const x = cv.getContext('2d'); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, cv.width, cv.height); x.drawImage(img, 0, 0); };
+  if (hit) { put(hit); return; }
+  THUMB.q.push(() => {
+    if (!cv.isConnected || THUMB.live && THUMB.live.cv === cv) return;
+    const c = THUMB.cache.get(ck) || (() => { const b = thumbCv(cv.width, cv.height); thumbPaint(b, src, k, key, kind); return b; })();
+    if (THUMB.cache.size > 400) THUMB.cache.delete(THUMB.cache.keys().next().value);
+    THUMB.cache.set(ck, c); put(c);
+  });
+  if (!THUMB.raf) THUMB.raf = requestAnimationFrame(thumbRun);
+}
+function thumbRun() {
+  THUMB.raf = 0; const t0 = performance.now();
+  while (THUMB.q.length && performance.now() - t0 < 8) THUMB.q.shift()();
+  if (THUMB.q.length) THUMB.raf = requestAnimationFrame(thumbRun);
+}
+// mouse em cima: só esta miniatura toca, repetindo o trecho
+function thumbLive(cv, src, k, key) {
+  thumbStop();
+  const kind = thumbKind(src, k, key), s = thumbSet(src, k, key, kind); if (!(s.b > s.a)) return;
+  const live = THUMB.live = { cv, t0:performance.now(), raf:0, back:() => thumbStill(cv, src, k, key) };
+  const step = () => {
+    if (THUMB.live !== live || !cv.isConnected) return;
+    const u = ((performance.now() - live.t0) / 1000) % (s.b - s.a + .5);
+    thumbPaint(cv, src, k, key, kind, s.a + Math.min(u, s.b - s.a));
+    live.raf = requestAnimationFrame(step);
+  };
+  step();
+}
+function thumbStop() {
+  const l = THUMB.live; if (!l) return;
+  THUMB.live = null; cancelAnimationFrame(l.raf);
+  if (l.cv.isConnected && l.back) l.back();
+}
+const PCAT = (() => { try { const o = JSON.parse(localStorage.getItem('mola-pcat')); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } })(); // filtro escolhido por grade: { in:'mov', out:'all', idle:'fav' }
+function presetGrid(L, k, keys, map, onPick, opt = {}) {
+  // opt.put(key, P): quem escolhe é outro (janela Componentes, que grava no padrão); sem prévia no palco
+  const wrap = h('div', { class:'chips pgal' });
   const lgo = logoOf(L), svgOK = lgo && lgo.isSvg && lgo.parts.length, penOK = lgo && lgo.pen;
   const one = key => {
     const P = map[key]; const needSvg = P.svg && L.type === 'logo';
     const off = L.type === 'logo' && (P.svg ? !svgOK : P.pen ? !penOK : false);
     const fav = isFav(k, key);
-    const b = h('button', { class:'chip' + (off ? ' dim' : ''), 'data-key':key, 'aria-pressed':String(L[k] === key), title:off ? (P.svg ? 'Precisa de logo em SVG' : 'Precisa de logo em SVG ou PNG com fundo transparente') : P.label,
+    const cv = h('canvas', { class:'pt-cv', width:Math.round(THUMB.w * devicePixelRatio), height:Math.round(THUMB.h * devicePixelRatio), 'aria-hidden':'true' });
+    const b = h('button', { class:'chip pt' + (off ? ' dim' : ''), 'data-key':key, 'aria-pressed':String(L[k] === key), 'aria-label':P.label, title:off ? (P.svg ? 'Precisa de logo em SVG' : 'Precisa de logo em SVG ou PNG com fundo transparente') : P.label,
       onclick:() => {
-        pushUndo();
-        // vale para toda a seleção (grupo ou vários): quem não tem esse preset fica como está
-        for (const q of peersAny(L)) {
-          if (!presetKeys(q, k).includes(key)) continue;
-          const Pq = (q.type === 'text' ? TP : BP)[key] || P;
-          q[k] = key;
-          if (k === 'in' && Pq.dur != null && key !== 'cut') q.inDur = Pq.dur;
-          if (k === 'out' && key !== 'cut') q.outDur = Math.min(.8, Math.max(.35, (Pq.dur || .6) * .55));
+        if (opt.put) opt.put(key, P);
+        else {
+          pvEnd(true); pushUndo();
+          // vale para toda a seleção (grupo ou vários): quem não tem esse preset fica como está
+          for (const q of pvTargets(L, k, key)) presetPut(q, k, key, P);
         }
-        // o mesmo preset pode aparecer duas vezes (em Favoritos e na categoria)
-        wrap.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', String(c.dataset.key === key))); wrap.dataset.cur = P.label; changed(); renderMarks();
-        if (k === 'out') seekOut(L); else seekLayer(L);
+        wrap.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', String(c.dataset.key === key))); wrap.dataset.cur = P.label;
+        if (!opt.put) { changed(); renderMarks(); if (k === 'out') seekOut(L); else seekLayer(L); }
         if (onPick) onPick();
-      } }, [h('span', { text:P.label }), needSvg ? h('em', { text:'SVG' }) : null]);
+      } }, [cv, h('span', { text:P.label }), needSvg ? h('em', { text:'SVG' }) : null]);
+    thumbStill(cv, L, k, key);
+    // passar o mouse: a miniatura toca (só ela) e o palco mostra o preset (pvStart); sair volta tudo como estava
+    b.addEventListener('mouseenter', () => { thumbLive(cv, L, k, key); if (!off && !opt.put) pvStart(L, k, key, P, b); });
+    b.addEventListener('mouseleave', () => { thumbStop(); if (!opt.put) pvEnd(); });
     // "Sem animação" não tem estrela: já fica sempre no topo
     const star = key === 'cut' || key === 'none' ? null : h('button', { type:'button', class:'fav', 'aria-pressed':String(fav), title:fav ? 'Tirar dos favoritos' : 'Favoritar',
       'aria-label':(fav ? 'Tirar dos favoritos: ' : 'Favoritar: ') + P.label, html:ICON_STAR, onclick:() => { toggleFav(k, key); fill(); } });
-    (dest || wrap).append(h('div', { class:'chip-w' + (fav ? ' on' : '') }, [b, star]));
+    wrap.append(h('div', { class:'chip-w' + (fav ? ' on' : '') }, [b, star]));
   };
-  const head = t => wrap.append(h('div', { class:'chip-cat', text:t }));
-  // categoria que abre e fecha (lembrada por grade): fechada mostra quantos tem, ou o escolhido se ele estiver ali.
-  // Sem escolha, só a do preset escolhido começa aberta; na busca todas aparecem abertas
-  const fold = (cat, name, cs) => {
-    const key = `cat:${k}:${cat}`, cur = cs.includes(L[k]) ? map[L[k]].label : '', open = FOLD[key] ?? !!cur;
-    // mesma seta das seções, à direita; a categoria aberta vira um bloco destacado com os presets dela
-    const hd = h('button', { type:'button', class:'chip-cat' + (open ? '' : ' shut'), 'aria-expanded':String(open), title:(open ? 'Fechar ' : 'Abrir ') + name, onclick:() => {
-      foldSave(key, !open); fill();
-      if (!open) { const nb = [...wrap.querySelectorAll('.cat-box > .chip-cat')].find(x => x.firstChild.textContent === name); if (nb) revealBelow(nb, nb.parentElement); } // abriu: mostra a categoria inteira
-    } },
-      [h('span', { text:name }), h('small', { class:cur && !open ? 'cur' : null, text:cur && !open ? cur : String(cs.length) }), h('span', { class:'fold-btn fold-chev', 'aria-hidden':'true', html:FOLD_CHEV })]);
-    if (!open) { wrap.append(hd); return; }
-    dest = h('div', { class:'cat-box' }, [hd]); wrap.append(dest);
-    cs.forEach(one); dest = null;
-  };
+  // pílulas: Todos · Favoritos · as categorias que esta grade tem (a escolhida fica no navegador, por grade)
+  const pills = (list, cur) => wrap.append(h('div', { class:'pcats', role:'group', 'aria-label':'Filtrar animações' }, list.map(([v, name]) =>
+    h('button', { type:'button', class:'pcat', 'aria-pressed':String(cur === v), text:name, onclick:() => {
+      PCAT[k] = v; try { localStorage.setItem('mola-pcat', JSON.stringify(PCAT)); } catch (e) {} fill();
+    } }))));
   const fill = () => {
+    thumbStop();
     wrap.innerHTML = ''; wrap.dataset.cur = map[L[k]]?.label || '';
-    const q = presetQ.trim(), ks = q ? keys.filter(key => presetMatch(map[key], q)) : keys;
-    if (!ks.length) { wrap.append(h('p', { class:'chip-none', text:`Nenhuma com “${q}”.` })); return; }
-    // favoritos: atalho no topo (sem esconder da categoria); na busca, cada um aparece uma vez só
-    const favs = q ? [] : keys.filter(key => isFav(k, key));
-    // agrupa por categoria (Movimento, Revelação, 3D...), mantendo a ordem da lista dentro de cada uma
-    const cats = new Set(ks.map(key => map[key].cat || ''));
-    if (cats.size < 2) {
-      const top = favs.length && (ks[0] === 'none' || ks[0] === 'cut') ? [ks[0]] : [];
-      top.forEach(one);
-      if (favs.length) { head('Favoritos'); favs.forEach(one); head('Todos'); }
-      ks.filter(key => !top.includes(key)).forEach(one); return;
+    const q = presetQ.trim(), zero = keys.filter(key => key === 'cut' || key === 'none'), rest = keys.filter(key => !zero.includes(key));
+    if (q) { // na busca vale a lista toda, sem filtro
+      const ks = keys.filter(key => presetMatch(map[key], q));
+      if (!ks.length) { wrap.append(h('p', { class:'chip-none', text:`Nenhuma com “${q}”.` })); return; }
+      ks.forEach(one); return;
     }
-    for (const [cat, name] of CATS) {
-      const cs = ks.filter(key => (map[key].cat || '') === cat);
-      if (cs.length) { if (!name) cs.forEach(one); else if (q) { head(name); cs.forEach(one); } else fold(cat, name, cs); }
-      if (!cat && favs.length) { head('Favoritos'); favs.forEach(one); } // "Sem animação" em cima, favoritos logo depois
-    }
+    const cats = CATS.filter(([c, n]) => n && rest.some(key => (map[key].cat || '') === c));
+    const opts = [['all', 'Todos'], ['fav', 'Favoritos'], ...cats];
+    let cur = PCAT[k]; if (!opts.some(o => o[0] === cur)) cur = 'all';
+    pills(opts, cur);
+    const ks = cur === 'all' ? rest : cur === 'fav' ? rest.filter(key => isFav(k, key)) : rest.filter(key => (map[key].cat || '') === cur);
+    zero.forEach(one); // "Sem animação" sempre primeiro
+    ks.forEach(one);
+    if (cur === 'fav' && !ks.length) wrap.append(h('p', { class:'chip-none', text:'Nenhum favorito ainda. Passe o mouse num preset e toque na estrela.' }));
   };
   wrap.fill = fill; fill();
   return wrap;
@@ -11938,18 +12455,21 @@ function idleGrid(L) {
 let propTab = 'anim';
 function renderProps() {
   const box = $('#props'); box.innerHTML = '';
+  queueMicrotask(popRefresh); // a janelinha de detalhes aberta acha a âncora nova
   let L = selL();
   if (!L) { box.append(h('div', { class:'props-empty', text:'Selecione uma camada.' })); return; }
   const gid = wholeGroup(); // grupo inteiro selecionado: a aba Animação é a do grupo
   if (!gid && tagAlong(L) && pickedLayers().length > 1) { L = linkOf(L); RT.selected = L.id; } // vários vídeos: o painel é o do vídeo
   if (gid && NOBOX(L)) { const v = gleaves(gid).filter(l => !NOBOX(l)).pop(); if (v) { RT.selected = v.id; L = v; } } // grupo do vídeo com o som: o painel fala do que aparece
-  const head = h('section', { class:'sec sec-head', style:`--tc:${gid ? 'var(--c-group)' : TYPE_COLOR[typeKey(L)]}` }, [
+  const fs = gid ? null : framesPicked(); // vários frames escolhidos: o painel continua falando de frames, não do texto de dentro
+  const grpLike = gid || fs;
+  const head = h('section', { class:'sec sec-head', style:`--tc:${grpLike ? 'var(--c-group)' : TYPE_COLOR[typeKey(L)]}` }, [
     h('div', { class:'lhead' }, [
-      h('span', { class:'type-chip', style:`color:${gid ? 'var(--c-group)' : TYPE_COLOR[typeKey(L)]}`, text:gid ? 'Grupo' : TYPE_LABEL[typeKey(L)] }),
-      gid ? (() => { const i = h('input', { type:'text', id:'f-g-' + gid + '-name', value:groupName(gid), 'aria-label':'Nome do grupo' }); i.addEventListener('input', () => { gmeta(gid, true).name = i.value.trim() || undefined; renderLayers(); renderTimeline(); autosave(); }); return i; })()
+      h('span', { class:'type-chip', style:`color:${grpLike ? 'var(--c-group)' : TYPE_COLOR[typeKey(L)]}`, text:gid ? 'Grupo' : fs ? 'Frames' : TYPE_LABEL[typeKey(L)] }),
+      fs ? h('input', { type:'text', readonly:'', value:`${fs.length} frames: ${fs.map(groupName).join(', ')}`, 'aria-label':'Frames escolhidos', title:fs.map(groupName).join(', ') }) : gid ? (() => { const i = h('input', { type:'text', id:'f-g-' + gid + '-name', value:groupName(gid), 'aria-label':'Nome do grupo' }); i.addEventListener('input', () => { gmeta(gid, true).name = i.value.trim() || undefined; renderLayers(); renderTimeline(); autosave(); }); return i; })()
         : (() => { const i = h('input', { type:'text', id:fid(L, 'name'), value:L.name, 'aria-label':'Nome da camada' }); i.addEventListener('input', () => { L.name = i.value; renderLayers(); autosave(); }); return i; })(),
-      L.type !== 'bg' ? h('button', { class:'icon-btn', title:'Duplicar', html:ICONS.copy, onclick:() => duplicateLayer(L) }) : null,
-      L.type !== 'bg' ? h('button', { class:'icon-btn', title:'Apagar camada (Delete)', html:ICONS.trash, onclick:() => deleteLayer(L) }) : null,
+      L.type !== 'bg' && !fs ? h('button', { class:'icon-btn', title:'Duplicar', html:ICONS.copy, onclick:() => duplicateLayer(L) }) : null,
+      L.type !== 'bg' && !fs ? h('button', { class:'icon-btn', title:'Apagar camada (Delete)', html:ICONS.trash, onclick:() => deleteLayer(L) }) : null,
     ]),
   ]);
   box.append(head);
@@ -11960,12 +12480,12 @@ function renderProps() {
 
   const tabs = h('div', { class:'tabs', role:'tablist' }, [['anim', 'Animação'], ['style', 'Conteúdo e estilo']].map(([k, t]) =>
     h('button', { role:'tab', 'aria-selected':String(propTab === k), text:t, onclick:() => { propTab = k; renderProps(); } })));
-  if (S.still || layerStill(gid ? gpseudo(gid) : L) || (!gid && L.capt)) propTab = 'style'; // imagem estática (o arquivo ou o slide): sem animação; legenda: a animação é o estilo dela
+  if (S.still || layerStill(gid ? gpseudo(gid) : fs ? gpseudo(fs[0]) : L) || (!grpLike && L.capt)) propTab = 'style'; // imagem estática (o arquivo ou o slide): sem animação; legenda: a animação é o estilo dela
   else head.append(tabs);
   // como no Figma: o nome e as abas ficam sempre no topo; alinhar, tamanho da seleção e layout automático são do conteúdo e estilo
-  if (propTab !== 'anim') box.append(...[alignBar(), pathfinderSec(), pickedLayers().length > 1 ? scaleBar() : null, flowSec()].filter(Boolean));
+  if (propTab !== 'anim') box.append(...[alignBar(), layoutSec(), flowSec(), pathfinderSec(), pickedLayers().length > 1 && !wholeGroup() ? scaleBar() : null].filter(Boolean)); // ordem do Figma (frame inteiro: os cantos já escalam tudo): Posição → Layout → Layout automático
 
-  if (propTab === 'anim' && gid) { box.append(...groupAnimSecs(gid, head, box)); return; }
+  if (propTab === 'anim' && grpLike) { box.append(...groupAnimSecs(gid || fs, head, box)); return; }
   if (gid) { box.append(...groupStyleSecs(gid)); const vf = videoSelFields(); if (vf.length) box.append(h('section', { class:'sec' }, vf)); return; } // vídeos dentro do grupo: velocidade para todos
   if (propTab === 'anim') {
     const inKeys = L.type === 'text' ? TEXT_IN : BLOCK_IN[L.type];
@@ -12052,20 +12572,21 @@ function xfSec(L, side) {
 const xfOn = (L, side) => { const X = xfPairs(true); return !!(side === 'in' ? X.inn.get(L.id) : X.out.get(L.id)); };
 // aba Animação do grupo inteiro: age sobre o conjunto e se soma à animação de cada item (que não muda)
 function groupAnimSecs(gid, head, box) {
-  const G = gview(gid);
+  const G = Array.isArray(gid) ? gviewAll(gid) : gview(gid), many = Array.isArray(gid);
   head.append(presetSearch(box));
   const seeBtn = (t, fn) => h('button', { type:'button', class:'see', title:t, 'aria-label':t, html:`${ICON_PLAY}<span>Ver</span>`, onclick:fn });
   const rhythm = (m, minS, maxS, after) => {
-    const [sk, ik] = RHY[m]; G[sk] = spdOf(G, m); G[ik] = intOf(G, m);
+    const [sk, ik] = RHY[m]; (G.__all || [G]).forEach(o => { o[sk] = spdOf(o, m); o[ik] = intOf(o, m); }); // cada frame com o seu valor de agora
     return [rangeF(G, sk, 'Velocidade', minS, maxS, .05, v => v.toFixed(2) + '×', { after }),
       rangeF(G, ik, 'Intensidade', 0, 1, .01, v => Math.round(v * 100) + '%', { after })];
   };
   const idleMap = Object.fromEntries(G_KEYS.idle.map(k => [k, { label:IDLE[k] }]));
-  const w = gwin(gid);
+  const w = { end:G.end };
   const inSlot = h('div'), inRef = () => { inSlot.innerHTML = ''; const f = slideDirF(G, 'in'); if (f) inSlot.append(f); }; inRef();
   const outSlot = h('div'), outRef = () => { outSlot.innerHTML = ''; const f = slideDirF(G, 'out'); if (f) outSlot.append(f); }; outRef();
   return [
-    h('p', { class:'hint hint-pad', text:'Animação do grupo inteiro: age sobre o conjunto e se soma à de cada item, que continua como está. Para mexer em um item só, clique nele na timeline ou use Ctrl + clique.' }),
+    h('p', { class:'hint hint-pad', text:many ? `${gid.length} frames escolhidos: o que você escolher aqui vale para cada um deles, sem mexer na animação dos itens de dentro.`
+      : 'Animação do grupo inteiro: age sobre o conjunto e se soma à de cada item, que continua como está. Para mexer em um item só, clique nele na timeline ou use Ctrl + clique.' }),
     h('section', { class:'sec' }, [h('h3', {}, ['Entrada do grupo', seeBtn('Ver a entrada do grupo (toca só este trecho)', () => previewIn(G))]), presetGrid(G, 'in', G_KEYS.in, BP, inRef), inSlot,
       ...rhythm('in', .4, 6, () => seekKeep(G))]),
     h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), presetGrid(G, 'idle', G_KEYS.idle, idleMap), ...rhythm('idle', .2, 4, () => seekKeep(G))]),
@@ -12074,15 +12595,16 @@ function groupAnimSecs(gid, head, box) {
       ...rhythm('out', .4, 6, () => seekKeep(G, true))]),
   ];
 }
-// opacidade, mesclagem, sombra e desfoque: iguais em toda camada, no grupo e na seleção mista (um lugar só)
-const lookFields = L => [rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'), ...blendF(L), ...fxFields(L)];
 // aba "Conteúdo e estilo" do grupo inteiro: rotação, opacidade, mesclagem, sombra e desfoque do conjunto (por fora da de cada item, que continua como está)
 function groupStyleSecs(gid) {
   const G = gview(gid); G.opacity ??= 1; G.rot ??= 0;
-  return [...frameStyleSecs(gid), h('section', { class:'sec' }, [h('h3', { text:'Aparência do grupo' }),
-    h('p', { class:'hint', text:flowOf(gid) ? 'Vale para o conjunto inteiro, sem mexer nos itens. Cada item pode ter a própria sombra por dentro.'
+  const F = flowOf(gid), px = v => Math.round(v) + 'px';
+  if (F) G.radius ??= 0; // frame novo não tem raio guardado: sem isso o campo Cantos mostrava NaNpx
+  // ordem do Figma: Aparência (opacidade | cantos do frame, mesclagem) → Preenchimento → Contorno → Efeitos → Exportar; a rotação fica em Posição
+  return [h('section', { class:'sec' }, [fixH('Aparência'),
+    h('p', { class:'hint', text:F ? 'Vale para o conjunto inteiro, sem mexer nos itens. Cada item pode ter a própria sombra por dentro.'
       : 'Vale para o conjunto inteiro, sem mexer nos itens. Para ter fundo, cantos e contorno (caixa, botão, card), ligue o Layout automático: o grupo vira um frame.' }),
-    rotF(G), ...lookFields(G)])];
+    ...apFields(G, F ? cornersF(G, px) : []), ...frameStyleSecs(gid), ...effectRows(G), ...exportSec()])];
 }
 // Frame (grupo com layout automático) com preenchimento, cantos e contorno, como no Figma (pedido do usuário): é o jeito de fazer caixa,
 // etiqueta, card ou botão com espaço interno fixo atrás de qualquer conteúdo, que cresce junto com o texto. Desenho em paintFrame
@@ -12096,22 +12618,17 @@ function frameStyleSecs(gid) {
     if (k === 'fill' && noCol(t.fill) && !noCol(v)) { const p = fpad(F); if (!(p.t || p.r || p.b || p.l)) { flowPadSet(gid, ['pl', 'pr'], 32); flowPadSet(gid, ['pt', 'pb'], 20); } }
     t[k] = v; return true;
   } });
-  return [h('section', { class:'sec' }, [h('h3', { text:'Frame' }),
-    colorF(FP, 'fill', 'Preenchimento'), ...cornersF(G, px),
+  const fl = colorF(FP, 'fill', 'Preenchimento'); fl.classList.add('cont');
+  return [listHead('Preenchimento'), fl,
     h('p', { class:'hint', text:'O fundo acompanha o conteúdo e o Espaço interno do layout. Clique no fundo do frame no palco para escolher o frame inteiro.' }),
-    ...strokeSecs(G)])];
+    ...strokeSecs(G)];
 }
 // rotação em graus: a forma e o grupo inteiro (também se giram pela quina no palco)
-const rotF = L => rangeF(L, 'rot', 'Rotação', -180, 180, 1, v => Math.round(v) + '°');
+const rotF = L => rangeF(L, 'rot', 'Rotação', -180, 180, 1, v => Math.round(v || 0) + '°', { get:() => L.rot || 0 });
 function syncPosFields(L) {
   const p = posOf(L);
-  ['x', 'y'].forEach(k => { const i = document.getElementById(fid(L, k)); if (i) { i.value = p[k]; const o = i.parentElement.querySelector('.num'); if (o && document.activeElement !== o) o.value = Math.round(p[k] * 100) + '%'; } });
+  ['x', 'y'].forEach(k => document.getElementById(fid(L, k))?._sync?.());
   const n = document.getElementById(fid(L, 'fpos')), nn = posNote(L); if (n && nn) n.replaceWith(nn);
-}
-function posFields(L) {
-  { const sh = tpLink(L); if (sh) return [h('p', { class:'hint', text:`Segue a forma "${sh.name || 'Forma'}": mova a forma para mover o texto. Arrastar o texto desliza pelo caminho.` })]; }
-  const pos = { low:POS_LO, cap:POS_HI }, posX = { low:POS_LO, cap:posHi() }; // digitado pode ir além da barra (elemento fora do palco)
-  return [rangeF(L, 'x', 'Horizontal', 0, slides(), .005, v => Math.round(v * 100) + '%', posX), rangeF(L, 'y', 'Vertical', 0, 1, .005, v => Math.round(v * 100) + '%', pos), posNote(L)];
 }
 // fora do formato principal: de onde vem a posição e como voltar ao automático
 function posNote(L) {
@@ -12121,76 +12638,273 @@ function posNote(L) {
     h('span', { text:own ? `Posição ou tamanho ajustados só no ${fmtLabel(S.format)}` : lk ? `Automática, reorganizada a partir do ${fmtLabel(baseFmt())}` : `Mesma posição do ${fmtLabel(baseFmt())}, sem reorganizar` }),
     own ? h('button', { type:'button', class:'btn small ghost', text:lk ? 'Voltar ao automático' : `Voltar à do ${fmtLabel(baseFmt())}`, onclick:() => resetPos(ls) }) : null]);
 }
+/* ------------ painel da direita na ordem do Figma (fase 2, pedido do usuário) ------------
+   Conteúdo e estilo: Posição (alinhar, X | Y, rotação) → Layout (W | H) → Layout automático + → Aparência (opacidade | cantos,
+   mesclagem) → Tipografia → [conteúdo do tipo: Forma, Imagem, Logo…] → Preenchimento + → Contorno + → Efeitos + → Exportar +.
+   Seção de lista (listHead, h3.nofold): o "+" ACRESCENTA uma linha (contorno, efeito, exportação) e nunca abre nem fecha nada;
+   cada linha = propRow (amostra/ícone, olho, "−") e os detalhes abrem na janelinha ao lado (openPop) clicando na amostra/ícone ou
+   no botão de ajustes. As seções comuns continuam abrindo e fechando pela seta. */
+function listHead(title, o = {}) {
+  const btn = (ic, t, fn) => h('button', { type:'button', class:'prop-b list-b', title:t, 'aria-label':t, html:ICONS[ic], onclick:e => { e.stopPropagation(); fn(e.currentTarget); } });
+  return h('h3', { class:'nofold' }, [title, h('span', { class:'h3r' }, [o.extra || null, o.add ? btn('plus', o.addT || `Acrescentar ${title.toLowerCase()}`, o.add) : null,
+    o.remove ? btn('minus', o.removeT || `Tirar ${title.toLowerCase()}`, o.remove) : null])]);
+}
+// botão de ajustes de uma linha (Figma: o ícone de "configurações avançadas" do traço/efeito): abre a janelinha com build()
+function detBtn(key, title, build) {
+  const b = h('button', { type:'button', class:'prop-b prop-det', 'data-pop':key, title:`Detalhes: ${title.toLowerCase()}`, 'aria-label':`Detalhes: ${title.toLowerCase()}`, html:ICONS.fx_set });
+  b._popBuild = build;
+  b.addEventListener('click', () => openPop(b, title, build, { key }));
+  return b;
+}
+// a janelinha aberta acompanha o painel: renderProps redesenha tudo, então ela acha a âncora nova pela chave e refaz o conteúdo
+function popRefresh() {
+  const p = openPopEl; if (!p || !p._key) return;
+  const a = document.querySelector(`#props [data-pop="${CSS.escape(p._key)}"]`);
+  if (!a) { closePop(); return; }
+  if (p._anchor !== a) { p._anchor.classList?.remove('popped'); p._anchor = a; a.classList.add('popped'); }
+  if (a._popBuild) p._build = a._popBuild;
+  if (p._build && !p.contains(document.activeElement)) p._fill(p._build());
+}
+// X | Y em px do vídeo (como o Figma; guardado continua fração do quadro). No carrossel o X vai de 0 a slides × largura
+function posFields(L) {
+  { const sh = tpLink(L); if (sh) return [h('p', { class:'hint', text:`Segue a forma "${sh.name || 'Forma'}": mova a forma para mover o texto. Arrastar o texto desliza pelo caminho.` })]; }
+  const px = s => v => Math.round(v * s()) + 'px';
+  return [rangeF(L, 'x', 'X', 0, slides(), 1 / W(), px(W), { low:POS_LO, cap:posHi(), scale:W(), dec:0 }),
+    rangeF(L, 'y', 'Y', 0, 1, 1 / H(), px(H), { low:POS_LO, cap:POS_HI, scale:H(), dec:0 }), posNote(L)];
+}
+// Cantos: um campo só; "Cada canto" fica no menu dentro do campo (Figma: o botão de cantos independentes) e abre os quatro embaixo
+function cornersF(L, fmt) {
+  const sep = !!L.radSep, names = ['Sup. esquerdo', 'Sup. direito', 'Inf. direito', 'Inf. esquerdo'];
+  const pick = v => {
+    if ((v === 'sep') === !!L.radSep) return;
+    pushUndo();
+    for (const o of peersOf(L)) {
+      if (!o.radSep) { for (const k of RAD_KEYS) o[k] = o.radius || 0; o.radSep = true; }
+      else { o.radius = o.rTL ?? o.radius ?? 0; o.radSep = false; }
+    }
+    changed({ props:true });
+  };
+  const menu = { items:[['all', 'Todos iguais'], ['sep', 'Cada canto']], cur:() => L.radSep ? 'sep' : 'all', pick, word:() => L.radSep ? 'Cada canto' : null, typed:() => pick('all') };
+  return [rangeF(L, 'radius', 'Cantos', 0, 600, 1, fmt, { menu, get:() => L.radius || 0 }),
+    ...(sep ? RAD_KEYS.map((k, i) => { if (L[k] == null) L[k] = L.radius || 0; const f = rangeF(L, k, names[i], 0, 600, 1, fmt); f.classList.add('corner4'); return f; }) : [])];
+}
+// Aparência: opacidade | cantos e a mesclagem (toda camada, grupo e seleção mista)
+function apFields(L, corners) {
+  return [rangeF(L, 'opacity', 'Opacidade', .1, 1, .01, v => Math.round(v * 100) + '%'), ...(corners || []), ...blendF(L)];
+}
+// compatibilidade: quem ainda pede "aparência + efeitos" numa lista só
+const lookFields = L => [...apFields(L), ...effectRows(L)];
+/* Contorno como no Figma: a linha [amostra | hex | %] + ajustes + olho + "−"; embaixo espessura e posição; o resto (tracejado, pontas,
+   cantos, contorno em vetor) na janelinha. O olho esconde sem tirar (L.strokeOff: a linha continua no painel), o "−" tira */
+function strokeSecs(L) {
+  const t = L.type, shape = t === 'shape', line = shape && L.kind === 'line';
+  if (L.strokeW == null) L.strokeW = shape ? 8 : 4;
+  if (!L.strokeColor) L.strokeColor = shape ? S.brand.colors[1] : '#ffffff';
+  if (L.strokeDash == null) L.strokeDash = 'solid';
+  if (L.strokeGap == null) L.strokeGap = 1;
+  if (L.strokeCap == null) L.strokeCap = 'round';
+  if (L.strokeJoin == null) L.strokeJoin = 'round';
+  if (L.strokePos == null || (t === 'text' && L.strokePos === 'inside')) L.strokePos = 'center';
+  const on = strokeOn(L), has = on || !!L.strokeOff, dashes = t !== 'text' && t !== 'logo', round = shape && L.kind === 'ellipse' || t === 'image' && L.mask === 'circle';
+  const pos = [['inside', 'Dentro', 'sp_inside'], ['center', 'No centro', 'sp_center'], ['outside', 'Fora', 'sp_outside']].filter(o => t !== 'text' || o[0] !== 'inside');
+  const title = line ? 'Traço' : 'Contorno';
+  if (!has) return [listHead(title, { add:() => optSet(L, o => { o.stroke = true; delete o.strokeOff; }, peersOf) })];
+  const det = () => [
+    dashes ? segF(L, 'strokeDash', 'Estilo', icoOpts(STROKE_STYLES, 'ds_')) : null,
+    dashes && L.strokeDash !== 'solid' ? rangeF(L, 'strokeGap', 'Espaçamento', .4, 3, .05, v => v.toFixed(2) + '×') : null,
+    dashes && L.strokeDash !== 'dot' ? segF(L, 'strokeCap', 'Pontas', [['round', 'Redonda', 'cap_round'], ['butt', 'Reta', 'cap_butt'], ['square', 'Quadrada', 'cap_square']]) : null,
+    !line && !round && t !== 'logo' ? segF(L, 'strokeJoin', 'Cantos', [['round', 'Redondo', 'join_round'], ['miter', 'Vivo', 'join_miter'], ['bevel', 'Chanfro', 'join_bevel']]) : null,
+    canOutline(L) && on ? h('div', { class:'row' }, [h('button', { class:'btn small', text:'Contorno em vetor', title:'O contorno vira uma forma Vetor própria (Ctrl+Shift+O), como Outline stroke no Figma', onclick:() => { closePop(); outlineStroke(L); } })]) : null,
+  ].filter(Boolean);
+  const vis = line ? null : { on, toggle:() => optSet(L, o => { if (strokeOn(o)) { o.stroke = false; o.strokeOff = true; } else { o.stroke = true; delete o.strokeOff; } }, peersOf) };
+  const rm = line ? null : () => optSet(L, o => { o.stroke = false; delete o.strokeOff; }, peersOf);
+  const row = colorF(L, 'strokeColor', 'Cor do traço', { vis, remove:rm, more:det().length ? detBtn('stroke-' + L.id, title, det) : null });
+  row.classList.add('cont');
+  return [listHead(title), row,
+    rangeF(L, 'strokeW', 'Espessura', 1, 80, .5, v => v + 'px', { ico:'nf_sw' }),
+    !line && t !== 'logo' ? segF(L, 'strokePos', 'Posição', pos) : null].filter(Boolean);
+}
+/* Efeitos + (Sombra, Desfoque, Desfocar atrás): uma linha por efeito, [ícone + nome + valor] + olho + "−"; clicar no ícone/nome abre os
+   detalhes ao lado. O "+" abre a lista dos que ainda não estão. Olho = esconde e guarda (shOff, lblurOff, bblurOff) */
+const SHADOW_ON = 'soft', BLUR_ON = { lblur:10, bblur:20 }; // o que o "+" acrescenta
+Object.assign(ICONS, {
+  fx_shadow:SI('<rect x="2.5" y="2.5" width="8.5" height="8.5" rx="1.5"/><path d="M13.5 5.5v6.5a1.5 1.5 0 0 1-1.5 1.5H5.5" stroke-opacity=".55"/>'),
+  fx_lblur:SI('<circle cx="8" cy="8" r="5.5" stroke-dasharray="1.5 1.8"/><circle cx="8" cy="8" r="2.5"/>'),
+  fx_bblur:SI('<rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke-dasharray="1.5 1.8"/><path d="M5.5 10.5l5-5" stroke-opacity=".55"/>'),
+});
+function effectRows(L) {
+  const shOn = !!L.shadow && L.shadow !== 'none';
+  const setSh = v => o => { o.shadow = v; o.shColor = v === 'none' ? null : autoShadowHex(o, v); };
+  const FX = [
+    { k:'shadow', t:'Sombra', has:shOn || !!L.shOff, on:shOn, val:() => (SHADOWS[L.shadow] || SHADOWS[L.shOff] || {}).label || '',
+      add:o => { delete o.shOff; setSh(SHADOW_ON)(o); }, hide:o => { if (o.shadow && o.shadow !== 'none') { o.shOff = o.shadow; setSh('none')(o); } else if (o.shOff) { setSh(o.shOff)(o); delete o.shOff; } },
+      rm:o => { delete o.shOff; setSh('none')(o); },
+      det:() => {
+        const sid = fid(L, 'shadow');
+        const sel = h('select', { id:sid }, Object.entries(SHADOWS).filter(([k]) => k !== 'none').map(([k, s]) => h('option', { value:k, text:s.label, selected:(L.shadow === k || L.shOff === k) })));
+        sel.addEventListener('change', () => { optSet(L, o => { delete o.shOff; setSh(sel.value)(o); }, peersAny); seekLayer(L); });
+        return [field('Tipo', sel, sid), shOn ? colorF(L, 'shColor', 'Cor da sombra') : null].filter(Boolean);
+      } },
+    ...(L.type === 'bg' ? ['lblur'] : ['lblur', 'bblur']).map(k => ({ k, t:k === 'lblur' ? 'Desfoque' : 'Desfocar atrás', has:L[k] > 0 || L[k + 'Off'] > 0, on:L[k] > 0,
+      val:() => Math.round(L[k] || L[k + 'Off'] || 0) + ' px',
+      add:o => { delete o[k + 'Off']; o[k] = BLUR_ON[k]; }, hide:o => { if (o[k] > 0) { o[k + 'Off'] = o[k]; o[k] = 0; } else if (o[k + 'Off'] > 0) { o[k] = o[k + 'Off']; delete o[k + 'Off']; } },
+      rm:o => { o[k] = 0; delete o[k + 'Off']; },
+      det:() => [rangeF(L, k, k === 'lblur' ? 'Desfoque' : 'Desfocar atrás', 0, 800, 1, v => Math.round(v || 0) + ' px', { get:() => L[k] || L[k + 'Off'] || 0, put:v => { for (const o of peersAny(L)) { o[k] = v; delete o[k + 'Off']; } } }),
+        segPick(L, k, BLURS[k].filter(([v]) => v).map(([v, t]) => [v, t, `${t}: ${v} px`]), null, null, 0, peersAny),
+        k === 'bblur' ? h('p', { class:'hint', text:'Desfoca o que está atrás, no formato do elemento. Com preenchimento meio transparente, vira vidro.' }) : null].filter(Boolean) })),
+  ];
+  const set = fn => { optSet(L, fn, peersAny); seekLayer(L); };
+  const rows = FX.filter(f => f.has).map(f => {
+    const key = 'fx-' + f.k + '-' + L.id;
+    const open = e => openPop(e.currentTarget.closest('.prop-box'), f.t, f.det, { key });
+    const box = h('div', { class:'prop-box fx-box', 'data-pop':key }, [
+      h('button', { type:'button', class:'fx-ic', title:`Detalhes: ${f.t.toLowerCase()}`, 'aria-label':`Detalhes: ${f.t.toLowerCase()}`, html:ICONS['fx_' + f.k], onclick:open }),
+      h('button', { type:'button', class:'fx-nm', onclick:open }, [h('span', { text:f.t }), h('small', { text:f.val() })])]);
+    const r = propRow({ box, label:f.t.toLowerCase(), on:f.on, toggle:() => set(f.hide), remove:() => set(f.rm) });
+    box._popBuild = f.det; r.dataset.fx = f.k; return r;
+  });
+  const free = FX.filter(f => !f.has);
+  return [listHead('Efeitos', { add:free.length ? b => nfMenu(b, free.map(f => [f.k, f.t, 'fx_' + f.k]), null, k => set(FX.find(f => f.k === k).add)) : null, addT:'Acrescentar efeito' }), ...rows];
+}
+/* Preenchimento + da forma: uma linha. Sólido = a linha de cor (hex e % na própria linha); outros estilos = amostra do estilo + nome.
+   Os detalhes (estilo, cores, ângulo, movimento, granulado, imagem/vídeo) ficam na janelinha. Olho = sem preenchimento sem tirar a linha;
+   "−" tira (L.fillGone); "+" devolve com 100% */
+function shapeFillSec(L) {
+  const used = o => { const n = { solid:1, linear:3, spot:2, mesh:4 }[o.mode] || 0; return Array.from({ length:n }, (_, i) => 'c' + (i + 1)); };
+  const voidAll = (o, a) => { if (a === 0 && (o.mode === 'image' || o.mode === 'video')) o.mode = 'solid'; for (const k of used(o)) o[k] = withA(o[k] || S.brand.colors[2], a); };
+  const gone = fillVoid(L) && L.fillGone;
+  if (gone) return [listHead('Preenchimento', { add:() => optSet(L, o => { delete o.fillGone; voidAll(o, 1); }) })];
+  const key = 'fill-' + L.id;
+  const det = () => { const s = h('section', { class:'sec pop-sec' }); fillProps(L, s); return [...s.children]; };
+  const vis = { on:!fillVoid(L), toggle:() => optSet(L, o => voidAll(o, fillVoid(o) ? 1 : 0)) }, rm = () => optSet(L, o => { voidAll(o, 0); o.fillGone = true; });
+  let row;
+  if (L.mode === 'solid') row = colorF(L, 'c1', 'Preenchimento', { vis, remove:rm, more:detBtn(key, 'Preenchimento', det) });
+  else {
+    const cs = used(L).map(k => L[k]), media = L.mode === 'image' || L.mode === 'video';
+    const sw = h('button', { type:'button', class:'fill-sw', title:'Detalhes do preenchimento', 'aria-label':'Detalhes do preenchimento',
+      style:media ? '' : `--g:linear-gradient(135deg,${cs.join(',')})` }, media ? [h('i', { html:ICONS[L.mode === 'video' ? 'ar_r' : 'mk_fit'] })] : []);
+    const box = h('div', { class:'prop-box fx-box', 'data-pop':key }, [sw, h('button', { type:'button', class:'fx-nm' }, [h('span', { text:FILL_MODES[L.mode] || L.mode })])]);
+    box._popBuild = det; box.querySelectorAll('button').forEach(b => b.addEventListener('click', () => openPop(box, 'Preenchimento', det, { key })));
+    row = field('Preenchimento', propRow({ box, label:'preenchimento', on:vis.on, toggle:vis.toggle, remove:rm }));
+  }
+  row.classList.add('cont');
+  return [listHead('Preenchimento'), row];
+}
+// Fundo atrás do texto como propriedade (+ acrescenta; linha = cor + ajustes + olho + "−"; espaço, cantos e caixa na janelinha)
+function textBgFields(L) {
+  const on = !!textBg(L), T = 'Fundo atrás do texto', has = on || !!L.tbgOff;
+  if (!has) return [listHead(T, { add:() => optSet(L, o => { o.tbg = true; delete o.tbgOff; if (!o.hl) o.hl = S.brand.colors[2]; }) })];
+  if (!L.hlBox) L.hlBox = 'line';
+  const sz = () => L.size || 1;
+  const em = (k, label, min, max, def) => rangeF(L, k, label, min, max, .005, v => Math.round((v ?? def) * sz()) + 'px', { scale:sz(), dec:0, get:() => L[k] ?? def, layout:true });
+  const det = () => [em('hlPadX', 'Espaço ↔', 0, 1.5, .18), em('hlPadY', 'Espaço ↕', -.3, 1, 0), em('hlRad', 'Cantos', 0, 1, 0), segF(L, 'hlBox', 'Caixa', TBG_OPTS)];
+  if (!L.hl) L.hl = S.brand.colors[2];
+  const row = colorF(L, 'hl', 'Cor do fundo', { vis:{ on, toggle:() => optSet(L, o => { if (textBg(o)) { o.tbg = false; o.tbgOff = true; } else { o.tbg = true; delete o.tbgOff; } }) },
+    remove:() => optSet(L, o => { o.tbg = false; delete o.tbgOff; }), more:detBtn('tbg-' + L.id, T, det) });
+  row.classList.add('cont');
+  return [listHead(T), row];
+}
+/* Exportar + (Figma: cada linha = um formato): as linhas ficam na sessão (RT.expRows, não vão para o arquivo); o botão exporta a seleção
+   (sem seleção, o quadro) em cada formato das linhas, no tamanho original */
+const EXP_FMTS = [['png', 'PNG'], ['svg', 'SVG']];
+function exportSec() {
+  RT.expRows ||= [];
+  const rows = RT.expRows, redo = () => renderProps();
+  const add = () => { rows.push(rows.length && rows[rows.length - 1] === 'png' ? 'svg' : 'png'); redo(); };
+  const out = [listHead('Exportar', { add, addT:'Acrescentar um formato de exportação' })];
+  rows.forEach((f, i) => {
+    const b = h('button', { type:'button', class:'blendbtn', 'aria-haspopup':'menu', title:'Formato' }, [h('span', { text:(EXP_FMTS.find(x => x[0] === f) || EXP_FMTS[0])[1] }), h('i', { html:NF_CHEV })]);
+    b.addEventListener('click', () => nfMenu(b, EXP_FMTS, f, v => { rows[i] = v; redo(); }));
+    const r = propRow({ box:h('div', { class:'prop-box exp-box' }, [b]), label:'esta exportação', remove:() => { rows.splice(i, 1); redo(); } });
+    out.push(field('Formato', r)); out[out.length - 1].classList.add('cont');
+  });
+  if (rows.length) {
+    const ls = pickedLayers(), nm = ls.length === 1 ? ls[0].name : ls.length ? `${ls.length} elementos` : 'o quadro';
+    out.push(h('div', { class:'row' }, [h('button', { class:'btn small', text:`Exportar ${nm}`, title:'Cada linha sai num arquivo, no tamanho original', onclick:async () => {
+      for (const f of [...new Set(rows)]) { if (f === 'svg') await exportSvg(); else await saveFramePng(); }
+    } })]));
+  }
+  return out;
+}
+// Layout (W | H, como no Figma): o tamanho de cada tipo, numa seção logo depois de Posição
+function sizeFieldsOf(L) {
+  const px = v => Math.round(v) + 'px', k = L.kind;
+  if (L.type === 'text') {
+    if (L.capt) return [pxF(L, 'maxW', 'Largura máx.', .1, 1, { layout:true })];
+    // largura: abraça o texto (quebra na largura máx.) ou fixa (a caixa tem essa largura; alça lateral no palco); o modo fica no menu do campo. Em curva não quebra
+    return tpKind(L) ? [] : [pxF(L, 'maxW', L.fixW ? 'Largura' : 'Largura máx.', .1, 1, { layout:true, menu:{ items:[['hug', 'Abraçar', 'hug_w'], ['fix', 'Largura fixa', 'fix_w']], cur:() => L.fixW ? 'fix' : 'hug',
+      pick:v => { if ((v === 'fix') === !!L.fixW) return; pushUndo(); for (const o of peersOf(L)) o.fixW = v === 'fix' || undefined; RT.layout.clear(); changed({ props:true }); } } })];
+  }
+  if (L.type === 'cta') return [rangeF(L, 'padX', 'Folga lateral', 10, 160, 1, px, { ico:'nf_gap' }), rangeF(L, 'padY', 'Folga vertical', 6, 80, 1, px, { ico:'nf_v' })];
+  if (L.type === 'logo') return [sizeF(L, 'size', 'Tamanho', .04, .95, .005)];
+  if (L.type === 'shape') return [sizeF(L, 'size', k === 'line' || k === 'custom' ? 'Tamanho' : 'Largura', 0, 1.6, .005, { low:SZ_MIN, cap:SZ_MAX }),
+    resizable(L) ? sizeF(L, 'mh', 'Altura', 0, 2.6, .005, { low:SZ_MIN, cap:MH_MAX }) : null].filter(Boolean);
+  if (L.type === 'image') {
+    L.mask = L.mask || 'fit'; if (L.zoom == null) L.zoom = 1; if (L.ix == null) L.ix = 0; if (L.iy == null) L.iy = 0;
+    if (masked(L) && L.mh == null) { const G = blockGeom(L); if (G) L.mh = G.h / SU; }
+    return [sizeF(L, 'size', masked(L) ? 'Largura' : 'Tamanho', 0, 1.6, .005, { low:SZ_MIN, cap:SZ_MAX }),
+      masked(L) ? sizeF(L, 'mh', 'Altura', 0, 2.6, .005, { low:SZ_MIN, cap:MH_MAX }) : null].filter(Boolean);
+  }
+  return [];
+}
+function layoutSec() {
+  const L = selL(); if (!L || wholeGroup() || L.type === 'bg' || NOBOX(L)) return null;
+  if (peersAny(L).filter(o => !tagAlong(o)).some(o => o.type !== L.type)) return null;
+  const fs = sizeFieldsOf(L); if (!fs.length) return null;
+  return h('section', { class:'sec' }, [fixH('Layout'), ...fs]);
+}
 function styleProps(L) {
   const sec = h('section', { class:'sec' }), put = (...xs) => sec.append(...xs.filter(Boolean));
   const px = v => Math.round(v) + 'px';
-  // tipos misturados: só o que todos têm em comum (opacidade, mesclagem, sombra e desfoque; a posição fica em Posição, no topo)
+  // tipos misturados: só o que todos têm em comum (opacidade, mesclagem, efeitos; a posição fica em Posição, no topo)
   if (peersAny(L).filter(o => !tagAlong(o)).some(o => o.type !== L.type)) {
     const tw = tpPair(); // texto + forma: o texto passa a seguir o contorno da forma
     if (tw) put(h('h3', { text:'Texto na forma' }), h('div', { class:'row' }, [h('button', { class:'btn small', text:'Pôr o texto na forma', title:'O texto segue o contorno da forma (como o texto no caminho do Illustrator)', onclick:() => { tpAttach(tw.t, tw.s); select(tw.t.id); } })]),
       h('p', { class:'hint', text:'O texto passa a correr pelo contorno da forma e acompanha quando ela muda.' }));
     put(...videoSelFields());
-    put(h('h3', { text:'Aparência' }),
+    put(fixH('Aparência'),
       h('p', { class:'hint', text:`${peersAny(L).length} elementos de tipos diferentes: aqui ficam só as opções em comum. Escolha um tipo só para ver as demais.` }),
-      ...lookFields(L));
+      ...apFields(L), ...effectRows(L), ...exportSec());
     return sec;
   }
-  // em todos os tipos: Posição (alignBar, no topo) → conteúdo → Aparência (opacidade, mesclagem, sombra, desfoque) → Contorno
-  const look = () => [h('h3', { text:'Aparência' }), ...lookFields(L)];
+  // ordem do Figma (Posição e Layout ficam em cima, em renderProps): Aparência → Tipografia → conteúdo do tipo → Preenchimento → Contorno → Efeitos → Exportar
+  const ap = c => [fixH('Aparência'), ...apFields(L, c)];
+  const tail = () => [...strokeSecs(L), ...effectRows(L), ...exportSec()];
+  const fill1 = (k, label) => { const f = colorF(L, k, label); f.classList.add('cont'); return [listHead('Preenchimento'), f]; };
+  const typo = (cap) => [fixH('Tipografia'),
+    cap ? null : richF(L, 'Texto (Enter quebra a linha)'),
+    fontGroup(L, { props:true }),
+    rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true, presets:FONT_SIZES, ico:'nf_fs', low:8 }),
+    rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
+    rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
+    segF(L, 'align', 'Alinhamento', ALIGN_OPTS),
+    togF(L, 'Letras', CASE_OPTS)];
   if (L.type === 'text' && L.capt) { // legenda (js/legenda.js): estilo, texto para revisar e a tipografia do texto
-    put(...capSecs(L), h('h3', { text:'Texto' }),
-      fontGroup(L, { props:true }),
-      colorF(L, 'color', 'Cor'),
-      rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true }),
-      rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
-      rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
-      pxF(L, 'maxW', 'Largura máx.', .1, 1, { layout:true }),
-      segF(L, 'align', 'Alinhamento', ALIGN_OPTS),
-      togF(L, 'Letras', CASE_OPTS),
-      ...textBgFields(L),
-      ...strokeSecs(L),
-      ...look());
+    put(...capSecs(L), ...ap(), ...typo(true), ...fill1('color', 'Cor'), ...textBgFields(L), ...tail());
   } else if (L.type === 'text') {
-    put(h('h3', { text:'Texto' }), richF(L, 'Texto (Enter quebra a linha)'),
-      fontGroup(L, { props:true }),
-      colorF(L, 'color', 'Cor'),
-      lineF(L),
-      rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true }),
-      rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
-      rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
-      // largura: abraça o texto (quebra na largura máx.) ou fixa (a caixa tem essa largura; alça lateral no palco). Em curva não quebra
-      tpKind(L) ? null : modeF('Caixa', [['hug', 'Abraçar', 'A caixa fica do tamanho da linha mais longa', 'hug_w'], ['fix', 'Largura fixa', 'A caixa tem a largura abaixo (ou puxe a lateral no palco)', 'fix_w']], L.fixW ? 'fix' : 'hug',
-        v => { pushUndo(); for (const o of peersOf(L)) o.fixW = v === 'fix' || undefined; RT.layout.clear(); changed({ props:true }); }),
-      tpKind(L) ? null : pxF(L, 'maxW', L.fixW ? 'Largura' : 'Largura máx.', .1, 1, { layout:true }),
-      segF(L, 'align', 'Alinhamento', ALIGN_OPTS),
-      togF(L, 'Letras', CASE_OPTS),
-      rotF(L),
-      ...textBgFields(L),
+    put(...ap(), ...typo(false), lineF(L),
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Converter em vetor', title:'Texto em curvas (Ctrl+Shift+O). Vira forma Vetor: não edita mais as letras, e a animação passa a ser do bloco', onclick:() => textToVector(peersOf(L).filter(o => o.type === 'text')) })]),
+      ...fill1('color', 'Cor'),
+      ...textBgFields(L),
       ...tpFields(L),
-      ...strokeSecs(L),
-      ...look());
+      ...tail());
   } else if (L.type === 'cta') {
     // as mesmas opções de tipografia do texto que fazem sentido numa linha só (pedido do usuário: "entre letras" no botão também)
-    put(h('h3', { text:'Texto' }), textF(L, 'text', 'Texto do botão'), fontGroup(L),
-      rangeF(L, 'size', 'Tamanho', 16, 120, 1, px),
-      colorF(L, 'color', 'Cor do texto'),
+    put(...ap([rangeF(L, 'radius', 'Arredondado', 0, 999, 1, v => v >= 999 ? 'pílula' : px(v), { ico:'nf_rad' })]),
+      fixH('Tipografia'), textF(L, 'text', 'Texto do botão'), fontGroup(L),
+      rangeF(L, 'size', 'Tamanho', 16, 120, 1, px, { presets:FONT_SIZES, ico:'nf_fs', low:8 }),
       rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => (v || 0).toFixed(3) + 'em', { get:() => L.ls || 0 }),
       togF(L, 'Letras', CASE_OPTS),
-      h('h3', { text:'Botão' }),
-      colorF(L, 'bg', 'Fundo'),
-      rangeF(L, 'radius', 'Arredondado', 0, 999, 1, v => v >= 999 ? 'pílula' : px(v)),
-      rangeF(L, 'padX', 'Folga lateral', 10, 160, 1, px), rangeF(L, 'padY', 'Folga vertical', 6, 80, 1, px),
+      colorF(L, 'color', 'Cor do texto'),
+      ...fill1('bg', 'Fundo'),
       lineF(L),
-      ...strokeSecs(L),
-      ...look());
+      ...tail());
   } else if (L.type === 'logo') {
     const drawn = L.in === 'draw' || L.out === 'draw' || L.in === 'assemble' || L.out === 'assemble';
     if (!L.tintColor) L.tintColor = S.brand.colors[1];
-    put(
-      h('h3', { text:L.svg ? 'SVG' : 'Logo' }),
+    put(...ap(),
+      fixH(L.svg ? 'SVG' : 'Logo'),
       h('p', { class:'hint', text:L.svg ? 'Este SVG é só desta camada. Tem as mesmas animações do logo.' : 'O arquivo do logo é trocado em Marca, na coluna da esquerda.' }),
-      sizeF(L, 'size', 'Tamanho', .04, .95, .005),
       checkF(L, 'tint', L.svg ? 'Pintar o SVG de uma cor só' : 'Pintar o logo de uma cor só'),
       L.tint ? colorF(L, 'tintColor', 'Cor') : null,
       L.tint ? h('p', { class:'hint', text:'Troca todas as cores do logo por esta. Serve para logo preto, branco ou de outra marca.' }) : null,
@@ -12199,82 +12913,47 @@ function styleProps(L) {
       drawn ? rangeF(L, 'drawWidth', 'Espessura do traço', 1, 16, .5, v => v + 'px') : null,
       drawn && !L.drawOrig ? colorF(L, 'drawColor', 'Cor do traço') : null,
       lineF(L),
-      ...strokeSecs(L),
-      ...look());
+      ...tail());
   } else if (L.type === 'shape') {
     const pct = v => Math.round(v * 100) + '%', k = L.kind;
     if (L.fill == null) L.fill = true;
-    if (L.strokeDash == null) L.strokeDash = 'solid';
-    if (L.strokeGap == null) L.strokeGap = 1;
-    if (L.strokeCap == null) L.strokeCap = 'round';
-    if (L.strokeJoin == null) L.strokeJoin = 'round';
     // arquivo antigo / caminho aberto com fill:false: o preenchimento vira "sem cor" e o contorno que era obrigatório fica ligado
     if (L.fill === false && k !== 'line') { L.fill = true; L.mode = 'solid'; L.c1 = withA(L.c1 || S.brand.colors[2], 0); L.stroke = true; }
-    put(h('h3', { text:'Forma' }),
+    put(...ap(k === 'rect' ? cornersF(L, px) : []),
+      fixH('Forma'),
       segF(L, 'kind', 'Tipo', icoOpts(SHAPE_KINDS, 'sh_')),
       k === 'custom' ? textF(L, 'd', 'Caminho SVG (atributo d do <path>)', true) : null,
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Editar pontos', title:k === 'custom' ? null : 'A forma vira vetor', onclick:() => vecEdit(L) }), h('button', { class:'btn small', text:'Desenhar com a caneta', onclick:() => penToolStart() })]),
       k === 'custom' ? h('p', { class:'hint', text:'Desenhe com a caneta (P) ou cole o d de qualquer path (Figma, Illustrator, Inkscape). Clique duplo no palco edita os pontos. Ele é vetorial: escala sem perder qualidade e "Desenhar traço" percorre o contorno.' }) : null,
-      sizeF(L, 'size', k === 'line' || k === 'custom' ? 'Tamanho' : 'Largura', 0, 1.6, .005, { low:SZ_MIN, cap:SZ_MAX }),
-      resizable(L) ? sizeF(L, 'mh', 'Altura', 0, 2.6, .005, { low:SZ_MIN, cap:MH_MAX }) : null,
-      ...(k === 'rect' ? cornersF(L, px) : []),
       k === 'polygon' || k === 'star' ? rangeF(L, 'points', 'Pontas', 3, 12, 1, v => String(Math.round(v))) : null,
       k === 'star' ? rangeF(L, 'inner', 'Profundidade', .1, .95, .01, pct) : null,
-      rotF(L),
       ...waveFields(L, true),
-      k !== 'line' ? h('h3', { text:'Preenchimento' }) : null);
-    if (k !== 'line') fillProps(L, sec);
-    put(...strokeSecs(L),
+      ...(k !== 'line' ? shapeFillSec(L) : []),
+      ...strokeSecs(L),
       L.in === 'draw' && !strokeOn(L) ? h('p', { class:'hint', text:'"Desenhar traço" usa a cor 2 como traço de apoio. Ative Contorno para mantê-lo.' }) : null,
-      ...look(),
+      ...effectRows(L), ...exportSec(),
       lineF(L));
   } else if (L.type === 'image') {
     const pct = v => Math.round(v * 100) + '%';
-    L.mask = L.mask || 'fit'; if (L.zoom == null) L.zoom = 1; if (L.ix == null) L.ix = 0; if (L.iy == null) L.iy = 0;
-    if (masked(L) && L.mh == null) { const G = blockGeom(L); if (G) L.mh = G.h / SU; }
-    const maskSeg = h('div', { class:'segs ico', role:'group', 'aria-label':'Máscara' }, [['fit', 'Sem máscara: a forma da própria imagem'], ['rect', 'Retângulo'], ['circle', 'Círculo']].map(([v, t]) =>
-      h('button', { type:'button', 'aria-pressed':String(L.mask === v), html:ICONS['mk_' + v], title:t, 'aria-label':t, onclick:() => {
-        pushUndo();
-        if (v !== 'fit' && L.mh == null) { const G = blockGeom(L); L.mh = G ? G.h / SU : L.size * .75; }
-        L.mask = v; changed({ props:true });
-      } })));
-    put(
-      h('h3', { text:L.video ? 'Vídeo' : 'Imagem' }),
+    const maskSeg = maskSegF(L);
+    put(...ap(L.mask !== 'circle' ? cornersF(L, px) : []),
+      fixH(L.video ? 'Vídeo' : 'Imagem'),
       ...mediaFields(L),
       adjRange(L, 'aExp', 'Exposição'),
       adjRange(L, 'aCon', 'Contraste'),
-      h('h3', { text:'Máscara' }),
+      fixH('Máscara'),
       field('Forma', maskSeg, null),
-      sizeF(L, 'size', masked(L) ? 'Largura' : 'Tamanho', 0, 1.6, .005, { low:SZ_MIN, cap:SZ_MAX }),
-      masked(L) ? sizeF(L, 'mh', 'Altura', 0, 2.6, .005, { low:SZ_MIN, cap:MH_MAX }) : null,
-      ...(L.mask !== 'circle' ? cornersF(L, px) : []),
-      // a imagem dentro da máscara (antes uma seção à parte)
+      // a imagem dentro da máscara
       rangeF(L, 'zoom', 'Zoom', .2, 5, .01, v => v.toFixed(2) + '×'),
+      rangeF(L, 'irot', 'Girar imagem', -180, 180, 1, v => Math.round(v || 0) + '°'),
       rangeF(L, 'ix', 'Imagem ↔', -1, 1, .005, pct),
       rangeF(L, 'iy', 'Imagem ↕', -1, 1, .005, pct),
-      rangeF(L, 'irot', 'Girar imagem', -180, 180, 1, v => Math.round(v || 0) + '°'),
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Preencher a máscara', onclick:() => { pushUndo(); setFrame(L, { zoom:1, ix:0, iy:0 }); delete L.irot; changed({ props:true }); renderProps(); } })]),
       h('p', { class:'hint', text:'A imagem nunca distorce. No palco: a alça do canto aumenta tudo, as das laterais mudam a máscara, a roda do mouse dá zoom na imagem, Alt + arrastar move a imagem dentro e as bolinhas nos cantos arredondam (Alt = só um canto).' }),
-      ...strokeSecs(L),
-      ...look(),
+      ...tail(),
       lineF(L));
   }
   return sec;
-}
-// fundo atrás do texto (textBg): liga/desliga e, ligado, cor, espaços, cantos e uma caixa por linha ou uma só para o bloco.
-// Espaços e cantos ficam em em (escalam com a letra); o campo mostra e recebe px
-function textBgFields(L) {
-  const on = !!textBg(L), id = fid(L, 'tbg'), sz = () => L.size || 1;
-  const inp = h('input', { type:'checkbox', id, checked:on });
-  inp.addEventListener('change', () => { pushUndo(); for (const o of peersOf(L)) { o.tbg = inp.checked; if (inp.checked && !o.hl) o.hl = S.brand.colors[2]; } RT.layout.clear(); changed({ props:true }); });
-  if (on && !L.hlBox) L.hlBox = 'line';
-  const em = (k, label, min, max, def) => rangeF(L, k, label, min, max, .005, v => Math.round((v ?? def) * sz()) + 'px', { scale:sz(), dec:0, get:() => L[k] ?? def, layout:true });
-  return [h('label', { class:'check', for:id, title:'Caixa colorida atrás do texto, com espaço e cantos (o Destaque usa, com o preset Marca-texto)' }, [inp, 'Fundo atrás do texto']),
-    on ? colorF(L, 'hl', 'Cor do fundo') : null,
-    on ? em('hlPadX', 'Espaço ↔', 0, 1.5, .18) : null,
-    on ? em('hlPadY', 'Espaço ↕', -.3, 1, 0) : null,
-    on ? em('hlRad', 'Cantos', 0, 1, 0) : null,
-    on ? segF(L, 'hlBox', 'Caixa', TBG_OPTS) : null].filter(Boolean);
 }
 // Texto em curva (seção "Caminho" do texto): o tipo do caminho e, conforme ele, raio, posição, lado, curvatura, onda ou a forma seguida
 const TP_TIPS = { '':'O texto em linha reta', circle:'Em volta de um círculo (selo, carimbo, logo redondo)', arc:'Uma curva suave, para cima ou para baixo',
@@ -12347,30 +13026,22 @@ function bgProps(L) {
   sec.append(...blendF(L));
   return sec;
 }
-// Contorno de qualquer elemento (texto, logo, botão, imagem/vídeo, forma), como no Figma: junto com a cor, não no lugar dela.
-// Linha só tem traço (sempre ligado); o resto liga e desliga em "Contorno". Tirar a cor = botão "sem cor" do campo de cor.
-function strokeSecs(L) {
-  const t = L.type, shape = t === 'shape', line = shape && L.kind === 'line';
-  if (L.strokeW == null) L.strokeW = shape ? 8 : 4;
-  if (!L.strokeColor) L.strokeColor = shape ? S.brand.colors[1] : '#ffffff';
-  if (L.strokeDash == null) L.strokeDash = 'solid';
-  if (L.strokeGap == null) L.strokeGap = 1;
-  if (L.strokeCap == null) L.strokeCap = 'round';
-  if (L.strokeJoin == null) L.strokeJoin = 'round';
-  if (L.strokePos == null || (t === 'text' && L.strokePos === 'inside')) L.strokePos = 'center';
-  const on = strokeOn(L), dashes = t !== 'text' && t !== 'logo', round = shape && L.kind === 'ellipse' || t === 'image' && L.mask === 'circle';
-  const pos = [['inside', 'Dentro', 'sp_inside'], ['center', 'No centro', 'sp_center'], ['outside', 'Fora', 'sp_outside']].filter(o => t !== 'text' || o[0] !== 'inside');
-  return [h('h3', { text:line ? 'Traço' : 'Contorno' }),
-    line ? null : checkF(L, 'stroke', 'Contorno'),
-    on ? rangeF(L, 'strokeW', 'Espessura', 1, 80, .5, v => v + 'px') : null,
-    on ? colorF(L, 'strokeColor', 'Cor do traço') : null,
-    on && !line && t !== 'logo' ? segF(L, 'strokePos', 'Posição', pos) : null,
-    on && dashes ? segF(L, 'strokeDash', 'Estilo', icoOpts(STROKE_STYLES, 'ds_')) : null,
-    on && dashes && L.strokeDash !== 'solid' ? rangeF(L, 'strokeGap', 'Espaçamento', .4, 3, .05, v => v.toFixed(2) + '×') : null,
-    on && dashes && L.strokeDash !== 'dot' ? segF(L, 'strokeCap', 'Pontas', [['round', 'Redonda', 'cap_round'], ['butt', 'Reta', 'cap_butt'], ['square', 'Quadrada', 'cap_square']]) : null,
-    on && !line && !round && t !== 'logo' ? segF(L, 'strokeJoin', 'Cantos', [['round', 'Redondo', 'join_round'], ['miter', 'Vivo', 'join_miter'], ['bevel', 'Chanfro', 'join_bevel']]) : null,
-    on && canOutline(L) ? h('div', { class:'row' }, [h('button', { class:'btn small', text:'Contorno em vetor', title:'O contorno vira uma forma Vetor própria (Ctrl+Shift+O), como Outline stroke no Figma', onclick:() => outlineStroke(L) })]) : null];
+/* Seção opcional (Contorno, Sombra, Desfoque, Desfocar atrás, Fundo atrás do texto): cabeçalho com a seta de sempre (abre e fecha) e,
+   dentro, a caixa que liga/desliga; ligada, os campos aparecem embaixo dela. Sem escolha guardada, começa aberta se estiver em uso e
+   fechada se não (data-def, lido em foldHead). Pedido do usuário: nunca "+" para abrir/fechar, sempre a seta. Ligar e desligar entram
+   no desfazer (optSet). fixH = seção que é o próprio elemento (Texto, Forma…): um h3 comum, abre e fecha como os outros */
+const fixH = (text, o = {}) => h('h3', { text, ...o });
+// fn = o que a caixa faz ao ser marcada/desmarcada (on = estado de agora). Devolve o cabeçalho + a caixa (DocumentFragment)
+function optHead(title, on, fn) {
+  const id = 'opt-' + (++optHead.n);
+  const inp = h('input', { type:'checkbox', id, checked:on, onchange:fn });
+  const f = document.createDocumentFragment();
+  f.append(h('h3', { 'data-def':on ? '1' : '0', 'data-sum':on ? '' : 'desligado', text:title }), h('label', { class:'check', for:id }, [inp, title]));
+  return f;
 }
+optHead.n = 0;
+// liga/desliga uma seção opcional em toda a seleção (peers = peersOf para o que é do tipo, peersAny para o que vale em todo tipo)
+function optSet(L, fn, peers = peersOf) { pushUndo(); for (const o of peers(L)) fn(o); RT.layout.clear(); changed({ layers:true, props:true }); needs = true; }
 // cor animada: o mesmo motor do fundo, também usado nas formas
 // Estilo da forma com "Sem preenchimento" junto de Sólido etc.: é só todas as cores em uso com opacidade 0 (o rgb fica guardado)
 function fillStyleF(L) {
@@ -12444,7 +13115,7 @@ const FOLD_SUM = {
 };
 // seta à direita em todos os níveis (pedido do usuário: o + / − confundia): para baixo = fechada, gira para cima ao abrir (.shut no CSS)
 const FOLD_CHEV = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.25 8 9.75l3.5-3.5"/></svg>';
-const foldOpen = k => FOLD[k] ?? !FOLD_SHUT.has(k);
+const foldOpen = (k, def) => FOLD[k] ?? (def != null ? def === '1' : !FOLD_SHUT.has(k));
 function foldSave(k, open) { FOLD[k] = open; try { localStorage.setItem('mola-fold', JSON.stringify(FOLD)); } catch (e) {} }
 // o título sem o que vem junto (Ver, small); "Entrada do grupo" divide o estado com "Entrada"
 function foldName(el) { return [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim().replace(/ do grupo$/, ''); }
@@ -12475,7 +13146,7 @@ function foldHead(el, key) {
     // o cabeçalho inteiro abre e fecha; os botões dele (Ver) continuam sendo deles
     el.addEventListener('click', e => { const c = e.target.closest('button, input, select, a, [contenteditable]'); if (c && c !== el._btn) return; foldToggle(el); });
   }
-  const open = foldOpen(key), name = foldName(el), s = open ? '' : foldSum(el) || '';
+  const open = foldOpen(key, el.dataset.def), name = foldName(el), s = open ? '' : foldSum(el) || '';
   el.classList.toggle('shut', !open); el.classList.toggle('has-sum', !!s);
   el._btn.setAttribute('aria-expanded', String(open)); el._btn.setAttribute('aria-label', (open ? 'Fechar ' : 'Abrir ') + name); el._btn.title = open ? 'Fechar' : 'Abrir';
   if (el._sum.textContent !== s) el._sum.textContent = s;
@@ -12487,6 +13158,7 @@ function foldSec(sec) {
   const end = () => { if (box) (last || box).classList.add('in-sub-end'); box = last = null; };
   for (const el of sec.children) {
     el.classList.remove('sub-open', 'in-sub', 'in-sub-end');
+    if (el.tagName === 'H3' && el.classList.contains('nofold')) { end(); top = null; shut1 = shut2 = tail = false; continue; } // seção de lista (+): não abre nem fecha
     if (el.tagName === 'H3') {
       end();
       if (top && el.classList.contains('sub') && !shut1 && foldOpen(panel + ':' + foldName(top) + '/' + foldName(el))) { el.classList.add('sub-open'); box = el; }
@@ -12505,14 +13177,60 @@ function foldSec(sec) {
   sec.classList.toggle('sec-shut', tail); // fechada no fim: menos espaço embaixo
 }
 const foldAll = root => root.querySelectorAll('section.sec').forEach(foldSec);
+/* A seção abre e fecha à vista (pedido do usuário: "pra dar pra ver o negócio abrindo e fechando", estava seco).
+   Fechar: os campos daquele título somem no lugar (dá para ver qual fechou) e só então o resto do painel sobe
+   deslizando do lugar antigo (FLIP: mede antes, aplica, anima a diferença). Abrir: o que está embaixo desce da mesma
+   forma e os campos entram aparecendo, em cascata. Tudo pela WAAPI, nada fica gravado nem no estado nem no estilo.
+   Animar a altura da `.sec` não serve: todos os títulos do painel vivem na mesma seção, então o que está abaixo
+   do título que fechou é irmão dele e pularia do mesmo jeito. */
+const FOLD_MS = 160, FOLD_OUT = 110, FOLD_STEP = 7, FOLD_EASE = 'cubic-bezier(.25,.7,.35,1)';
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+// os campos daquele título até o próximo (o que abriu ou fechou)
+function foldKids(head) {
+  const sub = head.classList.contains('sub'), out = [];
+  for (let n = head.nextElementSibling; n && !(n.tagName === 'H3' && (sub || !n.classList.contains('sub'))); n = n.nextElementSibling)
+    if (!n.hidden && !n.classList.contains('folded')) out.push(n);
+  return out;
+}
+// aplica a mudança e faz quem andou (o resto do painel) vir deslizando de onde estava
+function foldSlide(sec, aplica) {
+  if (!sec || !sec.animate) { aplica(); return; }
+  const pos = [], ver = el => { if (!el.hidden && !el.classList.contains('folded')) pos.push([el, el.getBoundingClientRect().top]); };
+  for (const el of sec.children) ver(el);
+  for (let n = sec.nextElementSibling; n; n = n.nextElementSibling) ver(n); // as seções de baixo também andam
+  aplica();
+  for (const [el, y0] of pos) {
+    if (el.hidden || el.classList.contains('folded')) continue;
+    const d = y0 - el.getBoundingClientRect().top;
+    if (Math.abs(d) > 1) el.animate([{ transform:`translateY(${d}px)` }, { transform:'none' }], { duration:FOLD_MS, easing:FOLD_EASE });
+  }
+}
 function foldToggle(el) {
-  const open = !foldOpen(el.dataset.fold); foldSave(el.dataset.fold, open);
-  const p = el.closest('#props, .left'); if (p) foldAll(p);
-  if (!open) return;
+  if (el._foldJob) el._foldJob(); // clicou de novo no meio do fecho: resolve o anterior na hora
+  const open = el.classList.contains('shut');
+  const sec = el.closest('section.sec'), p = el.closest('#props, .left');
+  const aplica = () => { foldSave(el.dataset.fold, open); if (p) foldAll(p); };
   // abriu: rola a coluna até o fim do que apareceu (senão, perto do fim da tela, nem dava para ver que abriu), sem tirar o título de vista
-  const sub = el.classList.contains('sub'); let last = el;
-  for (let n = el.nextElementSibling; n && !(n.tagName === 'H3' && (sub || !n.classList.contains('sub'))); n = n.nextElementSibling) if (!n.hidden && !n.classList.contains('folded')) last = n;
-  revealBelow(el, last);
+  const rolar = () => { if (open) revealBelow(el, foldKids(el).pop() || el); };
+  if (!sec || !sec.animate || reducedMotion()) { aplica(); rolar(); return; }
+  if (open) { // abrir: o de baixo desce deslizando e os campos entram em cima disso
+    foldSlide(sec, aplica);
+    foldKids(el).forEach((k, i) => k.animate([{ opacity:0 }, { opacity:1 }],
+      { duration:FOLD_MS, delay:Math.min(i * FOLD_STEP, 40), easing:'ease-out', fill:'backwards' }));
+    rolar();
+    return;
+  }
+  // fechar: primeiro os campos somem no lugar (nada pula), depois o resto sobe deslizando
+  const kids = foldKids(el);
+  const saindo = kids.map((k, i) => k.animate([{ opacity:1 }, { opacity:0, transform:'translateY(-6px)' }],
+    { duration:FOLD_OUT, delay:Math.min(i * FOLD_STEP, 40), easing:'ease-in', fill:'forwards' }));
+  const fim = () => { // só a primeira vez (o fim da animação ou um clique novo, o que vier antes)
+    if (el._foldJob !== fim) return; el._foldJob = null;
+    saindo.forEach(a => a.cancel()); foldSlide(sec, aplica);
+  };
+  if (!saindo.length) { aplica(); return; }
+  el._foldJob = fim;
+  Promise.all(saindo.map(a => a.finished)).then(fim, () => {});
 }
 // rola o painel (coluna, janela) que contém `head` até `last` aparecer inteiro, sem passar o título do topo; usado por toda seção/categoria que abre
 function revealBelow(head, last = head) {
@@ -12647,7 +13365,11 @@ $('#fps').addEventListener('change', e => { pushUndo(); S.fps = +e.target.value;
 ['mOn', 'mT', 'mR', 'mB', 'mL'].forEach(id => $('#' + id).addEventListener('change', setMargin));
 {
   const btn = $('#mBtn'), pop = $('#mPop');
-  const show = on => { pop.hidden = !on; btn.setAttribute('aria-expanded', String(on)); };
+  const show = on => {
+    if (on) { pop.classList.remove('pop-out'); pop._popOut = false; pop.hidden = false; popGrow(pop, btn); }
+    else if (!pop.hidden) popGone(pop, () => { pop.hidden = true; pop.classList.remove('pop-out'); pop._popOut = false; });
+    btn.setAttribute('aria-expanded', String(on));
+  };
   btn.onclick = () => show(pop.hidden);
   addEventListener('pointerdown', e => { if (!pop.hidden && !e.target.closest('.mwrap')) show(false); });
   addEventListener('keydown', e => { if (e.key === 'Escape') show(false); });
@@ -12834,7 +13556,7 @@ document.addEventListener('keydown', e => {
   if (!$('#keys').hidden) { if (e.key === 'Escape' || e.key === '?') { e.preventDefault(); showKeys(false); } return; }
   if (mod && !e.altKey && k === 's') { e.preventDefault(); if (e.shiftKey) saveAsCopy(); else flushSave().then(() => toast('Tudo salvo. O Mola salva sozinho a cada mudança.')); return; }
   if (e.key === 'Escape') {
-    if (document.querySelector('.ctx')) { closeMenu(); return; }
+    if (document.querySelector('.ctx:not(.pop-out)')) { closeMenu(); return; }
     if (openPicker) { closePicker(); return; }
     if (typing) { if (tag === 'textarea' || e.target.isContentEditable) e.target.blur(); return; } // Esc sai do texto
     if (overlayOpen() || !$('#mPop').hidden || RT.drag || RT.marq) return; // cada janela fecha sozinha
@@ -13037,19 +13759,29 @@ function addLayer(L, opts = {}) {
   }
   return L;
 }
+// Adicionar em grupos (pedido do usuário: só layout, nada novo): os mesmos itens separados por tipo, cada um com o glifo de ADD_KINDS[].gl.
+// Item que não estiver em nenhum grupo vai para o fim do último
+const ADD_GROUPS = [['Texto', ['title', 'sub', 'kicker', 'big', 'hl', 'impact', 'price', 'caption']], ['Mídia', ['image', 'video', 'logo', 'svg', 'sound']],
+  ['Formas', ['shape', 'pen', 'box', 'cta']], ['Cena', ['camera', 'fx']]];
 function renderAdds() {
   const box = $('#adds'); box.innerHTML = '';
-  for (const k of ADD_KINDS) {
-    if (S.still && (k.id === 'camera' || k.id === 'fx' || k.id === 'sound')) continue; // imagem estática: câmera e transição não existem
-    box.append(h('button', { class:'add', title:'Adicionar ' + k.label.toLowerCase(), onclick:() => {
-    if (k.add) { k.add(); return; }
-    if (k.id === 'image') { $('#imgFile').click(); return; }
-    if (k.id === 'svg') { $('#svgFile').click(); return; }
-    addLayer(k.mk(S.brand, S.brand.fonts));
-  }, oncontextmenu:COMP_DEF[k.id] ? e => { e.preventDefault(); openComps(k.id); } : null }, [h('span', { class:'gl', html:k.gl }), h('span', { text:k.label }),
-    // componente: o lápis abre o padrão (como ele entra)
-    COMP_DEF[k.id] ? h('span', { class:'x ed', role:'button', tabindex:'0', title:`Editar o padrão de ${k.label}`, 'aria-label':`Editar o padrão de ${k.label}`, html:ICON_PEN,
-      onclick:e => { e.stopPropagation(); openComps(k.id); }, onkeydown:e => { if (e.key === 'Enter') { e.stopPropagation(); e.preventDefault(); openComps(k.id); } } }) : null]));
+  const ids = ADD_GROUPS.flatMap(g => g[1]), byId = new Map(ADD_KINDS.map(k => [k.id, k]));
+  const rest = ADD_KINDS.filter(k => !ids.includes(k.id)).map(k => k.id);
+  for (const [gname, gids] of ADD_GROUPS.map((g, i) => i === ADD_GROUPS.length - 1 ? [g[0], [...g[1], ...rest]] : g)) {
+    const ks = gids.map(id => byId.get(id)).filter(k => k && !(S.still && (k.id === 'camera' || k.id === 'fx' || k.id === 'sound'))); // imagem estática: câmera e transição não existem
+    if (!ks.length) continue;
+    box.append(h('div', { class:'adds-sub', text:gname }));
+    for (const k of ks) {
+      box.append(h('button', { class:'add', title:'Adicionar ' + k.label.toLowerCase(), onclick:() => {
+        if (k.add) { k.add(); return; }
+        if (k.id === 'image') { $('#imgFile').click(); return; }
+        if (k.id === 'svg') { $('#svgFile').click(); return; }
+        addLayer(k.mk(S.brand, S.brand.fonts));
+      }, oncontextmenu:COMP_DEF[k.id] ? e => { e.preventDefault(); openComps(k.id); } : null }, [h('span', { class:'gl', html:k.gl }), h('span', { text:k.label }),
+        // componente: o lápis abre o padrão (como ele entra)
+        COMP_DEF[k.id] ? h('span', { class:'x ed', role:'button', tabindex:'0', title:`Editar o padrão de ${k.label}`, 'aria-label':`Editar o padrão de ${k.label}`, html:ICON_PEN,
+          onclick:e => { e.stopPropagation(); openComps(k.id); }, onkeydown:e => { if (e.key === 'Enter') { e.stopPropagation(); e.preventDefault(); openComps(k.id); } } }) : null]));
+    }
   }
   // meus elementos: salvos pelo botão direito ("Salvar em Meus elementos"), valem para os arquivos do mesmo projeto (chave elements:<projeto>; Rascunhos usam elements)
   if (!MY_ELS.length) return;
@@ -13208,18 +13940,24 @@ drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) s
 // lista de sugestões própria (o datalist nativo é desenhado pelo navegador e não pega o CSS)
 const GF_LIST = [...new Set(GOOGLE_SUGGEST)];
 let gfOn = -1;
-function gfClose() { $('#gfonts').hidden = true; $('#gfont').setAttribute('aria-expanded', 'false'); gfOn = -1; }
+function gfClose(from) {
+  const pop = $('#gfonts');
+  if (!pop.hidden) popGone(pop, () => { pop.hidden = true; pop.classList.remove('pop-out'); pop._popOut = false; }, from);
+  $('#gfont').setAttribute('aria-expanded', 'false'); gfOn = -1;
+}
 function gfOpen() {
   const inp = $('#gfont'), pop = $('#gfonts'), q = fold(inp.value.trim());
   const items = GF_LIST.filter(f => !S.brand.loaded.some(l => l.family === f) && fold(f).includes(q))
     .sort((a, b) => (fold(b).startsWith(q) - fold(a).startsWith(q))).slice(0, 60);
   if (!items.length) { gfClose(); return; }
-  pop.replaceChildren(...items.map(f => h('button', { type:'button', role:'option', onmousedown:e => { e.preventDefault(); inp.value = f; gfClose(); addGoogle(); } }, f)));
+  pop.replaceChildren(...items.map(f => h('button', { type:'button', role:'option', onmousedown:e => { e.preventDefault(); inp.value = f; gfClose(e.currentTarget); addGoogle(); } }, f)));
   const r = inp.getBoundingClientRect(), row = inp.parentElement.getBoundingClientRect(), below = innerHeight - r.bottom - 12, above = r.top - 12, up = below < 160 && above > below;
-  pop.hidden = false; gfOn = -1; inp.setAttribute('aria-expanded', 'true');
+  pop.classList.remove('pop-out'); pop._popOut = false; pop.hidden = false; gfOn = -1; inp.setAttribute('aria-expanded', 'true');
   pop.style.left = row.left + 'px'; pop.style.width = row.width + 'px';
   pop.style.maxHeight = Math.min(240, up ? above : below) + 'px';
   pop.style.top = up ? '' : r.bottom + 4 + 'px'; pop.style.bottom = up ? innerHeight - r.top + 4 + 'px' : '';
+  pop.classList.toggle('pop-up', up);
+  popGrow(pop, inp);
 }
 function gfMove(d) {
   const bs = [...$('#gfonts').children]; if (!bs.length) return;
@@ -13255,16 +13993,18 @@ $('#gfonts').addEventListener('mousedown', e => e.preventDefault()); // clicar n
 $('.left').addEventListener('scroll', e => { if (e.target !== $('#gfonts')) gfClose(); }, true);
 // lista própria para os selects (a nativa é desenhada pelo sistema, com destaque azul)
 let selPop = null, selOn = null;
-function selClose() { if (selPop) { selPop.remove(); selPop = null; if (selOn) selOn.setAttribute('aria-expanded', 'false'); selOn = null; } }
+function selClose(from) { if (selPop) { popGone(selPop, null, from); selPop = null; if (selOn) selOn.setAttribute('aria-expanded', 'false'); selOn = null; } }
 function selOpen(sel) {
   selClose(); selOn = sel; sel.setAttribute('aria-expanded', 'true');
-  const pick = o => { sel.value = o.value; selClose(); sel.dispatchEvent(new Event('input', { bubbles:true })); sel.dispatchEvent(new Event('change', { bubbles:true })); sel.focus(); };
-  const pop = h('div', { class:'gf-pop sel-pop', role:'listbox' }, [...sel.options].map(o => h('button', { type:'button', role:'option', class:o.selected ? 'sel' : '', disabled:o.disabled, onclick:() => pick(o) }, o.textContent)));
+  const pick = (o, from) => { sel.value = o.value; selClose(from); sel.dispatchEvent(new Event('input', { bubbles:true })); sel.dispatchEvent(new Event('change', { bubbles:true })); sel.focus(); };
+  const pop = h('div', { class:'gf-pop sel-pop', role:'listbox' }, [...sel.options].map(o => h('button', { type:'button', role:'option', class:o.selected ? 'sel' : '', disabled:o.disabled, onclick:e => pick(o, e.currentTarget) }, o.textContent)));
   document.body.append(pop); selPop = pop;
   const r = sel.getBoundingClientRect(), below = innerHeight - r.bottom - 12, above = r.top - 12, up = below < 160 && above > below;
   pop.style.left = r.left + 'px'; pop.style.minWidth = r.width + 'px';
   pop.style.maxHeight = Math.min(280, up ? above : below) + 'px';
   pop.style.top = up ? '' : r.bottom + 4 + 'px'; pop.style.bottom = up ? innerHeight - r.top + 4 + 'px' : '';
+  pop.classList.toggle('pop-up', up);
+  popGrow(pop, sel);
   pop.querySelector('.sel')?.scrollIntoView({ block:'nearest' });
 }
 document.addEventListener('mousedown', e => {
@@ -13319,8 +14059,8 @@ $('#copyBtn').onclick = saveAsCopy; // Ctrl+Shift+S fica no atalho geral
   fn.addEventListener('blur', () => { const v = fn.value.trim(); if (v && v !== FILES.name) { FILES.name = v; showFileName(); autosave(); } else fn.value = FILES.name; });
 }
 // antes de fechar a aba ou trocar de janela, grava o que estiver pendente
-document.addEventListener('visibilitychange', () => { if (document.hidden && saveT) flushSave(); });
-addEventListener('beforeunload', e => { if (saveT || saving) { flushSave(); e.preventDefault(); } });
+document.addEventListener('visibilitychange', () => { if (document.hidden) pvEnd(); if (document.hidden && saveT) flushSave(); }); // saiu da aba: a prévia do mouse acaba antes de gravar
+addEventListener('beforeunload', e => { pvEnd(); if (saveT || saving) { flushSave(); e.preventDefault(); } });
 $('#jsonOut').onclick = async () => saveFile(JSON.stringify(await portableState()), `${FILES.name.replace(/[\\/:*?"<>|]+/g, '-')}.json`);
 $('#jsonIn').onclick = () => $('#jsonFile').click();
 $('#jsonFile').addEventListener('change', async e => {
@@ -13410,7 +14150,7 @@ function autoShadowHex(L, key) {
 // barra de um ajuste da foto (−100..100); clique duplo volta ao zero. Usada em Ajustes e nas barras rápidas da Imagem
 function adjRange(L, k, label, min = -1) {
   const f = rangeF(L, k, label, min, 1, .01, v => Math.round((v || 0) * 100));
-  f.querySelector('input[type=range]').addEventListener('dblclick', () => { pushUndo(); for (const o of peersOf(L)) o[k] = 0; changed({ props:true }); });
+  f.querySelector('.nf-ic').addEventListener('dblclick', () => { pushUndo(); for (const o of peersOf(L)) o[k] = 0; changed({ props:true }); });
   return f;
 }
 // ajustes da foto (exposição, cor…): filtros prontos + barras; vale para todas as imagens selecionadas
@@ -13456,11 +14196,10 @@ function vidCutFields(L) {
   const edit = edge => { peersOf(L).filter(o => o.video || o.type === 'audio').forEach(fix); look(edge); upd(); renderTimeline(); };
   const inF = rangeF(L, 'vIn', 'Começa em', 0, d, step, v => fmtSec(v || 0), { onInput:() => edit(0) });
   const outF = rangeF(L, 'vOut', 'Termina em', 0, d, step, v => fmtSec(v ?? d), { onInput:() => edit(1) });
-  const inR = inF.querySelector('input[type=range]'), outR = outF.querySelector('input[type=range]'), nums = [inF, outF].map(f => f.querySelector('.num'));
+  const nums = [inF, outF].map(f => f.querySelector('.num'));
   const note = h('p', { class:'hint' });
   const upd = () => {
     const n = len(), P = vidPlan(L), c = P.cyc, on = (L.end ?? S.duration) - L.start, hold = P.ps.reduce((s, p) => s + p.len, 0);
-    inR.value = L.vIn || 0; outR.value = L.vOut ?? d;
     if (document.activeElement !== nums[0]) nums[0].value = fmtSec(L.vIn || 0);
     if (document.activeElement !== nums[1]) nums[1].value = fmtSec(L.vOut ?? d);
     note.textContent = `Trecho de ${fmtSec(n)}${P.cut > .005 ? ` − ${fmtSec(P.cut)} de silêncio` : ''}${P.sp !== 1 ? `, ${fmtSec((n - P.cut) / P.sp)} a ${fmtX(P.sp)}` : ''}${hold > .005 ? ` + ${fmtSec(hold)} parado` : ''} (o vídeo tem ${fmtSec(d)}). ${c < on - .05 ? 'Repete até a camada sair.' : c > on + .05 ? 'O vídeo final acaba antes do fim do trecho.' : 'As bordas da barra na timeline também cortam.'}`;
@@ -13565,7 +14304,7 @@ function silenceFields(L) {
     h('div', { class:'sil-head', text:'Tirar silêncios' }),
     h('p', { class:'hint', text:'Acha as pausas da fala e o vídeo pula por cima delas. O som pula junto.' }),
     how,
-    h('button', { class:'btn primary sil-go', text:n ? `Refazer no modo ${mode}` : `Tirar silêncios no modo ${mode}`, title:'Acha as pausas da fala e o vídeo pula por cima delas (cortes secos), com o modo escolhido acima', onclick:() => cutSilence(L) }),
+    h('button', { class:'btn sil-go', text:n ? `Refazer no modo ${mode}` : `Tirar silêncios no modo ${mode}`, title:'Acha as pausas da fala e o vídeo pula por cima delas (cortes secos), com o modo escolhido acima', onclick:() => cutSilence(L) }),
     n ? h('div', { class:'sil-res' }, [
       h('p', { class:'hint', text:`${n} ${n === 1 ? 'corte seco' : 'cortes secos'}, ${fmtSec(P.cut / P.sp)} de silêncio a menos. Cada um é um risco na barra da timeline.` }),
       h('button', { class:'btn small', text:'Devolver os silêncios', title:'Tira os cortes secos (o começo e o fim continuam cortados: puxe as bordas da barra)', onclick:() => {
@@ -13638,6 +14377,27 @@ function videoSelFields() {
     h('p', { class:'hint', text:`${vs.length} vídeos escolhidos: a velocidade e o volume valem para todos (o som de cada um acompanha). Corte, pausas e silêncios: escolha um vídeo só.` }),
     ...vidSoundAll(vs), ...vidSpeedFields(V, () => {}), splitRow(V)];
 }
+// trocar a imagem/o vídeo de uma camada (painel e barra flutuante)
+async function swapImage(L, f) { const src = await imageSrc(f); pushUndo(); L.src = src; delete L.cut; await getImage(L.src); changed({ props:true }); }
+async function swapVideo(L, f) {
+  const got = await videoGate(f, { one:true }), g = got && got[0]; if (!g) return; f = g.file; // longo: só o trecho (js/trecho.js)
+  toast('Abrindo o vídeo…');
+  try {
+    const id = await putMedia(f), u = await mediaUrl(id), [p, an] = await Promise.all([videoPoster(u), videoSound(id)]);
+    pushUndo(); const olds = S.layers.filter(a => linkOf(a) === L); if (olds.length) S.layers = S.layers.filter(a => !olds.includes(a)); // o som do vídeo antigo sai junto
+    L.video = id; L.src = p.src; L.vdur = p.dur; delete L.vIn; delete L.vOut; delete L.vPause; delete L.vSkip; if (g.cut) Object.assign(L, g.cut); vidFitEnd(L); if (an) addVideoAudio(L, an);
+    await getImage(L.src); changed({ layers:true, props:true }); renderTimeline(); toast(an ? 'Vídeo trocado, com o som numa camada separada' : 'Vídeo trocado'); }
+  catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
+}
+// forma da máscara da imagem (painel e barra flutuante)
+function maskSegF(L) {
+  return h('div', { class:'segs ico', role:'group', 'aria-label':'Máscara' }, [['fit', 'Sem máscara: a forma da própria imagem'], ['rect', 'Retângulo'], ['circle', 'Círculo']].map(([v, t]) =>
+    h('button', { type:'button', 'aria-pressed':String(L.mask === v), html:ICONS['mk_' + v], title:t, 'aria-label':t, onclick:() => {
+      pushUndo();
+      if (v !== 'fit' && L.mh == null) { const G = blockGeom(L); L.mh = G ? G.h / SU : L.size * .75; }
+      L.mask = v; changed({ props:true });
+    } })));
+}
 function mediaFields(L) {
   return [
     ...(L.video ? (peersOf(L).filter(o => o.video).length > 1 ? [] : soundNote(L)) : videoSelFields()),
@@ -13645,16 +14405,7 @@ function mediaFields(L) {
       // vários vídeos escolhidos (Shift + clique na timeline): a velocidade vale para todos; corte, pausas e silêncios são de cada um
       return [h('p', { class:'hint', text:`${vs.length} vídeos escolhidos: a velocidade e o volume valem para todos (o som de cada um acompanha). Corte, pausas e silêncios: escolha um vídeo só.` }),
         ...vidSoundAll(vs), ...vidSpeedFields(L, () => {}), splitRow(L)]; })() : []),
-    L.video ? uploadF('Trocar vídeo', 'video/*', async f => {
-      const got = await videoGate(f, { one:true }), g = got && got[0]; if (!g) return; f = g.file; // longo: só o trecho (js/trecho.js)
-      toast('Abrindo o vídeo…');
-      try {
-        const id = await putMedia(f), u = await mediaUrl(id), [p, an] = await Promise.all([videoPoster(u), videoSound(id)]);
-        pushUndo(); const olds = S.layers.filter(a => linkOf(a) === L); if (olds.length) S.layers = S.layers.filter(a => !olds.includes(a)); // o som do vídeo antigo sai junto
-        L.video = id; L.src = p.src; L.vdur = p.dur; delete L.vIn; delete L.vOut; delete L.vPause; delete L.vSkip; if (g.cut) Object.assign(L, g.cut); vidFitEnd(L); if (an) addVideoAudio(L, an);
-        await getImage(L.src); changed({ layers:true, props:true }); renderTimeline(); toast(an ? 'Vídeo trocado, com o som numa camada separada' : 'Vídeo trocado'); }
-      catch (e) { toast(e.message || 'Não consegui abrir esse vídeo'); }
-    }) : uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem', 'image/*', async f => { const src = await imageSrc(f); pushUndo(); L.src = src; delete L.cut; await getImage(L.src); changed({ props:true }); }),
+    L.video ? uploadF('Trocar vídeo', 'video/*', f => swapVideo(L, f)) : uploadF(L.src ? 'Trocar imagem' : 'Enviar imagem', 'image/*', f => swapImage(L, f)),
     cutoutF(L),
     field('Virar', h('div', { class:'segs ico', role:'group', 'aria-label':'Virar' }, [['flipX', 'Espelhar na horizontal'], ['flipY', 'Espelhar na vertical']].map(([k, tip]) =>
       h('button', { type:'button', 'aria-pressed':String(!!L[k]), html:ICONS[k], title:tip, 'aria-label':tip, onclick:() => { pushUndo(); const on = !L[k]; for (const o of peersOf(L)) { if (on) o[k] = true; else delete o[k]; } changed({ layers:true }); renderProps(); } })))),
@@ -13663,26 +14414,6 @@ function mediaFields(L) {
       if (v === 'browser') { o.mask = 'rect'; if (o.mh == null) { const G = blockGeom(o); o.mh = +((G ? G.h / SU : o.size * .62)).toFixed(4); } o.radius = 0; }
     }, () => seekLayer(L)), null, true),
     L.device === 'phone' ? h('p', { class:'hint', text:'Print comprido de app ou site: use "Rolar a tela" em Movimento dentro da imagem, na aba Animação.' }) : null];
-}
-// sombra e desfoque, no fim de "Aparência" (antes eram seções fechadas à parte): sombra num menu; desfoque = barra livre + presets numa linha.
-// Valem para toda a seleção, de qualquer tipo (como a opacidade)
-function fxFields(L) {
-  const sid = fid(L, 'shadow');
-  const sel = h('select', { id:sid }, Object.entries(SHADOWS).map(([k, s]) => h('option', { value:k, text:s.label, selected:(L.shadow || 'none') === k })));
-  sel.addEventListener('change', () => {
-    pushUndo(); const v = sel.value;
-    for (const o of peersAny(L)) { o.shadow = v; o.shColor = v === 'none' ? null : autoShadowHex(o, v); }
-    RT.layout.clear(); changed({ layers:true }); renderProps(); seekLayer(L);
-  });
-  const out = [field('Sombra', sel, sid), L.shadow && L.shadow !== 'none' ? colorF(L, 'shColor', 'Cor da sombra') : null];
-  // desfoque da camada e do fundo (vidro), em px
-  for (const k of L.type === 'bg' ? ['lblur'] : ['lblur', 'bblur']) {
-    L[k] ??= 0;
-    out.push(rangeF(L, k, k === 'lblur' ? 'Desfoque' : 'Desfocar atrás', 0, 800, 1, v => Math.round(v || 0) + ' px', { after:renderProps }),
-      segPick(L, k, BLURS[k].map(([v, t]) => [v, t, v ? `${t}: ${v} px` : t]), null, null, 0, peersAny));
-  }
-  if (L.type !== 'bg' && L.bblur > 0) out.push(h('p', { class:'hint', text:'Desfoca o que está atrás, no formato do elemento. Com preenchimento meio transparente, vira vidro.' }));
-  return out.filter(Boolean);
 }
 
 /* ------------ adicionar: câmera, transição, vídeo e preço de/por ------------ */
@@ -13758,7 +14489,7 @@ function riseFields(A) {
   const lay = A !== S.audio, redraw = () => renderTimeline(), again = () => { if (lay) renderProps(); else renderAudio(); };
   // a subida da camada fica dentro da barra dela; tempo sempre o da timeline
   const t0 = lay ? A.start : 0, t1 = lay ? A.end ?? S.duration : S.duration, here = () => +clamp(T, t0, t1).toFixed(2);
-  const mode = segSet(A, 'rise', 'Volume ao longo do vídeo', [['flat', 'Sempre igual'], ['up', 'Sobe depois']], v => {
+  const mode = segSet(A, 'rise', 'Volume ao longo do tempo', [['flat', 'Sempre igual'], ['up', 'Sobe depois']], v => {
     if (v === 'up' && A.riseAt == null) A.riseAt = here();
     again(); redraw();
   });

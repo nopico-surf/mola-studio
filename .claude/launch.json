@@ -180,13 +180,23 @@
     {
       "name": "mola-xf",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["serve", ".", "-l", "3127"],
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3127"
+      ],
       "port": 3127
     },
     {
       "name": "mola-cortes",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["serve", ".", "-l", "3117"],
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3117"
+      ],
       "port": 3117
     },
     {
@@ -199,6 +209,61 @@
         "3057"
       ],
       "port": 3057
+    },
+    {
+      "name": "mola-gal",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3141"
+      ],
+      "port": 3141
+    },
+    {
+      "name": "mola-fbar",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3153"
+      ],
+      "port": 3153
+    },
+    {
+      "name": "mola-figma",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3161"
+      ],
+      "port": 3161
+    },
+    {
+      "name": "mola-drop",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3173"
+      ],
+      "port": 3173
+    },
+    {
+      "name": "mola-f4",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3189"
+      ],
+      "port": 3189
     }
   ]
 }

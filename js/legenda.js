@@ -572,7 +572,7 @@ function capTlDrag(e, L, bar, hit) {
   const up = () => {
     done();
     if (moved) { changed({ props:true }); renderProps(); }
-    else { const b = capBlocks(L)[k]; if (b) { T = clamp(b.s + off + .02, 0, d); RT.userSeek = true; needs = true; } } // clique: a agulha vai até o trecho
+    else { const b = capBlocks(L)[k]; if (b) { T = clamp(b.s + off + .02, 0, d); RT.userSeek = true; needs = true; stageEdit(L); } } // clique: a agulha vai até o trecho e a edição já abre na tela (pedido do usuário: basta selecionar)
   };
   const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); L.capt = cap0; placeBar(bar, L); done(); needs = true; };
   bar.classList.add('drag');
@@ -736,10 +736,12 @@ async function capRealign(L, ws, i0, n) {
   } catch (e) { legIdle(); }
 }
 const legIdle = () => { clearTimeout(LEG_IDLE); LEG_IDLE = setTimeout(legStop, 60000); }; // o alinhador fica aberto 1 min para a próxima correção
-function capEdit(L, b, text) {
+// o.live = edição no palco (stageEdit): grava a cada tecla, sem passo de desfazer e sem refazer o painel; devolve true quando o
+// número de palavras mudou (ao sair, quem chamou manda o alinhador acertar o tempo das palavras novas)
+function capEdit(L, b, text, o) {
   const ws = L.capt.words, old = ws.slice(b.i0, b.i1 + 1), toks = text.trim().split(/\s+/).filter(Boolean);
-  if (toks.join(' ') === old.map(w => w.w).join(' ')) return;
-  pushUndo();
+  if (toks.join(' ') === old.map(w => w.w).join(' ')) return false;
+  if (!(o && o.live)) pushUndo();
   const s0 = old[0].s, e1 = old[old.length - 1].e;
   let nw;
   if (toks.length === old.length) nw = old.map((w, k) => w.w === toks[k] ? w : { ...w, w:toks[k], c:1 }); // trocou palavras: o tempo fica
@@ -750,8 +752,12 @@ function capEdit(L, b, text) {
   if (old[0].seg && nw.length) nw[0] = { ...nw[0], seg:1 };
   const all = [...ws.slice(0, b.i0), ...nw, ...ws.slice(b.i1 + 1)], fz = capFz(L);
   if (nw.length) fz[b.k].n = nw.length; else fz.splice(b.k, 1);
-  capPut(L, fz, all); changed(); renderProps(); renderTimeline();
-  if (nw.length && toks.length !== old.length) capRealign(L, all, b.i0, nw.length);
+  capPut(L, fz, all);
+  const grew = nw.length > 0 && toks.length !== old.length;
+  if (o && o.live) { changed(); return grew; }
+  changed(); renderProps(); renderTimeline();
+  if (grew) capRealign(L, all, b.i0, nw.length);
+  return grew;
 }
 // .srt (para subir no Instagram/YouTube ou usar em outro editor)
 function capSrt(L) {

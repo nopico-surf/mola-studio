@@ -49,9 +49,12 @@ const confere = (nome, ok, info) => { if (!ok) falhas++; console.log((ok ? 'ok  
   // 3) forma: tipo, posição, estilo, pontas e cantos do contorno
   await p.click('#adds .add[title="Adicionar forma"]'); await p.waitForTimeout(300);
   await p.evaluate(() => { propTab = 'style'; const L = selL(); L.stroke = true; L.strokeDash = 'dash'; renderProps(); });
-  const sh = await p.evaluate(() => Object.fromEntries(['Tipo', 'Posição', 'Estilo', 'Pontas', 'Cantos'].map(k => [k, document.querySelectorAll(`#props .segs.ico[aria-label="${k}"] button svg`).length])));
+  // estilo, pontas e cantos do traço ficam na janelinha de detalhes do contorno (painel na ordem do Figma)
+  await p.click('#props .field:has(> label:text-is("Cor do traço")) .prop-det'); await p.waitForTimeout(250);
+  const sh = await p.evaluate(() => Object.fromEntries(['Tipo', 'Posição', 'Estilo', 'Pontas', 'Cantos'].map(k => [k, document.querySelectorAll(`#props .segs.ico[aria-label="${k}"] button svg, .pop:not(.pop-out) .segs.ico[aria-label="${k}"] button svg`).length])));
   confere('forma: tipo (7), posição (3), estilo do traço (5), pontas (3) e cantos (3) com ícones', sh.Tipo === 7 && sh['Posição'] === 3 && sh.Estilo === 5 && sh.Pontas === 3 && sh.Cantos === 3, sh);
-  await p.click('#props .segs.ico[aria-label="Pontas"] button[aria-label="Quadrada"]');
+  await p.click('.pop:not(.pop-out) .segs.ico[aria-label="Pontas"] button[aria-label="Quadrada"]');
+  await p.keyboard.press('Escape'); await p.waitForTimeout(200);
   await p.click('#props .segs.ico[aria-label="Tipo"] button[aria-label="Estrela"]');
   confere('forma: clicar muda tipo e pontas', await p.evaluate(() => selL().kind === 'star' && selL().strokeCap === 'square'));
   confere('forma: nenhum controle escrito que tem ícone', !(await escritos()).length, await escritos());
