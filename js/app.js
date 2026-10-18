@@ -7179,8 +7179,8 @@ function stageEdit(L) {
   const rg = document.createRange(); rg.selectNodeContents(el); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(rg);
   el.addEventListener('pointerdown', e => e.stopPropagation()); // o clique dentro do campo não mexe na seleção do palco
   el.addEventListener('input', seditInput);
-  SED.range = [0, [...SED.orig].length]; // abre com o texto todo escolhido
-  const onSel = () => { if (!SED.el) { document.removeEventListener('selectionchange', onSel); return; } if (document.activeElement !== SED.el) return; const rg = seditSel(SED.el); if (rg) SED.range = rg; };
+  SED.range = [0, [...SED.orig].length]; SED.syncs = []; // abre com o texto todo escolhido
+  const onSel = () => { if (!SED.el) { document.removeEventListener('selectionchange', onSel); return; } if (document.activeElement !== SED.el) return; const rg = seditSel(SED.el); if (rg) { SED.range = rg; for (const f of SED.syncs || []) if (f.el.isConnected) f(); } };
   document.addEventListener('selectionchange', onSel);
   el.addEventListener('keydown', e => {
     e.stopPropagation();
@@ -7242,6 +7242,22 @@ function seditPut(L, k, v) {
   RT.layout.clear(); changed(); needs = true;
   if (document.activeElement === SED.el) seditSelect(a, b);
   return true;
+}
+// o valor que o painel mostra: com um trecho escolhido no campo do palco, o do trecho (igual em todas as letras; senão o da camada)
+function seditShown(L, k) {
+  const base = k === 'color' ? L.color : k === 'weight' ? L.weight : k === 'italic' ? !!L.italic : L[k];
+  const key = SED_RUN[k]; if (!key || !seditOpen(L) || L.capt || !SED.range) return base;
+  const [a, b] = SED.range; if (!(b > a)) return base;
+  const cs = textChars(L); if (b > cs.length) return base;
+  const v0 = cs[a][key] ?? base;
+  for (let j = a + 1; j < b; j++) if ((cs[j][key] ?? base) !== v0) return base;
+  return v0;
+}
+// campos do painel que se refazem quando o trecho escolhido muda (registrados por colorF/selectF/togF enquanto a edição está aberta)
+function seditWatch(L, fn) {
+  if (!seditOpen(L)) return;
+  SED.syncs = (SED.syncs || []).filter(f => f.el.isConnected);
+  SED.syncs.push(fn);
 }
 // Ctrl+B / Ctrl+I no campo do palco: liga e desliga no trecho
 function seditStyle(k) {
@@ -11934,33 +11950,34 @@ function peersOf(L) {
 function colorF(L, k, label, o = {}) {
   const id = fid(L, k);
   const setAll = c => { if (seditPut(L, k, c)) return; for (const q of peersOf(L)) q[k] = c; }; // trecho escolhido no palco: só ele muda
-  const six = () => String(L[k]).slice(1, 7).toUpperCase();
+  const cur = () => seditShown(L, k);
+  const six = () => String(cur()).slice(1, 7).toUpperCase();
   const show = () => {
-    hex.value = six(); if (document.activeElement !== pct) pct.value = Math.round(colA(L[k]) * 100);
+    hex.value = six(); if (document.activeElement !== pct) pct.value = Math.round(colA(cur()) * 100);
     if (o.vis) return;
-    const none = noCol(L[k]); row.classList.toggle('off', none);
+    const none = noCol(cur()); row.classList.toggle('off', none);
     const eye = row.querySelector('.prop-eye');
     if (eye) { eye.innerHTML = none ? ICONS.eye_off : ICONS.eye; eye.setAttribute('aria-pressed', String(none)); eye.title = eye.ariaLabel = none ? `${label}: mostrar` : `${label}: sem cor`; }
   };
-  const inp = colorButton(L[k], `${label} (seletor)`, { onStart:pushUndo, onInput:c => { setAll(c); show(); changed(); } });
+  const inp = colorButton(cur(), `${label} (seletor)`, { onStart:pushUndo, onInput:c => { setAll(c); show(); changed(); } });
   inp.id = id;
   const hex = h('input', { type:'text', class:'hex', value:six(), maxlength:32, spellcheck:'false', 'aria-label':`${label} (hex)`, title:'Cole ou digite o hex, com ou sem #' });
-  const pct = h('input', { type:'number', class:'apct', min:0, max:100, step:1, inputmode:'numeric', value:Math.round(colA(L[k]) * 100), 'aria-label':`${label} (opacidade %)`, title:'Opacidade em %. Setas ↑↓ ajustam.' });
+  const pct = h('input', { type:'number', class:'apct', min:0, max:100, step:1, inputmode:'numeric', value:Math.round(colA(cur()) * 100), 'aria-label':`${label} (opacidade %)`, title:'Opacidade em %. Setas ↑↓ ajustam.' });
   const put = c => { setAll(c); inp.setColor(c); show(); changed(); };
   const commit = () => {
     const c = parseHex(hex.value);
-    if (c) { const n = withA(c, c.length === 9 ? colA(c) : colA(L[k])); if (n !== L[k]) { pushUndo(); put(n); } }
+    if (c) { const n = withA(c, c.length === 9 ? colA(c) : colA(cur())); if (n !== cur()) { pushUndo(); put(n); } }
     show();
   };
   hex.addEventListener('focus', () => hex.select());
-  hex.addEventListener('paste', e => { const c = parseHex(e.clipboardData.getData('text/plain')); if (!c) return; e.preventDefault(); pushUndo(); put(withA(c, c.length === 9 ? colA(c) : colA(L[k]))); });
+  hex.addEventListener('paste', e => { const c = parseHex(e.clipboardData.getData('text/plain')); if (!c) return; e.preventDefault(); pushUndo(); put(withA(c, c.length === 9 ? colA(c) : colA(cur()))); });
   hex.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); hex.blur(); } else if (e.key === 'Escape') { hex.value = six(); hex.blur(); } });
   hex.addEventListener('blur', commit);
   let pctUndo = false;
   pct.addEventListener('focus', () => { pct.select(); pctUndo = false; });
   pct.addEventListener('input', () => {
     const v = parseFloat(pct.value); if (!isFinite(v)) return;
-    const n = withA(L[k], clamp(v, 0, 100) / 100); if (n === L[k]) return;
+    const n = withA(cur(), clamp(v, 0, 100) / 100); if (n === cur()) return;
     if (!pctUndo) { pushUndo(); pctUndo = true; }
     put(n);
   });
@@ -11969,13 +11986,15 @@ function colorF(L, k, label, o = {}) {
   // as cores da marca ficam na lista do seletor (colorButton)
   const box = h('div', { class:'prop-box' }, [inp, h('span', { class:'hexwrap' }, [h('i', { text:'#' }), hex]), h('span', { class:'pctwrap' }, [pct, h('i', { text:'%' })])]);
   const row = o.vis ? propRow({ box, label:label.toLowerCase(), on:o.vis.on, toggle:o.vis.toggle, remove:o.remove, more:o.more })
-    : propRow({ box, label:label.toLowerCase(), on:!noCol(L[k]), toggle:() => { pushUndo(); put(withA(L[k], noCol(L[k]) ? 1 : 0)); }, remove:o.remove, more:o.more });
+    : propRow({ box, label:label.toLowerCase(), on:!noCol(cur()), toggle:() => { pushUndo(); put(withA(cur(), noCol(cur()) ? 1 : 0)); }, remove:o.remove, more:o.more });
   show();
+  const sync = () => { inp.setColor(cur()); show(); }; sync.el = row; seditWatch(L, sync);
   return field(label, row, id);
 }
 function selectF(L, k, label, opts, o = {}) {
   const id = fid(L, k);
-  const sel = h('select', { id }, opts.map(([v, t]) => h('option', { value:v, text:t, selected:String(L[k]) === String(v) })));
+  const sel = h('select', { id }, opts.map(([v, t]) => h('option', { value:v, text:t, selected:String(seditShown(L, k)) === String(v) })));
+  const sync = () => { const c = String(seditShown(L, k)); for (const op of sel.options) op.selected = op.value === c; }; sync.el = sel; seditWatch(L, sync);
   sel.addEventListener('change', () => { const v = o.num ? parseFloat(sel.value) : sel.value; pushUndo(); if (seditPut(L, k, v)) return; for (const p of peersOf(L)) p[k] = v; RT.layout.clear(); changed({ props:!!o.props }); });
   return field(label, sel, id);
 }
@@ -12132,11 +12151,12 @@ function icoSeg(label, opts, on, pick) {
 }
 // liga/desliga com ícone (caixa alta, itálico…): [chave, nome, ícone], vale para a seleção toda
 function togF(L, label, opts) {
-  const seg = icoSeg(label, opts, k => !!L[k], k => {
-    pushUndo(); const v = !L[k], x = CASE_EX.includes(k) ? CASE_EX.filter(c => c !== k) : [];
+  const seg = icoSeg(label, opts, k => !!seditShown(L, k), k => {
+    pushUndo(); const v = !seditShown(L, k), x = CASE_EX.includes(k) ? CASE_EX.filter(c => c !== k) : [];
     if (!seditPut(L, k, v)) { for (const o of peersOf(L)) { o[k] = v; if (v) for (const c of x) o[c] = false; } RT.layout.clear(); changed(); }
-    seg.querySelectorAll('button').forEach((b, i) => b.setAttribute('aria-pressed', String(!!L[opts[i][0]])));
+    seg.querySelectorAll('button').forEach((b, i) => b.setAttribute('aria-pressed', String(!!seditShown(L, opts[i][0]))));
   });
+  const sync = () => seg.querySelectorAll('button').forEach((b, i) => b.setAttribute('aria-pressed', String(!!seditShown(L, opts[i][0])))); sync.el = seg; seditWatch(L, sync);
   return field(label, seg);
 }
 const ALIGN_OPTS = [['left', 'Alinhar à esquerda', 'ta_left'], ['center', 'Centralizar', 'ta_center'], ['right', 'Alinhar à direita', 'ta_right']];
