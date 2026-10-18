@@ -110,8 +110,9 @@ const ABAS = (() => {
   function render() {
     if (!bar) return;
     const many = tabs.length > 1 || mainClosed;
-    bar.hidden = !many; document.body.classList.toggle('has-tabs', many);
-    if (!many) return;
+    const multi = tabs.length > 1; // uma aba só nunca mostra a barra (com a principal fechada, o que sobrou ocupa a tela toda)
+    bar.hidden = !multi; document.body.classList.toggle('has-tabs', many); document.body.classList.toggle('tabs-solo', many && !multi);
+    if (!multi) return;
     bar.querySelectorAll('.tab').forEach(n => n.remove());
     const plus = bar.querySelector('.tab-new');
     tabs.forEach((t, i) => {
