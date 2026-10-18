@@ -7288,6 +7288,13 @@ function seditBlur() {
     seditClose();
   }, 0);
 }
+// depois de aplicar algo no painel o campo já perdeu o foco: tocar fora do texto (palco, timeline, camadas…) tira a seleção do trecho
+document.addEventListener('pointerdown', e => {
+  if (!SED.el) return;
+  const t = e.target;
+  if (!t || !t.closest || t.closest('.sedit') || t.closest('#props') || t.closest('.pop') || t.closest('.cp-pop') || t.closest('.ctx') || t.closest('.mpop') || t.closest('.modal')) return;
+  seditClose();
+}, true);
 
 /* ============================================================
    Desfazer, salvar automático, projetos
