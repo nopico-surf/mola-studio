@@ -7253,6 +7253,16 @@ function seditShown(L, k) {
   for (let j = a + 1; j < b; j++) if ((cs[j][key] ?? base) !== v0) return base;
   return v0;
 }
+// o trecho escolhido tem valores diferentes (o painel mostra o da camada, mas igualar tudo ao mesmo valor tem que valer)
+function seditMixed(L, k) {
+  const key = SED_RUN[k]; if (!key || !seditOpen(L) || L.capt || !SED.range) return false;
+  const [a, b] = SED.range; if (!(b > a)) return false;
+  const cs = textChars(L); if (b > cs.length) return false;
+  const base = k === 'color' ? L.color : k === 'weight' ? L.weight : k === 'italic' ? !!L.italic : L[k];
+  const v0 = cs[a][key] ?? base;
+  for (let j = a + 1; j < b; j++) if ((cs[j][key] ?? base) !== v0) return true;
+  return false;
+}
 // campos do painel que se refazem quando o trecho escolhido muda (registrados por colorF/selectF/togF enquanto a edição está aberta)
 function seditWatch(L, fn) {
   if (!seditOpen(L)) return;
@@ -11953,7 +11963,7 @@ function colorF(L, k, label, o = {}) {
   const cur = () => seditShown(L, k);
   const six = () => String(cur()).slice(1, 7).toUpperCase();
   const show = () => {
-    hex.value = six(); if (document.activeElement !== pct) pct.value = Math.round(colA(cur()) * 100);
+    const mix = seditMixed(L, k); hex.placeholder = mix ? 'Misto' : ''; hex.value = mix ? '' : six(); if (document.activeElement !== pct) pct.value = Math.round(colA(cur()) * 100);
     if (o.vis) return;
     const none = noCol(cur()); row.classList.toggle('off', none);
     const eye = row.querySelector('.prop-eye');
@@ -11966,7 +11976,7 @@ function colorF(L, k, label, o = {}) {
   const put = c => { setAll(c); inp.setColor(c); show(); changed(); };
   const commit = () => {
     const c = parseHex(hex.value);
-    if (c) { const n = withA(c, c.length === 9 ? colA(c) : colA(cur())); if (n !== cur()) { pushUndo(); put(n); } }
+    if (c) { const n = withA(c, c.length === 9 ? colA(c) : colA(cur())); if (n !== cur() || seditMixed(L, k)) { pushUndo(); put(n); } }
     show();
   };
   hex.addEventListener('focus', () => hex.select());
