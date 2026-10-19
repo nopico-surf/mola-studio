@@ -2720,16 +2720,16 @@ function runsOf(L) { const r = L.runs; return r && r.length && r.map(x => x.t).j
 function charStyles(L, txt) {
   const r = runsOf(L); if (!r) return null;
   const st = [];
-  for (const x of r) for (const ch of x.t) for (const _ of caseTxt(L, ch)) st.push([x.w ?? L.weight, x.i ?? !!L.italic, x.c || null, x.f || L.font]);
-  return st.length === [...txt].length && st.some(s => s[0] !== L.weight || s[1] !== !!L.italic || s[2] || s[3] !== L.font) ? st : null;
+  for (const x of r) for (const ch of x.t) for (const _ of caseTxt(L, ch)) st.push([x.w ?? L.weight, x.i ?? !!L.italic, x.c || null, x.f || L.font, x.z || 1]);
+  return st.length === [...txt].length && st.some(s => s[0] !== L.weight || s[1] !== !!L.italic || s[2] || s[3] !== L.font || s[4] !== 1) ? st : null;
 }
 // o texto letra a letra com o estilo de cada uma (null = segue o da camada), e de volta para L.text + L.runs
 // (o editor do painel, richF, e a edição no palco, js/editar-texto.js, usam os dois)
-const TCH_K = ['w', 'i', 'c', 'f'];
-function textChars(L) { const cs = []; for (const x of runsOf(L) || [{ t:L.text || '' }]) for (const ch of x.t) cs.push({ ch, w:x.w ?? null, i:x.i ?? null, c:x.c ?? null, f:x.f ?? null }); return cs; }
+const TCH_K = ['w', 'i', 'c', 'f', 'z']; // z = tamanho do trecho em fração do tamanho da camada (0,5 = metade)
+function textChars(L) { const cs = []; for (const x of runsOf(L) || [{ t:L.text || '' }]) for (const ch of x.t) cs.push({ ch, w:x.w ?? null, i:x.i ?? null, c:x.c ?? null, f:x.f ?? null, z:x.z ?? null }); return cs; }
 function setTextChars(L, cs) {
   const runs = [];
-  for (const c of cs) { const p = runs[runs.length - 1]; if (p && TCH_K.every(k => p[k] === c[k])) p.t += c.ch; else runs.push({ t:c.ch, w:c.w, i:c.i, c:c.c, f:c.f }); }
+  for (const c of cs) { const p = runs[runs.length - 1]; if (p && TCH_K.every(k => p[k] === c[k])) p.t += c.ch; else runs.push({ t:c.ch, w:c.w, i:c.i, c:c.c, f:c.f, z:c.z }); }
   L.text = cs.map(c => c.ch).join('');
   L.runs = runs.every(r => TCH_K.every(k => r[k] == null)) ? null : runs.map(r => { const o = { t:r.t }; for (const k of TCH_K) if (r[k] != null) o[k] = r[k]; return o; });
 }
@@ -2960,7 +2960,7 @@ function layoutText(L, txt) {
   let lay = RT.layout.get(key); if (lay) return lay;
   if (RT.layout.size > 400) RT.layout.clear();
   // i = posição da letra no texto mostrado (o cursor da edição no palco acha a letra por ela); fm = fonte do trecho (vetor)
-  const all = [...txt].map((ch, i) => ({ ch, i, c:sty ? sty[i][2] : null, fm:sty ? sty[i][3] : null, f:sty ? fontStr(L, size, sty[i][0], sty[i][1], sty[i][3]) : font }));
+  const all = [...txt].map((ch, i) => ({ ch, i, c:sty ? sty[i][2] : null, fm:sty ? sty[i][3] : null, z:sty ? sty[i][4] : 1, f:sty ? fontStr(L, size * sty[i][4], sty[i][0], sty[i][1], sty[i][3]) : font }));
   // trechos seguidos com a mesma fonte são medidos juntos: assim o kerning entre as letras vale
   const segs = arr => { const out = []; for (const c of arr) { const s = out[out.length - 1]; if (s && s.f === c.f) s.s += c.ch; else out.push({ f:c.f, s:c.ch }); } return out; };
   let curF = null;
@@ -2996,7 +2996,7 @@ function layoutText(L, txt) {
         const w = meas(s.f, ch), x = segX + meas(s.f, pre) - w + k * ls + nsp * wsp;
         const space = ch === ' '; if (space) nsp++;
         if (space) wi++;
-        glyphs.push({ ch, x, w, k, f:s.f, c:cs[k].c, fm:cs[k].fm, i:cs[k].i, space, word:wi, ci:space ? -1 : ci++ });
+        glyphs.push({ ch, x, w, k, f:s.f, c:cs[k].c, fm:cs[k].fm, z:cs[k].z, i:cs[k].i, space, word:wi, ci:space ? -1 : ci++ });
         k++;
       });
       segX += meas(s.f, s.s);
@@ -6458,7 +6458,7 @@ const endDrag = () => {
 function drillSelect(L, g0) { // g0: clique no fundo pintado de um frame (não no item): desce só até esse frame
   const chain = []; for (let g = g0 || L.grp, n = 0; g && n < 20; g = gpar(g), n++) chain.unshift(g);
   const pk = pickedLayers(); // nível atual = frame de fora cujas folhas são exatamente a seleção (vale também com 1 folha só)
-  const w = chain.find(g => { const lv = gleaves(g); return lv.length === pk.length && lv.every(m => isPicked(m.id) || pk.includes(m)); });
+  const w = chain.findLast(g => { const lv = gleaves(g); return lv.length === pk.length && lv.every(m => isPicked(m.id) || pk.includes(m)); }); // o de mais dentro: frames embrulhados com as mesmas folhas contam como um nível só (senão o clique duplo ficava preso no de fora)
   const next = w ? chain[chain.indexOf(w) + 1] : chain[0];
   if (g0 && !next) return;
   if (g0) L = gleaves(next).find(l => l.id === L.id) || gleaves(next)[0];
@@ -7218,7 +7218,10 @@ function seditClose(cancel) {
    janelinha ou para o seletor de cor mantém o campo aberto e o trecho guardado em `SED.range`). Ctrl+B e Ctrl+I também valem
    para o trecho. O resto do painel (tamanho, entrelinha, alinhamento…) continua valendo para o texto inteiro: o tamanho por
    trecho não existe em `L.runs`. */
-const SED_RUN = { color:'c', weight:'w', italic:'i', font:'f' };
+const SED_RUN = { color:'c', weight:'w', italic:'i', font:'f', size:'z' };
+// valor da camada e do trecho de uma letra; o tamanho do trecho é guardado em fração (z) e aparece em px
+const sedBase = (L, k) => k === 'color' ? L.color : k === 'weight' ? L.weight : k === 'italic' ? !!L.italic : L[k];
+const sedOf = (L, k, c) => k === 'size' ? Math.round(L.size * (c.z ?? 1)) : c[SED_RUN[k]] ?? sedBase(L, k);
 // o trecho escolhido no campo, em índices de letra de L.text (a caixa alta é só CSS, então bate letra a letra)
 function seditSel(el) {
   const s = getSelection(); if (!s || !s.rangeCount || !el.contains(s.anchorNode) || !el.contains(s.focusNode)) return null;
@@ -7236,8 +7239,8 @@ function seditPut(L, k, v) {
   const key = SED_RUN[k]; if (!key || !seditOpen(L) || L.capt || !SED.range) return false;
   const [a, b] = SED.range; if (!(b > a)) return false;
   const cs = textChars(L); if (b > cs.length) return false;
-  const base = k === 'color' ? L.color : k === 'weight' ? L.weight : k === 'italic' ? !!L.italic : L.font;
-  for (let j = a; j < b; j++) cs[j][key] = v === base ? null : v;
+  const z = k === 'size' ? (Math.abs(v / L.size - 1) < .004 ? null : +(v / L.size).toFixed(4)) : v === sedBase(L, k) ? null : v;
+  for (let j = a; j < b; j++) cs[j][key] = z;
   setTextChars(L, cs);
   RT.layout.clear(); changed(); needs = true;
   if (document.activeElement === SED.el) seditSelect(a, b);
@@ -7245,12 +7248,12 @@ function seditPut(L, k, v) {
 }
 // o valor que o painel mostra: com um trecho escolhido no campo do palco, o do trecho (igual em todas as letras; senão o da camada)
 function seditShown(L, k) {
-  const base = k === 'color' ? L.color : k === 'weight' ? L.weight : k === 'italic' ? !!L.italic : L[k];
+  const base = k === 'size' ? Math.round(L.size) : sedBase(L, k);
   const key = SED_RUN[k]; if (!key || !seditOpen(L) || L.capt || !SED.range) return base;
   const [a, b] = SED.range; if (!(b > a)) return base;
   const cs = textChars(L); if (b > cs.length) return base;
-  const v0 = cs[a][key] ?? base;
-  for (let j = a + 1; j < b; j++) if ((cs[j][key] ?? base) !== v0) return base;
+  const v0 = sedOf(L, k, cs[a]);
+  for (let j = a + 1; j < b; j++) if (sedOf(L, k, cs[j]) !== v0) return base;
   return v0;
 }
 // o trecho escolhido tem valores diferentes (o painel mostra o da camada, mas igualar tudo ao mesmo valor tem que valer)
@@ -7258,9 +7261,8 @@ function seditMixed(L, k) {
   const key = SED_RUN[k]; if (!key || !seditOpen(L) || L.capt || !SED.range) return false;
   const [a, b] = SED.range; if (!(b > a)) return false;
   const cs = textChars(L); if (b > cs.length) return false;
-  const base = k === 'color' ? L.color : k === 'weight' ? L.weight : k === 'italic' ? !!L.italic : L[k];
-  const v0 = cs[a][key] ?? base;
-  for (let j = a + 1; j < b; j++) if ((cs[j][key] ?? base) !== v0) return true;
+  const v0 = sedOf(L, k, cs[a]);
+  for (let j = a + 1; j < b; j++) if (sedOf(L, k, cs[j]) !== v0) return true;
   return false;
 }
 // campos do painel que se refazem quando o trecho escolhido muda (registrados por colorF/selectF/togF enquanto a edição está aberta)
@@ -10953,9 +10955,9 @@ function pasteLayers(p) {
   const src = (p && Array.isArray(p.layers) ? p.layers : []).filter(o => o && o.type && o.type !== 'bg');
   if (!src.length) return;
   const fr = insertTarget(new Set(src.map(o => o.id)));
-  // cola logo acima do que está escolhido; sem seleção, acima do original copiado (se ainda existe); senão no topo
+  // cola logo acima do que está escolhido; sem seleção, na frente de tudo (pedido do usuário)
   const topIdx = ids_ => Math.max(-1, ...S.layers.map((l, i) => ids_.has(l.id) ? i : -1));
-  let at = topIdx(RT.picks || new Set()); if (at < 0) at = topIdx(new Set(src.map(o => o.id)));
+  const at = topIdx(RT.picks || new Set());
   pushUndo();
   let fontsAdded = false;
   for (const f of p.fonts || []) if (f && f.family && !S.brand.loaded.some(x => x.family === f.family)) {
@@ -11006,7 +11008,14 @@ function pasteLayers(p) {
   toast((out.length > 1 ? `${out.length} elementos colados` : `"${out[0].name}" colado`) + (fr ? ` em "${groupName(fr)}"` : ''));
 }
 const typingIn = t => { const tag = (t && t.tagName || '').toLowerCase(); return tag === 'input' && !['range', 'checkbox', 'color', 'button'].includes(t.type) || tag === 'textarea' || tag === 'select' || !!(t && t.isContentEditable); };
-const overlayOpen = () => !!document.querySelector('.modal.ask') || !$('#files').hidden || !$('#modal').hidden || !$('#keys').hidden || !!CUTWIN || !!COMPWIN || !!TRECHOWIN;
+/* Texto selecionado na página que o Ctrl+C/X deve copiar no lugar das camadas. O clique duplo para descer de frame em frame
+   (palco, lista de Camadas, timeline) deixa uma palavra selecionada sem o usuário ver: ela não conta, senão o copiar "não fazia nada" */
+function pageTextSel() {
+  const s = getSelection(); if (!s || !String(s).trim().length) return false;
+  const n = s.anchorNode, el = n && (n.nodeType === 1 ? n : n.parentElement);
+  return !(el && el.closest && el.closest('#layers, #tl, #stageBox'));
+}
+const overlayOpen = () =>!!document.querySelector('.modal.ask') || !$('#files').hidden || !$('#modal').hidden || !$('#keys').hidden || !!CUTWIN || !!COMPWIN || !!TRECHOWIN;
 // copia/recorta o que está escolhido; `write` grava o texto na área de transferência (evento nativo ou navigator.clipboard)
 function copyPicked(kind, write) {
   const L = selL(), p = clipPayload(); if (!p) return false;
@@ -11018,7 +11027,7 @@ function copyPicked(kind, write) {
 }
 ['copy', 'cut'].forEach(kind => document.addEventListener(kind, e => {
   // texto selecionado copia o texto (seleção só de espaço/quebra de linha, sobra de um clique duplo fora do palco, não conta)
-  if (typingIn(e.target) || overlayOpen() || String(getSelection() || '').trim().length) return;
+  if (typingIn(e.target) || overlayOpen() || pageTextSel()) return;
   if (!clipPayload()) return;
   e.preventDefault(); copyPicked(kind, txt => e.clipboardData.setData('text/plain', txt));
 }));
@@ -11710,7 +11719,7 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
   const lo = opts.low ?? min, hi = opts.cap ?? max;
   const M = opts.menu, word = () => M && M.word ? M.word() : null;
   const show = () => word() ?? fmt(val());
-  const out = h('input', { type:'text', class:'num', id, inputmode:'decimal', 'aria-label':`${label} (valor)`, value:show() });
+  const out = h('input', { type:'text', class:'num', id, inputmode:'decimal', autocomplete:'off', 'aria-label':`${label} (valor)`, value:show() }); // autocomplete off: sem o balão de valores digitados antes do navegador
   // quem muda o valor por fora (palco, giro, deslizar) chama out._sync()
   out._sync = () => { if (document.activeElement !== out) out.value = show(); box.classList.toggle('word', word() != null); };
   // tamanho, opacidade, ritmo etc. valem para todas as camadas do mesmo tipo selecionadas; posição e tempo ficam só na principal
@@ -11768,6 +11777,7 @@ function rangeF(L, k, label, min, max, step, fmt = v => v, opts = {}) {
   const f = field(label, box, id);
   f.classList.add('nfield');
   nfDrag(f.firstChild, scrub);
+  if (opts.sedit) { const sy = () => out._sync(); sy.el = box; seditWatch(L, sy); } // trecho escolhido no palco mudou: o campo mostra o dele
   return f;
 }
 // largura/altura guardadas em fração da largura do quadro; o painel mostra sempre em px do vídeo (pedido do usuário: tamanho em pixel, nada em %)
@@ -12226,6 +12236,7 @@ function richF(L, label) {
       if (r.w != null) sp.dataset.w = r.w;
       if (r.i != null) sp.dataset.i = r.i ? '1' : '0';
       if (r.c) sp.dataset.c = r.c;
+      if (r.z != null) { sp.dataset.z = r.z; sp.style.fontSize = (r.z * 100) + '%'; }
       if (r.f) { sp.dataset.f = r.f; sp.style.fontFamily = `"${r.f}", var(--f-ui)`; }
       ed.append(sp);
     }
@@ -12236,17 +12247,18 @@ function richF(L, label) {
   // lê o editor mantendo o estilo de cada trecho
   const read = () => {
     const cs = [];
-    const walk = (n, w, it, cl, fm) => {
-      if (n.nodeType === 3) { for (const ch of n.data) cs.push({ ch:ch === ' ' ? ' ' : ch, w, i:it, c:cl, f:fm }); return; }
-      if (n.nodeName === 'BR') { cs.push({ ch:'\n', w, i:it, c:cl, f:fm }); return; }
-      if (n !== ed && /^(DIV|P)$/.test(n.nodeName) && cs.length && cs[cs.length - 1].ch !== '\n') cs.push({ ch:'\n', w, i:it, c:cl, f:fm });
+    const walk = (n, w, it, cl, fm, zz) => {
+      if (n.nodeType === 3) { for (const ch of n.data) cs.push({ ch:ch === ' ' ? ' ' : ch, w, i:it, c:cl, f:fm, z:zz }); return; }
+      if (n.nodeName === 'BR') { cs.push({ ch:'\n', w, i:it, c:cl, f:fm, z:zz }); return; }
+      if (n !== ed && /^(DIV|P)$/.test(n.nodeName) && cs.length && cs[cs.length - 1].ch !== '\n') cs.push({ ch:'\n', w, i:it, c:cl, f:fm, z:zz });
+      if (n.dataset && n.dataset.z) zz = +n.dataset.z;
       if (n.dataset && n.dataset.c) cl = n.dataset.c;
       if (n.dataset && n.dataset.w) w = +n.dataset.w;
       if (n.dataset && n.dataset.i) it = n.dataset.i === '1';
       if (n.dataset && n.dataset.f) fm = n.dataset.f;
-      for (const c of n.childNodes) walk(c, w, it, cl, fm);
+      for (const c of n.childNodes) walk(c, w, it, cl, fm, zz);
     };
-    walk(ed, null, null, null, null);
+    walk(ed, null, null, null, null, null);
     return cs;
   };
   // seleção em índices de letra
@@ -13053,7 +13065,9 @@ function styleProps(L) {
   const typo = (cap) => [fixH('Tipografia'),
     cap ? null : richF(L, 'Texto (Enter quebra a linha)'),
     fontGroup(L, { props:true }),
-    rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true, presets:FONT_SIZES, ico:'nf_fs', low:8 }),
+    // com um trecho escolhido no palco o tamanho vale só para ele (L.runs, z)
+    rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true, presets:FONT_SIZES, ico:'nf_fs', low:8, sedit:true, get:() => seditShown(L, 'size'),
+      put:v => { if (seditPut(L, 'size', v)) return; for (const o of peersOf(L)) o.size = v; RT.layout.clear(); } }),
     rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
     rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
     segF(L, 'align', 'Alinhamento', ALIGN_OPTS),
@@ -13747,7 +13761,7 @@ document.addEventListener('keydown', e => {
   if (mod && !e.altKey) {
     if (k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     // Ctrl+X: no Chrome o evento `cut` não dispara sem texto editável selecionado (o `copy` dispara), então recorta direto pelo teclado
-    else if (k === 'x' && !e.shiftKey && !String(getSelection() || '').trim().length) { if (clipPayload()) { e.preventDefault(); copyMenu('cut'); } }
+    else if (k === 'x' && !e.shiftKey && !pageTextSel()) { if (clipPayload()) { e.preventDefault(); copyMenu('cut'); } }
     else if (k === 'e' && !e.shiftKey && pfTargets().length) { e.preventDefault(); pathfinder('flatten'); }
     else if (k === 'y') { e.preventDefault(); redo(); }
     else if (k === 'g') { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); }

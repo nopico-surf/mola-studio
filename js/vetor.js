@@ -507,10 +507,10 @@ async function textVecs(L) {
       if (g.space) continue;
       const m = /^(italic )?(\d+)/.exec(g.f) || [], it = { ch:g.ch, x:line.x0 + g.x, y:line.baseline, w:+m[2] || L.weight, it:!!m[1], c:g.c || L.color };
       if (lay.tp) { const q = g.tp; it.x = q.x - Math.cos(q.a) * g.w / 2; it.y = q.y - Math.sin(q.a) * g.w / 2; it.r = q.a; } // texto em curva: a letra no caminho
-      const fam = g.fm || L.font; if (!byFam.has(fam)) byFam.set(fam, []); byFam.get(fam).push(it);
+      const fam = g.fm || L.font, z = g.z || 1, fk2 = fam + '|' + z; if (!byFam.has(fk2)) byFam.set(fk2, { fam, z, items:[] }); byFam.get(fk2).items.push(it); // z = tamanho do trecho (fração do da camada)
     }
-    for (const [fam, items] of byFam) {
-      const r = await glyphsD(fam, lay.size, items, T0); missing += r.missing;
+    for (const { fam, z, items } of byFam.values()) {
+      const r = await glyphsD(fam, lay.size * z, items, T0); missing += r.missing;
       for (const [c, d] of r.map) byCol.set(c, (byCol.get(c) || '') + d);
     }
   }

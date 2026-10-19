@@ -710,8 +710,8 @@ function capCreate(words, L0) {
   let L = L0 && S.layers.includes(L0) ? L0 : null;
   if (L) L.capt = { ...L.capt, words };
   else {
-    L = mkText('caption', { name:'Legenda', text:' ', in:'cut', out:'cut', inDur:0, outDur:0, x:.5 + curSlide(), y:.74, maxW:.88, align:'center' });
-    capApplyStyle(L, 'karaoke');
+    L = mkComp('caption'); // o padrão da Legenda (Componentes): estilo, cores, tamanho e quebra
+    L.x = .5 + curSlide(); L.text = ' '; RT.layout.clear();
     L.capt = { words, t0:0 }; L.start = 0; L.end = null;
     S.layers.push(L);
   }
@@ -773,6 +773,7 @@ function capSecs(L) {
   const chips = h('div', { class:'chips leg-styles', role:'group', 'aria-label':'Estilo da legenda' }, Object.entries(CAP_STYLES).map(([id, s]) =>
     h('button', { type:'button', class:'chip', 'aria-pressed':String((L.capStyle || 'karaoke') === id), title:s.tip, text:s.name, onclick:() => { pushUndo(); for (const o of peersOf(L)) if (o.capt) capApplyStyle(o, id); changed({ props:true }); renderProps(); } })));
   const out = [h('h3', { text:'Legenda', 'data-sum':st.name }), field('Estilo', chips, null, true)];
+  out.push(h('div', { class:'row' }, [h('button', { class:'btn small', text:'Salvar como padrão', title:'Toda legenda nova nasce com este estilo (editar em Adicionar, lápis da Legenda)', onclick:() => compFromLayer(L, 'caption') })]));
   if (st.hl) out.push(colorF(L, 'capHl', st.mode === 'box' ? 'Cor da caixa' : 'Cor do destaque'));
   if (st.mode === 'box') { L.capInk ??= L.color; out.push(colorF(L, 'capInk', 'Cor da palavra na caixa')); }
   if (st.mode !== 'one') out.push(rangeF(L, 'capWords', 'Palavras por vez', 1, 12, 1, v => String(Math.round(v))),

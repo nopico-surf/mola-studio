@@ -15,6 +15,10 @@ const COMP_DEF = {
   big:    { type:'text', role:'big', label:'Número', name:'Número grande', y:.38, p:{ text:'-30%', font:'@f2', weight:800, size:240, lh:1, color:'@c1', hl:'@c2', in:'counter', idle:'float' } },
   hl:     { type:'text', role:'offer', label:'Destaque', y:.6, p:{ text:'frete grátis hoje', font:'@f1', weight:700, size:56, color:'@c0', hl:'@c2', tbg:true, in:'highlight' } },
   impact: { type:'text', role:'k1', label:'Impacto', name:'Frase de impacto', y:.5, p:{ text:'Sem pressa.', font:'@f2', weight:800, size:132, upper:true, lh:1, color:'@c1', hl:'@c2', in:'stamp' } },
+  // legenda (pedido do usuário: deixar um padrão de legenda, como no título): o estilo (Karaokê…), cores, tamanho e quebra. O texto vem da fala (capt)
+  caption:{ type:'text', role:'caption', label:'Legenda', fem:true, name:'Legenda', y:.74, p:{ text:' ', font:'@f1', weight:800, size:72, color:'#FFFFFF', upper:true, ls:0, wsp:.12, lh:1.06, align:'center', maxW:.88,
+    stroke:true, strokeColor:'#000000', strokeW:9, strokePos:'outside', shadow:'none', tbg:false, in:'cut', out:'cut', inDur:0, outDur:0,
+    capStyle:'karaoke', capWords:5, capLines:2, capCh:18, capPunct:false, capHl:'@c2' } },
   cta:    { type:'cta', role:'cta', label:'Botão', y:.74, p:{ text:'Peça agora  →', font:'@f1', weight:700, size:40, color:'@c0', bg:'@c2', lineColor:'@c2', in:'pop', idle:'pulse' } },
   // sizeA/sizeS = largura do logo sozinho no quadro / com outros elementos (fração da largura); viram L.size ao inserir
   logo:   { type:'logo', label:'Logo', p:{ sizeA:.36, sizeS:.14, drawColor:'@c2', lineColor:'@c2', tintColor:'@c1', idle:'shine' } },
@@ -33,7 +37,7 @@ const COMP_DEF = {
   fx:     { type:'fx', label:'Transição', pl:'transições', fem:true, grp:'Cena', p:{ fx:'bars', intensity:.5, opacity:1, c1:'@c2', c2:'@c1', c3:'@c3' } },
   camera: { type:'camera', label:'Câmera', fem:true, grp:'Cena', p:{ cam:'push', intensity:.5, speed:1 } },
 };
-COMP_DEF.cta.pl = 'botões'; COMP_DEF.image.pl = 'imagens'; COMP_DEF.title.pl = 'títulos'; COMP_DEF.sub.pl = 'subtítulos'; COMP_DEF.big.pl = 'números';
+COMP_DEF.cta.pl = 'botões'; COMP_DEF.image.pl = 'imagens'; COMP_DEF.caption.pl = 'legendas'; COMP_DEF.title.pl = 'títulos'; COMP_DEF.sub.pl = 'subtítulos'; COMP_DEF.big.pl = 'números';
 const compPl = id => COMP_DEF[id].pl || COMP_DEF[id].label.toLowerCase() + 's';
 // não são camadas: só o arquivo (margem, formato/tempo)
 const COMP_FILE = new Set(['margin', 'file']);
@@ -41,12 +45,13 @@ const COMP_FILE = new Set(['margin', 'file']);
 const compSkip = (id, k) => (COMP_SKIP.has(k) && !(id === 'bg' && k === 'src')) || (id === 'pen' && PEN_GEOM.has(k)) || (id === 'video' && k === 'mh');
 // o desenho é de cada traço: do padrão da caneta só vem o estilo (preencher ou não sai de penFill)
 const PEN_GEOM = new Set(['d', 'vec', 'vecD', 'kind', 'size', 'mh', 'rot', 'fill', 'radius', 'radSep', 'rTL', 'rTR', 'rBR', 'rBL', 'points', 'inner']);
-const FONT_SLOTS = ['Título', 'Texto', 'Impacto'];
+const CAP_DEMO = ['Assim', 'fica', 'a', 'sua', 'legenda'].map((w, i) => ({ w, s:.2 + i * .45, e:.62 + i * .45 }));
+const FONT_SLOTS =['Título', 'Texto', 'Impacto'];
 // papel antigo (roteiros, preço) → componente, para "Usar como padrão" em elementos que não vieram de Adicionar
-const ROLE_COMP = { title:'title', brand:'title', sub:'sub', kicker:'kicker', tag:'kicker', big:'big', offer:'hl', k1:'impact', k2:'impact', k3:'impact', cta:'cta', logo:'logo', logoSmall:'logo', image:'image', shape:'shape' };
+const ROLE_COMP = { title:'title', brand:'title', sub:'sub', kicker:'kicker', tag:'kicker', big:'big', offer:'hl', k1:'impact', k2:'impact', k3:'impact', cta:'cta', caption:'caption', logo:'logo', logoSmall:'logo', image:'image', shape:'shape' };
 // o que é do elemento e não do estilo: não entra no padrão
 const COMP_SKIP = new Set(['id', 'type', 'role', 'name', 'comp', 'start', 'end', 'x', 'y', 'fpos', 'grp', 'locked', 'visible', 'flowFree', 'fsz',
-  'text', 'runs', 'src', 'video', 'vdur', 'vIn', 'vOut', 'vPause', 'vSkip', 'vSpeed', 'cut', 'svg', 'zoom', 'ix', 'iy',
+  'text', 'runs', 'capt', 'src', 'video', 'vdur', 'vIn', 'vOut', 'vPause', 'vSkip', 'vSpeed', 'cut', 'svg', 'zoom', 'ix', 'iy',
   'xin', // transição do clipe anterior: é do par de clipes na timeline, não do estilo
   // texto em curva: o caminho é do elemento (raio, forma seguida…), não do estilo
   'tpath', 'tpR', 'tpOff', 'tpFlip', 'tpV', 'tpDist', 'tpFit', 'tpBend', 'tpAmp', 'tpLen', 'tpPh', 'tpRef', 'tpPts', 'tpClosed']);
@@ -290,7 +295,8 @@ function openComps(id = 'title') {
       }
     }
     L.x = .5; L.y = .5; L.start = 0; L.end = 9999;
-    const R = { rs:1, export:true }, tt = t ?? restTime(L);
+    if (cur === 'caption') L.capt ||= { words:CAP_DEMO, t0:0 }; // frase de exemplo, para ver o estilo
+    const R = { rs:1, export:true }, tt = t ?? (cur === 'caption' ? 1.2 : restTime(L));
     const draw = k => {
       R.rs = k; x.setTransform(k, 0, 0, k, cw / 2 - W() / 2 * k, ch / 2 - H() / 2 * k);
       try { if (L.type === 'text') drawText(x, L, tt, R); else drawBlock(x, L, tt, R); } catch (e) { console.warn(e); }
@@ -298,7 +304,7 @@ function openComps(id = 'title') {
     // mede no tamanho real fora da tela e ajusta a escala para caber
     const m = document.createElement('canvas').getContext('2d'); m.canvas.width = 2; m.canvas.height = 2;
     if (t == null || !L._fitK) {
-      try { if (L.type === 'text') drawText(m, L, restTime(L), R); else drawBlock(m, L, restTime(L), R); } catch (e) {}
+      try { if (L.type === 'text') drawText(m, L, cur === 'caption' ? 1.2 : restTime(L), R); else drawBlock(m, L, restTime(L), R); } catch (e) {}
       const b = L._bounds; L._fitK = b && b.w > 0 ? Math.min(.9 * cw / b.w, .8 * ch / b.h, cw / W() * 1.6) : cw / W();
     }
     draw(L._fitK);
@@ -367,7 +373,7 @@ function openComps(id = 'title') {
   };
   const playLen = L => {
     const t = COMP_DEF[cur].type;
-    return t === 'bg' ? 5 : t === 'camera' ? 3 : t === 'fx' ? ((FXS[L.fx] || {}).dur || .8) + .6 : restTime(L) + .4;
+    return cur === 'caption' ? 2.8 : t === 'bg' ? 5 : t === 'camera' ? 3 : t === 'fx' ? ((FXS[L.fx] || {}).dur || .8) + .6 : restTime(L) + .4;
   };
   const playPrev = () => {
     cancelAnimationFrame(prevRaf);
@@ -381,7 +387,7 @@ function openComps(id = 'title') {
     playB.hidden = t === 'margin' || t === 'file';
     // quadro em pé precisa de mais altura que um elemento solto
     const ph = COMP_DEF[cur].grp ? 900 : 600; if (pv.height !== ph) { pv.height = ph; pv.style.aspectRatio = `${pv.width} / ${ph}`; }
-    playB.lastChild.textContent = t === 'bg' ? 'Ver movimento' : t === 'camera' ? 'Ver câmera' : t === 'fx' ? 'Ver transição' : 'Ver entrada';
+    playB.lastChild.textContent = cur === 'caption' ? 'Ver legenda' : t === 'bg' ? 'Ver movimento' : t === 'camera' ? 'Ver câmera' : t === 'fx' ? 'Ver transição' : 'Ver entrada';
     playB.title = t === 'bg' ? 'Toca alguns segundos do fundo' : t === 'camera' ? 'Toca o movimento da câmera' : t === 'fx' ? 'Toca a transição uma vez' : 'Toca a entrada uma vez';
     drawPrev(); drawNav();
   };
@@ -444,7 +450,23 @@ function openComps(id = 'title') {
     body.innerHTML = '';
     put(h('h3', { class:'comp-h', text:d.label }, [compCustom(cur) ? h('small', { text:'editado' }) : null]));
     if (d.type === 'text' || d.type === 'cta') {
-      put(textF(P, 'text', d.type === 'cta' ? 'Texto inicial do botão' : 'Texto inicial'), fontPick(),
+      if (cur === 'caption') { // estilo (Karaokê…) troca tipografia, cores e quebra de uma vez; abaixo cada coisa se ajusta
+        const st = CAP_STYLES[P.capStyle] || CAP_STYLES.karaoke;
+        put(h('p', { class:'hint', text:'Toda legenda gerada nasce com este estilo. As palavras vêm da fala do vídeo.' }),
+          field('Estilo', h('div', { class:'chips leg-styles', role:'group', 'aria-label':'Estilo da legenda' }, Object.entries(CAP_STYLES).map(([id, s]) =>
+            h('button', { type:'button', class:'chip', 'aria-pressed':String(P.capStyle === id), title:s.tip, text:s.name, onclick:() => { pushUndo(); capApplyStyle(P, id); draw(); } }))), null, true),
+          st.hl ? colorPick('capHl', st.mode === 'box' ? 'Cor da caixa' : 'Cor do destaque') : null,
+          st.mode === 'box' ? colorPick('capInk', 'Cor da palavra na caixa') : null);
+        if (st.mode !== 'one') put(rangeF(P, 'capWords', 'Palavras por vez', 1, 12, 1, v => String(Math.round(v))),
+          segF(P, 'capLines', 'Linhas', [[1, '1 linha'], [2, '2 linhas']]),
+          rangeF(P, 'capCh', 'Letras por linha', 8, 40, 1, v => String(Math.round(v))));
+        put(rangeF(P, 'wsp', 'Entre palavras', 0, 1, .01, v => (v || 0).toFixed(2) + 'em', { get:() => P.wsp || 0 }), checkF(P, 'capPunct', 'Mostrar a pontuação'),
+          checkF(P, 'stroke', 'Contorno'));
+        if (P.stroke) put(colorPick('strokeColor', 'Cor do contorno'), rangeF(P, 'strokeW', 'Espessura', 1, 40, .5, v => v + 'px'));
+        put(fontPick(),
+          selectF(P, 'weight', 'Peso', weightsOf(P.font).map(([v, t]) => [v, `${t} ${v}`]), { num:true }),
+          rangeF(P, 'size', 'Tamanho', 16, 400, 1, px, { presets:FONT_SIZES, ico:'nf_fs', low:8 }), colorPick('color', 'Cor do texto'));
+      } else put(textF(P, 'text', d.type === 'cta' ? 'Texto inicial do botão' : 'Texto inicial'), fontPick(),
         selectF(P, 'weight', 'Peso', weightsOf(P.font).map(([v, t]) => [v, `${t} ${v}`]), { num:true }),
         rangeF(P, 'size', 'Tamanho', 16, d.type === 'cta' ? 120 : 400, 1, px, { presets:FONT_SIZES, ico:'nf_fs', low:8 }), colorPick('color', d.type === 'cta' ? 'Cor do texto' : 'Cor'));
       if (d.type === 'text') {
@@ -524,7 +546,7 @@ function openComps(id = 'title') {
         rangeF(P, 'intensity', 'Intensidade', 0, 1, .01, v => Math.round(v * 100) + '%'),
         ['punch', 'shake', 'hand'].includes(P.cam) ? rangeF(P, 'speed', 'Velocidade', .4, 3, .05, v => v.toFixed(2) + '×') : null);
     }
-    if (!d.grp) {
+    if (!d.grp && cur !== 'caption') { // a animação da legenda é o estilo dela
       put(h('h3', { class:'sub', text:'Animação' }));
       const M = d.type === 'text' ? TP : BP, ins = d.type === 'text' ? TEXT_IN : BLOCK_IN[d.type], outs = d.type === 'text' ? TEXT_OUT : BLOCK_OUT[d.type];
       put(presetSel(P, 'in', 'Entrada', [...new Set([P.in, ...ins].filter(Boolean))], M),
@@ -555,6 +577,7 @@ function openComps(id = 'title') {
     if (!ov.contains(document.activeElement)) card.focus({ preventScroll:true });
   };
   const SHOWN = new Set(['text', 'font', 'weight', 'size', 'color', 'hl', 'ls', 'lh', 'align', 'upper', 'lower', 'cap', 'title', 'italic', 'bg', 'radius', 'padX', 'padY', 'kind', 'c1', 'c2', 'mh', 'sizeA', 'sizeS', 'drawColor', 'in', 'out', 'idle', 'inDur',
+    'capStyle', 'capWords', 'capLines', 'capCh', 'capPunct', 'capHl', 'capInk', 'wsp', 'shadow', 'maxW', 'outDur',
     'size', 'tbg', 'hlPadX', 'hlPadY', 'hlRad', 'hlBox', 'stroke', 'strokeW', 'strokeColor', 'strokePos', 'mode', 'fill', 'penFill', 'c3', 'c4']);
   const SHOWN_G = new Set(['mode', 'c1', 'c2', 'c3', 'c4', 'src', 'darken', 'angle', 'motion', 'grain', 'on', 'top', 'right', 'bottom', 'left',
     'format', 'duration', 'fps', 'slides', 'loop', 'fx', 'cam', 'intensity', 'speed', 'opacity']);
