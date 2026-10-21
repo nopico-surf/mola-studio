@@ -6000,7 +6000,7 @@ const HDIR = { nw:[-1, -1], n:[0, -1], ne:[1, -1], e:[1, 0], se:[1, 1], s:[0, 1]
 const HCUR = { nw:'nwse-resize', se:'nwse-resize', ne:'nesw-resize', sw:'nesw-resize', n:'ns-resize', s:'ns-resize', e:'ew-resize', w:'ew-resize' };
 function handlesOf(L) {
   const ub = playing ? null : selUnion(), p = ub ? 0 : selPad(L);
-  if (RT.pen || RT.vec) return []; // caneta e edição de pontos: sem alças de escala
+  if (RT.pen || RT.vec || SED.el) return []; // caneta, edição de pontos e texto sendo editado no palco: sem alças de escala
   if (!ub && (!L || L.type === 'bg' || L.locked || !L._bounds || !L.visible || playing || !phase(L, T))) return [];
   const b = ub || L._bounds, x0 = b.x - p, y0 = b.y - p, x1 = b.x + b.w + p, y1 = b.y + b.h + p, mx = b.x + b.w / 2, my = b.y + b.h / 2;
   const at = { nw:[x0, y0], n:[mx, y0], ne:[x1, y0], e:[x1, my], se:[x1, y1], s:[mx, y1], sw:[x0, y1], w:[x0, my] };
@@ -6023,6 +6023,7 @@ const MODK = { sh:false };
 ['pointerdown', 'pointermove', 'keydown', 'keyup'].forEach(t => window.addEventListener(t, e => { MODK.sh = !!(e.shiftKey || e.ctrlKey || e.metaKey); }, true));
 window.addEventListener('blur', () => { MODK.sh = false; });
 function handleAt(pt) {
+  if (SED.el) return null; // editando o texto no palco: começar a seleção um pouco fora das letras pegava a alça e mudava a largura do texto
   const r = hRad() * 1.3, d = q => Math.hypot(pt.x - q.x, pt.y - q.y);
   const th = tpHandle(selL()); if (th && d(th) <= hRad() * 1.1) return th; // texto em curva: a bolinha onde ele se apoia
   const hs = handlesOf(selL()), hit = hs.filter(q => Math.abs(pt.x - q.x) <= r && Math.abs(pt.y - q.y) <= r).sort((a, b) => d(a) - d(b))[0];
@@ -6479,8 +6480,9 @@ function drillSelect(L, g0) { // g0: clique no fundo pintado de um frame (não n
 }
 cv.addEventListener('dblclick', ev => {
   if (RT.pen || RT.vec) return; // caneta e edição de pontos tratam o clique sozinhas
+  if (SED.el) return; // clique duplo logo fora das letras do texto que já está sendo editado: fica no campo (seditPointer), não reabre com tudo escolhido
   const hd0 = handleAt(stagePt(ev)); if (hd0 && (hd0.rad || hd0.tp)) return; // bolinha do canto (ou de apoio do texto em curva): não entra na edição
-  const L = hitTest(stagePt(ev));
+  const L = hitTest(stagePt(ev)) || (o => o && (o.type === 'text' || o.type === 'cta') ? o : null)(ghostAt(stagePt(ev))); // texto escolhido que ainda não entrou (contorno tracejado): também edita
   if (!L) { // fundo pintado de um frame: desce um nível até ele (o cartão de dentro da coluna)
     const fh = !ev.shiftKey && !ev.ctrlKey && !ev.metaKey && frameHitG(stagePt(ev)); if (fh) drillSelect(fh.L, fh.g);
     return;
@@ -7166,8 +7168,53 @@ function seditInput() {
   const txt = seditRead(el);
   if (!SED.dirty) { pushUndo(); SED.dirty = true; }
   if (L.capt) { const b = capBlocks(L)[SED.k]; if (b && txt.trim()) { if (capEdit(L, b, txt, { live:true })) SED.realign = true; } }
-  else { L.text = txt; changed(); }
+  else { if (runsOf(L)) seditRetext(L, txt); else L.text = txt; changed(); }
   needs = true; seditPlace();
+}
+// texto com trechos de estilo (L.runs): só trocar L.text desfazia todos eles na primeira tecla (o negrito ou o tamanho da palavra
+// sumia ao digitar). As letras que ficaram mantêm o estilo e as novas herdam o da letra antes delas, como em qualquer editor.
+function seditRetext(L, txt) {
+  const old = textChars(L), nw = [...txt];
+  let p = 0; while (p < old.length && p < nw.length && old[p].ch === nw[p]) p++;
+  let s = 0; while (s < old.length - p && s < nw.length - p && old[old.length - 1 - s].ch === nw[nw.length - 1 - s]) s++;
+  const ref = old[p - 1] || old[old.length - s] || {};
+  setTextChars(L, [...old.slice(0, p), ...nw.slice(p, nw.length - s).map(ch => ({ ...ref, ch })), ...old.slice(old.length - s)]);
+}
+// o campo com o peso, itálico, fonte e tamanho de cada trecho: com o texto corrido numa fonte só, as letras do campo ficavam mais largas
+// ou mais estreitas que as do canvas e o cursor e a seleção caíam na letra errada
+function seditFill(el, L) {
+  const rs = !L.capt && runsOf(L);
+  el.textContent = rs ? '' : seditTxt(L);
+  if (rs) for (const r of rs) {
+    if (!r.t) continue;
+    const sp = h('span', { text:r.t });
+    if (r.w != null) sp.style.fontWeight = r.w;
+    if (r.i != null) sp.style.fontStyle = r.i ? 'italic' : 'normal';
+    if (r.f) sp.style.fontFamily = `"${r.f}", system-ui, sans-serif`;
+    if (r.z != null) sp.style.fontSize = (r.z * 100) + '%';
+    el.append(sp);
+  }
+}
+// clicar ou arrastar logo fora das letras (na caixa do texto ou pouco além dela) põe o cursor / escolhe no campo, como no Figma;
+// antes o clique ia para o palco: pegava a alça da caixa (a largura mudava) ou fechava a edição
+const SED_NEAR = 14;
+function seditNear(e) { const r = SED.el.getBoundingClientRect(); return e.clientX >= r.left - SED_NEAR && e.clientX <= r.right + SED_NEAR && e.clientY >= r.top - SED_NEAR && e.clientY <= r.bottom + SED_NEAR; }
+function seditCaret(x, y) {
+  const el = SED.el, r = el.getBoundingClientRect();
+  x = clamp(x, r.left + 1, r.right - 1); y = clamp(y, r.top + 1, r.bottom - 1);
+  if (document.caretPositionFromPoint) { const c = document.caretPositionFromPoint(x, y); if (c && el.contains(c.offsetNode)) return [c.offsetNode, c.offset]; }
+  if (document.caretRangeFromPoint) { const c = document.caretRangeFromPoint(x, y); if (c && el.contains(c.startContainer)) return [c.startContainer, c.startOffset]; }
+  return null;
+}
+function seditPointer(e) {
+  const el = SED.el, s = getSelection();
+  el.focus({ preventScroll:true });
+  const a = e.shiftKey && s.rangeCount && el.contains(s.anchorNode) ? [s.anchorNode, s.anchorOffset] : seditCaret(e.clientX, e.clientY);
+  if (!a) return;
+  const to = ev => { const f = seditCaret(ev.clientX, ev.clientY) || a; try { s.setBaseAndExtent(a[0], a[1], f[0], f[1]); } catch (er) {} };
+  to(e);
+  const up = () => { removeEventListener('pointermove', to, true); removeEventListener('pointerup', up, true); removeEventListener('pointercancel', up, true); };
+  addEventListener('pointermove', to, true); addEventListener('pointerup', up, true); addEventListener('pointercancel', up, true);
 }
 // abre a edição no palco; devolve false quando não dá (outro tipo, bloqueada, sem caixa medida)
 function stageEdit(L) {
@@ -7185,7 +7232,7 @@ function stageEdit(L) {
   SED.id = L.id; SED.k = b ? b.k : null; SED.dirty = false; SED.realign = false; SED.css = ''; SED.fr = undefined;
   const el = h('div', { class:'sedit', contenteditable:'plaintext-only', spellcheck:'true', lang:'pt-BR', role:'textbox', 'aria-label':'Texto no palco' });
   SED.el = el;
-  el.textContent = SED.orig = seditTxt(L);
+  SED.orig = seditTxt(L); SED.origRuns = L.runs ? JSON.parse(JSON.stringify(L.runs)) : null; seditFill(el, L);
   $('#stageBox').append(el);
   seditPlace();
   el.focus();
@@ -7218,7 +7265,7 @@ function seditClose(cancel) {
   if (!L) { needs = true; return; }
   if (cancel && dirty) { // Esc: volta ao texto de antes
     if (L.capt) { const b = capBlocks(L)[k]; if (b) capEdit(L, b, orig, { live:true }); }
-    else L.text = orig;
+    else { L.text = orig; L.runs = SED.origRuns; } // o negrito/tamanho dado no trecho também volta
   }
   if (!cancel && dirty && L.capt && (realign || orig === CAP_NEW)) { const b = capBlocks(L)[k]; if (b) capRealign(L, L.capt.words, b.i0, b.i1 - b.i0 + 1); } // o tempo das palavras novas (trecho escrito à mão: sempre)
   if (L.capt && orig === CAP_NEW) { const b = capBlocks(L)[k]; if (b && b.ws.length === 1 && b.ws[0].w === CAP_NEW) { const fz = capFz(L), ws = L.capt.words; fz.splice(k, 1); capPut(L, fz, [...ws.slice(0, b.i0), ...ws.slice(b.i1 + 1)]); RT.capSel = null; } } // trecho novo que ficou vazio sai
@@ -7257,6 +7304,7 @@ function seditPut(L, k, v) {
   for (let j = a; j < b; j++) cs[j][key] = z;
   setTextChars(L, cs);
   RT.layout.clear(); changed(); needs = true;
+  seditFill(SED.el, L); // o campo acompanha o trecho novo (peso/tamanho mudam a largura das letras)
   if (document.activeElement === SED.el) seditSelect(a, b);
   return true;
 }
@@ -7309,6 +7357,7 @@ document.addEventListener('pointerdown', e => {
   if (!SED.el) return;
   const t = e.target;
   if (!t || !t.closest || t.closest('.sedit') || t.closest('#props') || t.closest('.pop') || t.closest('.cp-pop') || t.closest('.ctx') || t.closest('.mpop') || t.closest('.modal')) return;
+  if (e.button === 0 && !RT.hand && t.closest('#stageBox') && !t.closest('#stageHint') && seditNear(e)) { e.preventDefault(); e.stopPropagation(); seditPointer(e); return; }
   seditClose();
 }, true);
 

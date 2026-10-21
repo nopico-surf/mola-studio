@@ -122,6 +122,53 @@ const ok = (c, msg, extra) => { if (c) console.log('ok   ' + msg); else { falhas
   await p.evaluate(() => seditClose());
   await p.waitForTimeout(200);
 
+  // reclamação do usuário: "às vezes altera o tamanho" — começar a seleção um pouco fora das letras pegava a alça da caixa (a largura
+  // do texto mudava e a edição fechava); e digitar depois de pôr uma palavra em negrito desfazia o negrito
+  await p.evaluate(() => {
+    const L = S.layers.find(l => l.type === 'text');
+    L.text = 'Oferta de hoje'; L.runs = null; L.weight = 500; L.fixW = undefined; L.maxW = .84; L.x = .5; ensureBounds([L]); changed({ layers: true, props: true });
+  });
+  await p.waitForTimeout(300);
+  c = await mid('text');
+  await p.mouse.dblclick(c.x, c.y);
+  await p.waitForTimeout(300);
+  const geo0 = await p.evaluate(() => { const L = S.layers.find(l => l.type === 'text'), r = document.querySelector('.sedit').getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom, maxW: L.maxW, fixW: !!L.fixW, x: L.x, size: L.size }; });
+  const ym = (geo0.t + geo0.b) / 2;
+  await p.mouse.move(geo0.l - 6, ym); await p.mouse.down(); await p.mouse.move(geo0.l + 70, ym, { steps: 8 }); await p.mouse.up();
+  await p.waitForTimeout(300);
+  const geo1 = await p.evaluate(() => { const L = S.layers.find(l => l.type === 'text'); return { aberto: !!document.querySelector('.sedit'), sel: String(getSelection()), maxW: L.maxW, fixW: !!L.fixW, x: L.x, size: L.size }; });
+  ok(geo1.aberto && geo1.maxW === geo0.maxW && geo1.fixW === geo0.fixW && geo1.x === geo0.x && geo1.size === geo0.size,
+    'arrastar a partir de logo fora das letras não mexe no tamanho nem fecha a edição', { geo0, geo1 });
+  ok(geo1.sel.length >= 2 && 'Oferta de hoje'.startsWith(geo1.sel), 'esse arrasto escolhe o começo do texto', geo1.sel);
+  // canto da caixa (onde ficava a alça): clicar ali também fica no campo
+  await p.mouse.click(geo0.r + 5, geo0.b + 5);
+  await p.waitForTimeout(250);
+  const geo2 = await p.evaluate(() => { const L = S.layers.find(l => l.type === 'text'); return { aberto: !!document.querySelector('.sedit'), maxW: L.maxW, size: L.size }; });
+  ok(geo2.aberto && geo2.maxW === geo0.maxW && geo2.size === geo0.size, 'clicar no canto da caixa durante a edição não escala o texto', geo2);
+  // negrito na 1ª palavra e depois digitar no fim dela: o negrito continua e a letra nova também é negrito
+  await p.evaluate(() => seditSelect(0, 6));
+  await p.keyboard.press('Control+b');
+  await p.waitForTimeout(250);
+  await p.evaluate(() => seditSelect(6, 6));
+  await p.keyboard.type('s');
+  await p.waitForTimeout(250);
+  const rb = await p.evaluate(() => { const L = S.layers.find(l => l.type === 'text'); return { text: L.text, runs: runsOf(L) && runsOf(L).map(r => [r.t, r.w || null]) }; });
+  ok(rb.text === 'Ofertas de hoje' && rb.runs && rb.runs[0][0] === 'Ofertas' && rb.runs[0][1] === 700,
+    'digitar depois do negrito mantém o negrito (a letra nova herda o da anterior)', rb);
+  // o campo acompanha a largura do negrito: o fim do texto no campo bate com o fim no canvas
+  const wd = await p.evaluate(() => {
+    const L = S.layers.find(l => l.type === 'text'), el = document.querySelector('.sedit'), r = document.createRange(); r.selectNodeContents(el);
+    const a = r.getBoundingClientRect(), cr = cv.getBoundingClientRect(), s = cr.width / FW(), lay = layoutText(L, caseTxt(L, L.text));
+    return { campo: a.width, canvas: lay.innerW * (L._bounds.k || 1) * s, spans: el.querySelectorAll('span').length };
+  });
+  ok(wd.spans >= 2 && Math.abs(wd.campo - wd.canvas) < 4, 'com um trecho em negrito o campo tem a mesma largura do texto do canvas', wd);
+  // Esc volta o texto e o negrito
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(250);
+  const re = await p.evaluate(() => { const L = S.layers.find(l => l.type === 'text'); return { text: L.text, runs: L.runs || null }; });
+  ok(re.text === 'Oferta de hoje' && !re.runs,'Esc desfaz também o negrito dado durante a edição', re);
+  await p.screenshot({ path: path.join(outDir, 'texto-no-palco-6.png') });
+
   // botão: clique duplo abre na tela, em uma linha
   await p.evaluate(() => {
     S.layers = S.layers.filter(l => l.type === 'bg'); changed({ layers: true, props: true });
