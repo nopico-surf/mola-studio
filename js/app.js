@@ -2983,8 +2983,9 @@ function layoutText(L, txt) {
   };
   for (const c of all) { if (c.ch === '\n') { flush(); pStart = c.i + 1; } else para.push(c); }
   flush();
-  const lineH = size * (L.lh || 1.1);
-  let blockH = lines.length * lineH;
+  // entrelinha pode ser 0 ou negativa (até −1): a linha seguinte fica em cima da anterior; a caixa tem pelo menos uma linha de altura
+  const step = size * (L.lh ?? 1.1), lineH = Math.abs(step);
+  let blockH = (lines.length - 1) * lineH + Math.max(lineH, size * .8);
   let wi = 0, ci = 0, blockW = 0;
   const out = lines.map((cs, li) => {
     const glyphs = []; let k = 0, segX = 0, nsp = 0;
@@ -3003,7 +3004,7 @@ function layoutText(L, txt) {
     }
     wi++;
     const width = mw(cs); blockW = Math.max(blockW, width);
-    const baseline = -blockH / 2 + li * lineH + lineH / 2 + size * .34;
+    const baseline = (li - (lines.length - 1) / 2) * step + size * .34;
     return { text:cs.map(c => c.ch).join(''), glyphs, width, baseline, li, i0:i0s[li] };
   });
   if (L.fixW && !tk) blockW = Math.max(blockW, maxW); // largura fixa (puxada pela alça lateral): a caixa tem essa largura e o texto se alinha dentro
@@ -7218,7 +7219,8 @@ function seditClose(cancel) {
     if (L.capt) { const b = capBlocks(L)[k]; if (b) capEdit(L, b, orig, { live:true }); }
     else L.text = orig;
   }
-  if (!cancel && dirty && L.capt && realign) { const b = capBlocks(L)[k]; if (b) capRealign(L, L.capt.words, b.i0, b.i1 - b.i0 + 1); } // o tempo das palavras novas
+  if (!cancel && dirty && L.capt && (realign || orig === CAP_NEW)) { const b = capBlocks(L)[k]; if (b) capRealign(L, L.capt.words, b.i0, b.i1 - b.i0 + 1); } // o tempo das palavras novas (trecho escrito à mão: sempre)
+  if (L.capt && orig === CAP_NEW) { const b = capBlocks(L)[k]; if (b && b.ws.length === 1 && b.ws[0].w === CAP_NEW) { const fz = capFz(L), ws = L.capt.words; fz.splice(k, 1); capPut(L, fz, [...ws.slice(0, b.i0), ...ws.slice(b.i1 + 1)]); RT.capSel = null; } } // trecho novo que ficou vazio sai
   changed({ props:true }); renderTimeline(); needs = true; updStageHint();
 }
 
@@ -11205,13 +11207,17 @@ function placeBar(bar, L) {
   // a onda acompanha o corte: sem refazer, o desenho de antes esticava junto com a barra
   if (L.type === 'audio' && bar.querySelector('.tl-awave')) drawAudBar(bar, L);
   // legenda: cada trecho é um pedaço dentro da barra (arrastar as bordas, mover, Delete apaga; js/legenda.js)
-  if (L.capt || bar.querySelector('.tl-cb')) {
-    bar.querySelectorAll('.tl-cb').forEach(e => e.remove());
+  if (L.capt || bar.querySelector('.tl-cb,.tl-cmiss')) {
+    bar.querySelectorAll('.tl-cb,.tl-cmiss').forEach(e => e.remove());
     if (L.capt) {
       const off = capOff(L), sk = capSelK(L);
       for (const b of capBlocks(L)) {
         const x0 = Math.max(0, (b.s + off - L.start) / span), x1 = Math.min(1, (b.e + off - L.start) / span); if (x1 <= 0 || x0 >= 1) continue;
         bar.append(h('i', { class:'tl-cb' + (b.k === sk ? ' on' : ''), style:`left:${x0 * 100}%;width:${(x1 - x0) * 100}%` }));
+      }
+      for (const m of L.capt.miss || []) { // fala sem legenda (o painel oferece ouvir de novo ou escrever)
+        const x0 = Math.max(0, (m.s + off - L.start) / span), x1 = Math.min(1, (m.e + off - L.start) / span); if (x1 <= 0 || x0 >= 1) continue;
+        bar.append(h('i', { class:'tl-cmiss', title:'Fala sem legenda', style:`left:${x0 * 100}%;width:${(x1 - x0) * 100}%` }));
       }
     }
   }
@@ -13114,7 +13120,7 @@ function styleProps(L) {
     // com um trecho escolhido no palco o tamanho vale só para ele (L.runs, z)
     rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true, presets:FONT_SIZES, ico:'nf_fs', low:8, sedit:true, get:() => seditShown(L, 'size'),
       put:v => { if (seditPut(L, 'size', v)) return; for (const o of peersOf(L)) o.size = v; RT.layout.clear(); } }),
-    rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
+    rangeF(L, 'lh', 'Entrelinha', -1, 1.6, .01, v => v.toFixed(2), { layout:true }),
     rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
     segF(L, 'align', 'Alinhamento', ALIGN_OPTS),
     togF(L, 'Letras', CASE_OPTS)];

@@ -65,7 +65,7 @@ const ok = (c, msg, extra) => { if (c) console.log('ok   ' + msg); else { falhas
   // palavra duvidosa marcada e filtro
   const dub = await p.evaluate(() => ({ marks:[...document.querySelectorAll('.leg-tx mark')].map(m => m.textContent), rows:document.querySelectorAll('.leg-row').length }));
   ok(dub.marks.length === 1 && dub.marks[0] === 'Mola', 'palavra com confiança baixa marcada na lista', dub);
-  await p.click('label:has-text("Mostrar só os trechos para conferir")'); await p.waitForTimeout(200);
+  await p.click('label:has-text("Mostrar só o que precisa conferir")'); await p.waitForTimeout(200);
   ok(await p.evaluate(() => document.querySelectorAll('.leg-row').length) === 1, 'filtro: só o trecho com a palavra para conferir');
   // correção digitada: mesmo número de palavras (o tempo fica)
   const row = p.locator('.leg-tx').first();

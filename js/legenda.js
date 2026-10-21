@@ -303,6 +303,33 @@ function legWorkerMain() {
     fillGaps(ws, t0, t1);
     return ws.map(w => ({ w:w.w, s:+w.s.toFixed(3), e:+w.e.toFixed(3), c:w.c == null ? null : +w.c.toFixed(3) }));
   }
+  // ouvir de novo só um trecho (pedido do usuário: apontar onde a fala não foi reconhecida). O Whisper ouve só esse pedaço, com a
+  // fala dele levada a um volume bom (fala baixa ou abafada é o que mais se perde), em duas tentativas: com 1 s de contexto em
+  // volta e só o trecho. Fica a que o alinhador reconhece melhor; só voltam as palavras que caem dentro de [t0, t1].
+  async function relisten(a, t0, t1, lang) {
+    const sr = 16000; let best = [], bs = -1;
+    for (const pad of [1, .15]) {
+      const z0 = Math.max(0, Math.floor((t0 - pad) * sr)), z1 = Math.min(a.length, Math.ceil((t1 + pad) * sr)); if (z1 - z0 < sr * .3) continue;
+      const x = a.slice(z0, z1), o = z0 / sr, i0 = Math.max(0, Math.floor((t0 - o) * sr)), i1 = Math.min(x.length, Math.ceil((t1 - o) * sr));
+      const rm = []; for (let i = i0; i + 320 <= i1; i += 320) { let s = 0; for (let j = i; j < i + 320; j++) s += x[j] * x[j]; rm.push(Math.sqrt(s / 320)); }
+      rm.sort((p, q) => p - q); const pk = rm[Math.floor(rm.length * .9)] || 0, g = pk > 1e-5 ? Math.min(24, Math.max(1, .12 / pk)) : 1;
+      if (g > 1.05) for (let i = 0; i < x.length; i++) x[i] = Math.tanh(x[i] * g); // tanh: o que já era alto não estoura
+      prog('reasr', { f:pad > .5 ? 0 : .5 });
+      const r = await asr(x, { language:lang || 'portuguese', task:'transcribe', return_timestamps:true }), segs = [];
+      for (const c of r.chunks || [{ text:r.text, timestamp:[0, x.length / sr] }]) {
+        const text = (c.text || '').trim(); if (!text || JUNK.test(text)) continue;
+        const ts = c.timestamp || [], s = ts[0] ?? 0, en = ts[1] ?? x.length / sr;
+        segs.push({ s, e:Math.max(s + .1, en), text, words:text.split(/\s+/).filter(Boolean).map(w => ({ w })) });
+      }
+      if (!segs.length) continue;
+      align(await logprobs(x, () => {}), segs);
+      const ws = segs.flatMap(s => s.words.map((w, i) => ({ w:w.w, s:w.s + o, e:w.e + o, c:w.c, seg:i === 0 }))).filter(w => { const m = (w.s + w.e) / 2; return m >= t0 - .1 && m <= t1 + .1; });
+      const sc = ws.reduce((t, w) => t + (w.c == null ? .5 : w.c), 0);
+      if (sc > bs) { bs = sc; best = ws; }
+      if (ws.length && sc / ws.length > .7) break; // já reconheceu bem: não precisa da segunda
+    }
+    return best.map(w => ({ w:w.w, s:+w.s.toFixed(3), e:+w.e.toFixed(3), c:w.c == null ? null : +w.c.toFixed(3), ...(w.seg ? { seg:1 } : {}) }));
+  }
 
   let AUDIO = null;
   self.onmessage = async ev => {
@@ -335,6 +362,9 @@ function legWorkerMain() {
       } else if (m.type === 'realign') {
         if (m.audio) AUDIO = m.audio;
         post({ type:'done', id:m.id, words:await realign(AUDIO, m.words, m.t0, m.t1) });
+      } else if (m.type === 'relisten') {
+        if (m.audio) AUDIO = m.audio;
+        post({ type:'done', id:m.id, words:await relisten(AUDIO, m.t0, m.t1, m.lang) });
       }
     } catch (e) {
       post({ type:'error', id:m.id, stage:m.type, msg:String(e && e.message || e) });
@@ -655,8 +685,8 @@ async function capAudio() {
   for (let i = 0; i < a.length; i++) out[i] = (a[i] + b[i]) / 2;
   return out;
 }
-function capProgWin(onCancel) {
-  const title = h('h2', { text:'Gerando a legenda' }), msg = h('p', { class:'ask-msg' }), bar = h('div', { class:'leg-bar' }, [h('i')]), sub = h('p', { class:'hint' });
+function capProgWin(onCancel, head) {
+  const title = h('h2', { text:head || 'Gerando a legenda' }), msg = h('p', { class:'ask-msg' }), bar = h('div', { class:'leg-bar' }, [h('i')]), sub = h('p', { class:'hint' });
   const cancel = h('button', { class:'btn small ghost', text:'Cancelar', onclick:() => { onCancel(); close(); } });
   const ov = h('div', { class:'modal ask leg-win' }, [h('div', { class:'modal-card', role:'dialog', 'aria-modal':'true' }, [title, msg, bar, sub, h('div', { class:'row', style:'justify-content:flex-end' }, [cancel])])]);
   document.body.append(ov);
@@ -668,6 +698,7 @@ function capProgWin(onCancel) {
     else if (m.stage === 'load') set('Abrindo as IAs', null);
     else if (m.stage === 'prepare') set('Preparando as IAs na placa de vídeo', null, 'Leva alguns segundos.');
     else if (m.stage === 'asr') set('Ouvindo a fala', m.f, 'O Whisper transcreve o áudio inteiro.');
+    else if (m.stage === 'reasr') set('Ouvindo o trecho com mais atenção', null, 'Só este pedaço, com a fala mais alta.');
     else if (m.stage === 'align') set('Acertando o tempo de cada palavra', m.f, 'O alinhador encaixa cada letra no som.');
   };
   function close() { ov.remove(); }
@@ -696,30 +727,31 @@ async function capGenerate(L0) {
   let off = false; const win = capProgWin(() => { off = true; legStop(); });
   try {
     win.set('Preparando o som', null);
-    const a = await capAudio();
+    const a = await capAudio(), en = capEnergy(a);
     const r = await legTranscribe(a, m => { if (!off) win.prog(m); }, {});
     legStop(); // a memória das IAs (placa de vídeo e RAM) volta na hora
     if (off) return;
     win.close();
     if (!r.words.length) { toast('Não encontrei fala no som do arquivo', 4000); return; }
-    capCreate(r.words, L0);
+    capCreate(r.words, L0, capMissFind(en, r.words, L0 && S.layers.includes(L0) ? capOff(L0) : 0));
   } catch (e) { legStop(); if (!off) win.fail(capErr(e)); }
 }
-function capCreate(words, L0) {
+function capCreate(words, L0, miss) {
   pushUndo();
   let L = L0 && S.layers.includes(L0) ? L0 : null;
-  if (L) L.capt = { ...L.capt, words };
+  if (L) L.capt = { ...L.capt, words, miss, bl:undefined, bk:undefined };
   else {
     L = mkComp('caption'); // o padrão da Legenda (Componentes): estilo, cores, tamanho e quebra
     L.x = .5 + curSlide(); L.text = ' '; RT.layout.clear();
-    L.capt = { words, t0:0 }; L.start = 0; L.end = null;
+    L.capt = { words, t0:0, miss }; L.start = 0; L.end = null;
     S.layers.push(L);
   }
   capBlocks(L);
   select(L.id); propTab = 'style'; changed({ layers:true, props:true }); renderTimeline();
   T = clamp(words[0].s + .05, 0, S.duration); RT.userSeek = false; needs = true;
   const n = words.filter(w => w.c != null && w.c < CAP_DUB).length;
-  toast(n ? `Legenda pronta. ${n} palavra${n > 1 ? 's' : ''} para conferir (marcadas no painel)` : 'Legenda pronta', 5000, UNDO_ACT);
+  const m = (miss || []).length, ps = [n ? `${n} palavra${n > 1 ? 's' : ''} para conferir` : '', m ? `${m} fala${m > 1 ? 's' : ''} sem legenda` : ''].filter(Boolean);
+  toast(ps.length ? `Legenda pronta. ${ps.join(', ')} (marcado no painel)` : 'Legenda pronta', 5000, UNDO_ACT);
 }
 
 /* ------------ corrigir: texto trocado à mão volta a ser alinhado (só o alinhador, ~3 s para abrir) ------------ */
@@ -759,6 +791,113 @@ function capEdit(L, b, text, o) {
   if (grew) capRealign(L, all, b.i0, nw.length);
   return grew;
 }
+/* ------------ fala que ficou sem legenda (pedido do usuário: apontar onde a IA não reconheceu e tentar de novo, ou escrever à mão) ------------
+   - L.capt.miss = [{ s, e }] (tempo da legenda): onde o som tem voz e nenhuma palavra cobre. Achado sem IA, pela energia do
+     som (capEnergy, a mesma conta do worker): mais que 15 dB abaixo da voz (95% das energias) e 10 dB acima do chão de ruído.
+   - "Ouvir de novo" (capRelisten): o Whisper ouve só aquele pedaço, com a fala mais alta (relisten no worker); as palavras novas
+     trocam as que estavam ali (capSplice). Sem nada reconhecido, oferece escrever à mão.
+   - "Escrever à mão" (capAddBlock): um trecho novo no lugar, editado direto no palco; ao sair o alinhador acerta o tempo das palavras. */
+const CAP_MISS = { min:.45, join:.3, pad:.12 }, CAP_NEW = '…';
+function capEnergy(a) {
+  const hop = 320, n = Math.floor(a.length / hop), e = new Float32Array(n), sm = new Float32Array(n), R = 5;
+  for (let f = 0; f < n; f++) { let s = 0; for (let i = f * hop, j = i + hop; i < j; i++) s += a[i] * a[i]; e[f] = Math.sqrt(s / hop); }
+  for (let f = 0; f < n; f++) { let s = 0, k = 0; for (let j = Math.max(0, f - R); j <= Math.min(n - 1, f + R); j++) { s += e[j]; k++; } sm[f] = s / k; }
+  return sm;
+}
+// e = energia a cada 20 ms no tempo da timeline; words no tempo da legenda (off = capOff)
+function capMissFind(e, words, off = 0) {
+  const n = e.length; if (!n) return [];
+  const srt = Float32Array.from(e).sort(), loud = srt[Math.floor(n * .95)] || 0, floor = srt[Math.floor(n * .1)] || 0;
+  if (loud < 1e-4) return [];
+  const thr = Math.max(floor * 3.2, loud * .18), cov = new Uint8Array(n), P = CAP_MISS;
+  for (const w of words) for (let f = Math.max(0, Math.floor((w.s + off - P.pad) * 50)), z = Math.min(n, Math.ceil((w.e + off + P.pad) * 50)); f < z; f++) cov[f] = 1;
+  const runs = []; let a = -1;
+  for (let f = 0; f <= n; f++) {
+    const on = f < n && e[f] > thr && !cov[f];
+    if (on && a < 0) a = f;
+    else if (!on && a >= 0) { const r = runs[runs.length - 1]; if (r && a - r[1] < P.join * 50) r[1] = f; else runs.push([a, f]); a = -1; }
+  }
+  return runs.filter(r => r[1] - r[0] >= P.min * 50).map(([f0, f1]) => ({ s:+(f0 / 50 - off).toFixed(2), e:+(f1 / 50 - off).toFixed(2) }));
+}
+// procurar de novo (legenda antiga ou depois de muitas mudanças): só o som, sem IA
+async function capMissScan(L) {
+  const a = await capAudio(); if (!S.layers.includes(L) || !L.capt) return;
+  pushUndo(); L.capt = { ...L.capt, miss:capMissFind(capEnergy(a), L.capt.words, capOff(L)) };
+  changed({ props:true }); renderProps(); renderTimeline();
+  const m = L.capt.miss.length; toast(m ? `${m} fala${m > 1 ? 's' : ''} sem legenda (marcada${m > 1 ? 's' : ''} no painel e na timeline)` : 'Toda a fala tem legenda', 4000);
+}
+const capMissDrop = (L, s, e) => { const m = L.capt.miss; if (m && m.length) L.capt = { ...L.capt, miss:m.filter(x => x.e <= s + .05 || x.s >= e - .05) }; };
+// troca as palavras de [s, e] (tempo da legenda) por nw. Trechos editados à mão (bl) continuam; as palavras novas viram trechos
+// pelo corte automático. Se não der para manter a ordem dos trechos, a legenda volta toda ao corte automático.
+function capSplice(L, s, e, nw) {
+  const ws = L.capt.words, fz = capFrozen(L), bl = capBlocks(L), mid = w => (w.s + w.e) / 2, inR = w => mid(w) >= s && mid(w) <= e;
+  const kept = [];
+  ws.forEach((w, i) => { if (!inR(w)) kept.push({ w, b:fz ? 'o' + bl.findIndex(b => i >= b.i0 && i <= b.i1) : '' }); });
+  nw = nw.filter(w => !kept.some(k => mid(w) > k.w.s && mid(w) < k.w.e)); // não duplica palavra que ficou
+  let nb = [];
+  if (fz && nw.length) { const V = Object.create(L); V.capt = { words:nw }; nb = capBlocks(V); }
+  const all = [...kept, ...nw.map((w, i) => ({ w, b:fz ? 'n' + nb.findIndex(b => i >= b.i0 && i <= b.i1) : '' }))].sort((p, q) => p.w.s - q.w.s);
+  let out = null;
+  if (fz) {
+    const runs = [], seen = new Set();
+    for (const x of all) { const r = runs[runs.length - 1]; if (r && r.b === x.b) r.n++; else { if (seen.has(x.b)) { out = 'auto'; break; } seen.add(x.b); runs.push({ b:x.b, n:1 }); } }
+    if (!out) {
+      out = runs.map(r => { const src = r.b[0] === 'o' ? fz[+r.b.slice(1)] : nb[+r.b.slice(1)]; return { n:r.n, s:+src.s.toFixed(3), e:+src.e.toFixed(3), nw:r.b[0] === 'n' }; });
+      out.forEach((b, j) => { if (!b.nw) return; const p = out[j - 1], q = out[j + 1]; if (p) b.s = Math.max(b.s, p.e); if (q) b.e = Math.min(b.e, q.s); if (b.e - b.s < .15) b.e = b.s + .15; delete b.nw; });
+      out.forEach(b => delete b.nw);
+    }
+  }
+  const words = all.map(x => x.w);
+  L.capt = out && out !== 'auto' ? { ...L.capt, words, bl:out, bk:capKey(L) } : { ...L.capt, words, bl:undefined, bk:undefined };
+  return words;
+}
+// ouvir de novo: s/e no tempo da legenda (um trecho, ou uma fala sem legenda)
+async function capRelisten(L, s, e) {
+  if (!navigator.gpu || !(await legHave())) { toast('Para ouvir de novo, gere a legenda primeiro (as IAs precisam estar baixadas)', 4500); return; }
+  pause();
+  let off = false; const win = capProgWin(() => { off = true; legStop(); }, 'Ouvindo de novo');
+  try {
+    win.set('Preparando o som', null);
+    const a = await capAudio(), en = capEnergy(a), o = capOff(L);
+    await legStart(m => { if (!off) win.prog(m); });
+    const r = await legAsk({ type:'relisten', audio:a, t0:s + o, t1:e + o }, [a.buffer]);
+    legIdle(); // fica aberta 1 min: ouvir outro trecho em seguida não espera abrir de novo
+    if (off || !S.layers.includes(L) || !L.capt) return;
+    win.close();
+    const nw = r.words.map(w => ({ ...w, s:+(w.s - o).toFixed(3), e:+(w.e - o).toFixed(3) }));
+    if (!nw.length) { toast('A IA não achou fala neste pedaço', 6000, { label:'Escrever à mão', fn:() => capAddBlock(L, s, e) }); return; }
+    pushUndo();
+    const words = capSplice(L, s, e, nw);
+    L.capt = { ...L.capt, miss:capMissFind(en, words, o) };
+    changed({ props:true }); renderProps(); renderTimeline();
+    T = clamp(nw[0].s + o + .02, 0, S.duration); RT.userSeek = true; needs = true;
+    const dub = nw.filter(w => w.c != null && w.c < CAP_DUB).length;
+    toast(`Ouvi ${nw.length} palavra${nw.length > 1 ? 's' : ''}: "${nw.map(w => w.w).join(' ').slice(0, 60)}"` + (dub ? ` (${dub} para conferir)` : ''), 6000, UNDO_ACT);
+  } catch (err) { legStop(); if (!off) win.fail(capErr(err)); }
+}
+// trecho novo escrito à mão em [s, e] (tempo da legenda): abre a edição no palco já no lugar
+function capAddBlock(L, s, e) {
+  if (!S.layers.includes(L) || !L.capt) return;
+  pushUndo();
+  if (!capFrozen(L)) capPut(L, capFz(L)); // fica um trecho separado (no corte automático ele grudaria no vizinho)
+  const words = capSplice(L, s, e, [{ w:CAP_NEW, s:+s.toFixed(3), e:+e.toFixed(3), c:1 }]);
+  capMissDrop(L, s, e);
+  const i = words.findIndex(w => w.w === CAP_NEW && Math.abs(w.s - s) < 1e-3), k = capBlocks(L).findIndex(b => i >= b.i0 && i <= b.i1);
+  select(L.id, true); RT.capSel = { id:L.id, k, picks:RT.picks };
+  T = clamp(s + capOff(L) + .02, 0, S.duration); RT.userSeek = true;
+  changed({ props:true }); renderProps(); renderTimeline(); needs = true;
+  if (!stageEdit(L)) capFocus(L);
+}
+// "+ Trecho na agulha": no vão em que a agulha está (até 2 s, sem entrar nos vizinhos)
+function capAddAt(L) {
+  const off = capOff(L), tl = T - off, bl = capBlocks(L), lo = L.start - off, hi = (L.end ?? S.duration) - off;
+  const inB = capAt(bl, tl); if (inB) { RT.capSel = { id:L.id, k:inB.k, picks:RT.picks }; stageEdit(L); toast('Já tem um trecho na agulha: edite este', 3000); return; }
+  const pv = bl.filter(b => b.e <= tl + 1e-3).pop(), nx = bl.find(b => b.s > tl);
+  const s = Math.max(tl, pv ? pv.e : lo), e = Math.min(s + 2, nx ? nx.s : hi);
+  if (e - s < .3) { toast('Sem espaço na agulha. Leve a agulha a um vão ou encurte o trecho vizinho na timeline', 4500); return; }
+  capAddBlock(L, s, e);
+}
+
 // .srt (para subir no Instagram/YouTube ou usar em outro editor)
 function capSrt(L) {
   const off = capOff(L), tc = v => { v = Math.max(0, v); const ms = Math.round(v * 1000), hh = Math.floor(ms / 36e5), mm = Math.floor(ms / 6e4) % 60, ss = Math.floor(ms / 1e3) % 60; return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`; };
@@ -768,8 +907,10 @@ function capSrt(L) {
 }
 
 /* ------------ painel ------------ */
+const CAP_ICO_RE = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.3v2.6h-2.6"/></svg>';
+const CAP_ICO_X = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>';
 function capSecs(L) {
-  const st = capStyle(L), bl = capBlocks(L), off = capOff(L), dub = L.capt.words.filter(w => w.c != null && w.c < CAP_DUB).length;
+  const st = capStyle(L), bl = capBlocks(L), off = capOff(L), dub = L.capt.words.filter(w => w.c != null && w.c < CAP_DUB).length, miss = L.capt.miss || [];
   const chips = h('div', { class:'chips leg-styles', role:'group', 'aria-label':'Estilo da legenda' }, Object.entries(CAP_STYLES).map(([id, s]) =>
     h('button', { type:'button', class:'chip', 'aria-pressed':String((L.capStyle || 'karaoke') === id), title:s.tip, text:s.name, onclick:() => { pushUndo(); for (const o of peersOf(L)) if (o.capt) capApplyStyle(o, id); changed({ props:true }); renderProps(); } })));
   const out = [h('h3', { text:'Legenda', 'data-sum':st.name }), field('Estilo', chips, null, true)];
@@ -781,7 +922,9 @@ function capSecs(L) {
     rangeF(L, 'capCh', 'Letras por linha', 8, 40, 1, v => String(Math.round(v))));
   out.push(rangeF(L, 'wsp', 'Entre palavras', 0, 1, .01, v => (v || 0).toFixed(2) + 'em', { layout:true, get:() => L.wsp || 0 }), checkF(L, 'capPunct', 'Mostrar a pontuação'));
   // texto: um bloco por linha, com a hora; palavra duvidosa marcada. Clicar leva a agulha até ele, ▶ toca só ele
-  const only = !!RT.capOnlyDub && dub > 0, list = h('div', { class:'leg-list', id:fid(L, 'caplist') });
+  const only = !!RT.capOnlyDub && dub + miss.length > 0, list = h('div', { class:'leg-list', id:fid(L, 'caplist') });
+  const seek = t => { pause(); T = clamp(t + off + .02, 0, S.duration); RT.userSeek = true; needs = true; };
+  const rows = [];
   const sk = capSelK(L);
   for (const b of bl) {
     const bad = b.ws.some(w => w.c != null && w.c < CAP_DUB); if (only && !bad) continue;
@@ -791,17 +934,29 @@ function capSecs(L) {
     tx.addEventListener('focus', () => { pause(); T = clamp(b.s + off + .02, 0, S.duration); RT.userSeek = true; needs = true; });
     tx.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tx.blur(); } else if (e.key === 'Escape') { e.preventDefault(); tx.textContent = orig; tx.blur(); } e.stopPropagation(); });
     tx.addEventListener('blur', () => { const v = tx.textContent.replace(/\s+/g, ' ').trim(); if (v !== orig.replace(/\s+/g, ' ').trim()) capEdit(L, b, v); });
-    list.append(h('div', { class:'leg-row' + (bad ? ' bad' : '') + (b.k === sk ? ' on' : '') }, [
+    rows.push([b.s, h('div', { class:'leg-row' + (bad ? ' bad' : '') + (b.k === sk ? ' on' : '') }, [
       h('button', { type:'button', class:'leg-t', text:fmtSec(b.s + off), title:'Levar a agulha até aqui', onclick:() => { pause(); T = clamp(b.s + off + .02, 0, S.duration); RT.userSeek = true; needs = true; } }),
       tx,
       h('button', { type:'button', class:'icon-btn', html:ICON_PLAY, title:'Ouvir este trecho', 'aria-label':'Ouvir este trecho', onclick:() => play(b.s + off, b.e + off) }),
-      h('button', { type:'button', class:'icon-btn', html:ICONS.trash, title:'Apagar este trecho', 'aria-label':'Apagar este trecho', onclick:() => capDelBlock(L, b.k) })]));
+      h('button', { type:'button', class:'icon-btn', html:CAP_ICO_RE, title:'A IA ouve de novo só este trecho, com mais atenção', 'aria-label':'Ouvir de novo com a IA', onclick:() => capRelisten(L, b.s, b.e) }),
+      h('button', { type:'button', class:'icon-btn', html:ICONS.trash, title:'Apagar este trecho', 'aria-label':'Apagar este trecho', onclick:() => capDelBlock(L, b.k) })])]);
   }
-  const s = dub > 1 ? 's' : '';
-  out.push(h('h3', { text:'Texto da legenda', 'data-sum':dub ? `${dub} para conferir` : `${bl.length} trechos` }),
-    h('p', { class:'hint', text:dub ? `${dub} palavra${s} marcada${s}: o som combina pouco com ela${s}. Ouça (▶) e corrija se precisar. Enter confirma; o tempo é acertado sozinho.` : 'Clique num trecho para corrigir. Enter confirma; o tempo de cada palavra é acertado sozinho. Na timeline, arraste a borda de um trecho para ele ficar mais ou menos tempo na tela; clique e Delete apaga.' }),
-    dub ? (() => { const id = fid(L, 'caponly'), i = h('input', { type:'checkbox', id, checked:only }); i.addEventListener('change', () => { RT.capOnlyDub = i.checked; renderProps(); }); return h('label', { class:'check', for:id }, [i, 'Mostrar só os trechos para conferir']); })() : null,
+  // fala sem legenda: onde o som tem voz e nenhuma palavra
+  miss.forEach((m, j) => rows.push([m.s, h('div', { class:'leg-row miss' }, [
+    h('button', { type:'button', class:'leg-t', text:fmtSec(m.s + off), title:'Levar a agulha até aqui', onclick:() => seek(m.s) }),
+    h('button', { type:'button', class:'leg-miss', text:`Fala sem legenda · ${(m.e - m.s).toFixed(1).replace('.', ',')} s`, title:'Ouvir este pedaço', onclick:() => play(m.s + off, m.e + off) }),
+    h('button', { type:'button', class:'icon-btn', html:CAP_ICO_RE, title:'A IA ouve de novo só este pedaço, com mais atenção', 'aria-label':'Ouvir de novo com a IA', onclick:() => capRelisten(L, m.s, m.e) }),
+    h('button', { type:'button', class:'icon-btn', html:ICON_PEN, title:'Escrever este trecho à mão', 'aria-label':'Escrever à mão', onclick:() => capAddBlock(L, m.s, m.e) }),
+    h('button', { type:'button', class:'icon-btn', html:CAP_ICO_X, title:'Não é fala (tirar o aviso)', 'aria-label':'Tirar o aviso', onclick:() => { pushUndo(); L.capt = { ...L.capt, miss:miss.filter((_, i) => i !== j) }; changed({ props:true }); renderProps(); renderTimeline(); } })])]));
+  rows.sort((p, q) => p[0] - q[0]).forEach(r => list.append(r[1]));
+  const s = dub > 1 ? 's' : '', ms = miss.length > 1 ? 's' : '';
+  const sum = [dub ? `${dub} para conferir` : '', miss.length ? `${miss.length} sem legenda` : ''].filter(Boolean).join(' · ') || `${bl.length} trechos`;
+  out.push(h('h3', { text:'Texto da legenda', 'data-sum':sum }),
+    h('p', { class:'hint', text:(dub ? `${dub} palavra${s} marcada${s}: o som combina pouco com ela${s}. Ouça (▶) e corrija se precisar. ` : '') + (miss.length ? `${miss.length} fala${ms} sem legenda: a IA pode ouvir de novo só aquele pedaço (↻), ou escreva à mão (lápis). ` : '') + (dub || miss.length ? 'Enter confirma; o tempo é acertado sozinho.' : 'Clique num trecho para corrigir. Enter confirma; o tempo de cada palavra é acertado sozinho. Na timeline, arraste a borda de um trecho para ele ficar mais ou menos tempo na tela; clique e Delete apaga.') }),
+    dub || miss.length ? (() => { const id = fid(L, 'caponly'), i = h('input', { type:'checkbox', id, checked:only }); i.addEventListener('change', () => { RT.capOnlyDub = i.checked; renderProps(); }); return h('label', { class:'check', for:id }, [i, 'Mostrar só o que precisa conferir']); })() : null,
     list,
+    h('div', { class:'row' }, [h('button', { class:'btn small', text:'+ Trecho na agulha', title:'Escrever um trecho novo onde a agulha está', onclick:() => capAddAt(L) }),
+      h('button', { class:'btn small ghost', text:'Procurar fala sem legenda', title:'Confere no som onde há voz e nenhuma palavra (sem IA, rápido)', onclick:() => capMissScan(L) })]),
     h('div', { class:'row' }, [h('button', { class:'btn small', text:'Baixar .srt', title:'Arquivo de legenda para Instagram, YouTube ou outro editor', onclick:() => capSrt(L) }),
       h('button', { class:'btn small ghost', text:'Gerar de novo', onclick:() => capGenerate(L) })]));
   return out.filter(Boolean);
