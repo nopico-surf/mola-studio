@@ -6265,19 +6265,30 @@ function resizeTo(D, pt, ev) {
     for (let n = 0; n < 10 && bad - ok > .002; n++) { const m = (ok + bad) / 2; if (put(m) > .5) bad = m; else ok = m; }
     put(ok); fz = ok;
   }
+  // encolhendo: se o bloco já passava da margem (ou a fila o encolhia para caber), o desenho só encolhe depois de o tamanho gravado
+  // baixar até o que se vê, e a quina parecia grudada. Acha o tamanho gravado que faz a caixa acompanhar o mouse
+  if (f < 1 && !D.rotA && !inFlowAny) {
+    const seen = () => { const b = rsBox(D); return b ? Math.max((b.x1 - b.x0) / D.b0.w, (b.y1 - b.y0) / D.b0.h) : 0; };
+    if (seen() > f + .004) {
+      let lo = .001, hi = fz;
+      for (let n = 0; n < 14 && hi - lo > .002; n++) { const m = (lo + hi) / 2; put(m); if (seen() > f + .004) hi = m; else lo = m; }
+      put(lo); fz = lo;
+    }
+  }
   D.fOk = fz;
 }
 // Canto: a quina oposta fica parada e só cresce para o lado puxado; Alt: o centro fica parado (texto, logo, imagem, grupo e frame, tudo igual).
 // A conta acima supõe que o bloco cresce exatamente na proporção do mouse, mas a fonte arredonda, a linha quebra em outro lugar,
 // a margem empurra, o frame se refaz pela fila... Então mede onde o bloco ficou de verdade e devolve a quina (ou o centro) para o lugar
+function rsBox(D) {
+  if (D.fg) { const r = flowNow(D.fg); if (r) return r.box; }
+  const cx = rsBox.cx || (rsBox.cx = (() => { const c = document.createElement('canvas').getContext('2d'); c.canvas.width = c.canvas.height = 8; return c; })());
+  renderFrame(cx, T, 8 / W(), false); // quadro mínimo: só para atualizar os _bounds
+  const bs = D.items.map(q => q.o._bounds).filter(Boolean); if (!bs.length) return null;
+  const u = unionBox(bs); return { x0:u.x, y0:u.y, x1:u.x + u.w, y1:u.y + u.h };
+}
 function rsPin(D, alt) {
-  const { hx, hy } = D, box = () => {
-    if (D.fg) { const r = flowNow(D.fg); if (r) return r.box; }
-    const cx = rsPin.cx || (rsPin.cx = (() => { const c = document.createElement('canvas').getContext('2d'); c.canvas.width = c.canvas.height = 8; return c; })());
-    renderFrame(cx, T, 8 / W(), false); // quadro mínimo: só para atualizar os _bounds
-    const bs = D.items.map(q => q.o._bounds).filter(Boolean); if (!bs.length) return null;
-    const u = unionBox(bs); return { x0:u.x, y0:u.y, x1:u.x + u.w, y1:u.y + u.h };
-  };
+  const { hx, hy } = D, box = () => rsBox(D);
   // devolve quanto a quina (ou o centro) ainda ficou fora do lugar, em px (> 0 = a margem segurou)
   let left = 0;
   for (let n = 0; n < 4; n++) { // a margem pode segurar: tenta de novo com o que sobrou
@@ -10956,7 +10967,8 @@ function pasteLayers(p) {
   if (!src.length) return;
   const fr = insertTarget(new Set(src.map(o => o.id)));
   // cola logo acima do que está escolhido; sem seleção, na frente de tudo (pedido do usuário)
-  const topIdx = ids_ => Math.max(-1, ...S.layers.map((l, i) => ids_.has(l.id) ? i : -1));
+  // (o fundo escolhido conta como "nada selecionado": é o que fica escolhido depois do Esc, e colava logo acima dele, por baixo de tudo)
+  const topIdx = ids_ => Math.max(-1, ...S.layers.map((l, i) => ids_.has(l.id) && l.type !== 'bg' ? i : -1));
   const at = topIdx(RT.picks || new Set());
   pushUndo();
   let fontsAdded = false;
@@ -11429,14 +11441,34 @@ function tlDragGroup(e, gid, bar, mode) {
   }
   pushUndo(); pause();
   const d = S.duration, o = mem.map(l => ({ l, s:l.start, e:l.end })), s0 = Math.min(...o.map(x => x.s)), e0 = Math.max(...o.map(x => x.e ?? d));
+  // outros grupos/camadas escolhidos junto (vários grupos vídeo + som, reclamação do usuário: só o grupo arrastado andava):
+  // ao mover, andam o mesmo tanto
+  const others = freePicked().filter(l => !mem.includes(l) && l.type !== 'bg');
+  const ox = mode === 'm' ? others.map(l => ({ l, s:l.start, e:l.end })) : [];
+  // nas bordas, cada outro grupo escolhido inteiro (o mais de fora) estica do mesmo tanto, do jeito que este estica (antes só este
+  // mudava, reclamação do usuário: "aumentar o tamanho dos dois não vai"); camada solta escolhida junto vale como um grupo de um
+  const units = [];
+  if (mode !== 'm') {
+    const seen = new Set();
+    for (const l of others) {
+      if (seen.has(l)) continue;
+      let top = null;
+      for (let g = l.grp, n = 0; g && n < 20; g = gpar(g), n++) { const ls = gleaves(g); if (ls.some(q => mem.includes(q)) || !ls.every(q => isPicked(q.id))) break; top = g; }
+      const ls = top ? gleaves(top).filter(q => q.type !== 'bg' && !q.locked) : [l];
+      ls.forEach(q => seen.add(q));
+      const uo = ls.map(q => ({ l:q, s:q.start, e:q.end }));
+      units.push({ o:uo, s0:Math.min(...uo.map(x => x.s)), e0:Math.max(...uo.map(x => x.e ?? d)), gid:top,
+        vid0:new Map(ls.filter(q => (q.type === 'image' && q.video) || q.type === 'audio').map(q => [q, vidSnap(q, d)])) });
+    }
+  }
   const x0 = e.clientX, y0 = e.clientY, grid = v => Math.round(v * 10) / 10, r3 = v => Math.round(v * 1000) / 1000, MIN = .3;
-  const pts = [0, d, T, ...extraSnaps()]; for (const q of S.layers) if (!mem.includes(q) && q.type !== 'bg') pts.push(q.start, q.end ?? d);
+  const pts = [0, d, T, ...extraSnaps()]; for (const q of S.layers) if (!mem.includes(q) && !others.includes(q) && q.type !== 'bg') pts.push(q.start, q.end ?? d);
   // vídeo (e som de vídeo) no grupo: as bordas do grupo cortam o vídeo como as da barra dele (vidTrim), em vez de só esticar o
   // tempo (a barra passava do trecho e o vídeo voltava ao começo no fim, reclamação do usuário). Quem começa junto com o grupo
   // anda o começo do trecho (o vídeo fica parado no tempo, sem passar do começo do vídeo); o fim do trecho segue o fim da barra.
   // Se já repetia, o fim do trecho fica (igual à borda direita da barra)
   const vid0 = new Map(mem.filter(l => (l.type === 'image' && l.video) || l.type === 'audio').map(l => [l, vidSnap(l, d)]));
-  const vidClip = () => {
+  const vidClip = (vid0, s0) => {
     for (const [l, v] of vid0) {
       const lead = mode === 'l' && Math.abs(v.s - s0) < 1e-3;
       if (lead && l.start < v.s - v.a / v.sp) l.start = r3(v.s - v.a / v.sp);
@@ -11454,7 +11486,7 @@ function tlDragGroup(e, gid, bar, mode) {
   lane.append(tip); g.tl.append(guide);
   const fmtS = v => v.toFixed(1).replace('.', ',') + 's';
   let moved = false, axis = null, stk = null;
-  const apply = (s, en) => {
+  const apply = (o, s0, e0, s, en) => {
     const k = (en - s) / (e0 - s0);
     for (const x of o) {
       x.l.start = r3(s + (x.s - s0) * k);
@@ -11476,12 +11508,25 @@ function tlDragGroup(e, gid, bar, mode) {
       const a = fit(s0 + dt), b = fit(e0 + dt);
       let ds = a.hit !== null && (b.hit === null || Math.abs(a.hit - (s0 + dt)) <= Math.abs(b.hit - (e0 + dt))) ? (hit = a.hit, a.v - s0) : b.hit !== null ? (hit = b.hit, b.v - e0) : grid(s0 + dt) - s0;
       // sem sair do vídeo: as entradas ficam em 0..d e as saídas marcadas ficam até d
-      const lim = Math.max(...o.map(x => x.e != null ? x.e : x.s + MIN));
-      ds = clamp(ds, -s0, d - lim); s = s0 + ds; en = e0 + ds;
-      for (const x of o) { x.l.start = r3(x.s + ds); if (x.e != null) x.l.end = r3(x.e + ds); }
-    } else if (mode === 'l') { const f = fit(s0 + dt); s = clamp(f.v, 0, e0 - MIN); hit = s === f.v ? f.hit : null; apply(s, en); }
-    else { const f = fit(e0 + dt); en = clamp(f.v, s0 + MIN, d); hit = en === f.v ? f.hit : null; apply(s, en); }
-    if (mode !== 'm') { vidClip(); for (const l of vid0.keys()) { const b = g.tl.querySelector(`.tl-row[data-id="${l.id}"] .tl-bar`); if (b) placeBar(b, l); } }
+      const all = o.concat(ox), lim = Math.max(...all.map(x => x.e != null ? x.e : x.s + MIN));
+      ds = clamp(ds, -Math.min(...all.map(x => x.s)), d - lim); s = s0 + ds; en = e0 + ds;
+      for (const x of all) { x.l.start = r3(x.s + ds); if (x.e != null) x.l.end = r3(x.e + ds); }
+      if (ox.length) {
+        for (const x of ox) { const b = g.tl.querySelector(`.tl-row[data-id="${x.l.id}"] .tl-bar`); if (b) placeBar(b, x.l); }
+        for (const r of g.tl.querySelectorAll('.tl-row[data-gid]')) { const b = r.querySelector('.tl-bar'); if (b && b !== bar && S.groups && S.groups[r.dataset.gid]) placeBar(b, gpseudo(r.dataset.gid)); }
+      }
+    } else if (mode === 'l') { const f = fit(s0 + dt); s = clamp(f.v, 0, e0 - MIN); hit = s === f.v ? f.hit : null; apply(o, s0, e0, s, en); }
+    else { const f = fit(e0 + dt); en = clamp(f.v, s0 + MIN, d); hit = en === f.v ? f.hit : null; apply(o, s0, e0, s, en); }
+    if (mode !== 'm') {
+      vidClip(vid0, s0); for (const l of vid0.keys()) { const b = g.tl.querySelector(`.tl-row[data-id="${l.id}"] .tl-bar`); if (b) placeBar(b, l); }
+      for (const u of units) { // os outros grupos escolhidos: a mesma diferença na borda puxada
+        if (mode === 'l') apply(u.o, u.s0, u.e0, clamp(u.s0 + s - s0, 0, u.e0 - MIN), u.e0);
+        else apply(u.o, u.s0, u.e0, u.s0, clamp(u.e0 + en - e0, u.s0 + MIN, d));
+        vidClip(u.vid0, u.s0);
+        for (const x of u.o) { const b = g.tl.querySelector(`.tl-row[data-id="${x.l.id}"] .tl-bar`); if (b) placeBar(b, x.l); }
+        const gb = u.gid && g.tl.querySelector(`.tl-row[data-gid="${u.gid}"] .tl-bar`); if (gb) placeBar(gb, gpseudo(u.gid));
+      }
+    }
     placeBar(bar, gpseudo(gid));
     tip.textContent = `${fmtS(s)} – ${fmtS(en)}`;
     const at = (mode === 'r' ? en : s) / d * g.w, tw = tip.offsetWidth + 8;
@@ -11494,7 +11539,7 @@ function tlDragGroup(e, gid, bar, mode) {
     bar.classList.remove('drag', 'hl', 'hr'); tip.remove(); guide.remove(); if (stk) stk.end();
   };
   const up = () => { done(); if (stk) stk.drop(); else if (moved) changed({ layers:true, props:true }); };
-  const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); o.forEach(x => { x.l.start = x.s; x.l.end = x.e; }); vid0.forEach((v, l) => vidUnsnap(l, v)); placeBar(bar, gpseudo(gid)); done(); needs = true; };
+  const key = ev => { if (ev.key !== 'Escape') return; ev.preventDefault(); ev.stopPropagation(); o.concat(ox, ...units.map(u => u.o)).forEach(x => { x.l.start = x.s; x.l.end = x.e; }); [vid0, ...units.map(u => u.vid0)].forEach(m => m.forEach((v, l) => vidUnsnap(l, v))); placeBar(bar, gpseudo(gid)); if (ox.length || units.length) renderTimeline(); done(); needs = true; };
   bar.classList.add('drag'); if (mode !== 'm') bar.classList.add('h' + mode);
   addEventListener('pointermove', mv); addEventListener('pointerup', up); addEventListener('pointercancel', up); addEventListener('keydown', key, true);
 }
@@ -11502,7 +11547,8 @@ function tlDrag(e, L, bar, mode) {
   e.preventDefault(); e.stopPropagation();
   const g = tlGeom(); if (!g) return;
   // item dentro de um grupo: arrasta só ele (o grupo todo se move pela barra do grupo)
-  const wholeGrp = L.grp && groupOf(L).every(l => isPicked(l.id));
+  // com mais coisa escolhida além do grupo dele (vários grupos vídeo + som), a seleção toda anda junto
+  const gm = L.grp ? groupOf(L) : [], wholeGrp = L.grp && gm.every(l => isPicked(l.id)) && !pickedLayers().some(l => !gm.includes(l));
   if (wholeGrp || !isPicked(L.id)) {
     RT.selected = L.id; RT.picks = new Set([L.id]); renderLayers(); renderProps(); needs = true;
     // selecionar redesenha a timeline: arrasta a barra nova, não a que saiu da tela
