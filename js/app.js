@@ -7179,6 +7179,7 @@ function stageEdit(L) {
   if (L.capt) { b = seditBlock(L); if (!b) return false; T = clamp(b.s + capOff(L) + .02, 0, S.duration); RT.userSeek = true; }
   else { const ph = phase(L, T); if (!ph || ph.mode !== 'hold') seekLayer(L); } // com o texto inteiro na tela
   if (!isPicked(L.id) || (RT.picks && RT.picks.size > 1)) select(L.id, true);
+  if (b) { RT.capSel = { id:L.id, k:b.k, picks:RT.picks }; capMark(L); } // o trecho editado fica marcado na lista e na timeline
   ensureBounds([L]);
   if (!L._bounds) return false;
   SED.id = L.id; SED.k = b ? b.k : null; SED.dirty = false; SED.realign = false; SED.css = ''; SED.fr = undefined;

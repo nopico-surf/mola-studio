@@ -931,10 +931,10 @@ function capSecs(L) {
     const tx = h('div', { class:'leg-tx', contenteditable:'plaintext-only', spellcheck:'true', lang:'pt-BR', 'aria-label':'Texto do trecho', 'data-s':String(b.s) });
     b.ws.forEach((w, k) => { if (k) tx.append(' '); tx.append(w.c != null && w.c < CAP_DUB ? h('mark', { text:w.w, title:`Conferir: o som combina pouco com esta palavra (${Math.round(w.c * 100)}%)` }) : w.w); });
     const orig = tx.textContent;
-    tx.addEventListener('focus', () => { pause(); T = clamp(b.s + off + .02, 0, S.duration); RT.userSeek = true; needs = true; });
+    tx.addEventListener('focus', () => { pause(); T = clamp(b.s + off + .02, 0, S.duration); RT.userSeek = true; needs = true; RT.capSel = { id:L.id, k:b.k, picks:RT.picks }; capMark(L); });
     tx.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tx.blur(); } else if (e.key === 'Escape') { e.preventDefault(); tx.textContent = orig; tx.blur(); } e.stopPropagation(); });
     tx.addEventListener('blur', () => { const v = tx.textContent.replace(/\s+/g, ' ').trim(); if (v !== orig.replace(/\s+/g, ' ').trim()) capEdit(L, b, v); });
-    rows.push([b.s, h('div', { class:'leg-row' + (bad ? ' bad' : '') + (b.k === sk ? ' on' : '') }, [
+    rows.push([b.s, h('div', { class:'leg-row' + (bad ? ' bad' : '') + (b.k === sk ? ' on' : ''), 'data-k':String(b.k) }, [
       h('button', { type:'button', class:'leg-t', text:fmtSec(b.s + off), title:'Levar a agulha até aqui', onclick:() => { pause(); T = clamp(b.s + off + .02, 0, S.duration); RT.userSeek = true; needs = true; } }),
       tx,
       h('button', { type:'button', class:'icon-btn', html:ICON_PLAY, title:'Ouvir este trecho', 'aria-label':'Ouvir este trecho', onclick:() => play(b.s + off, b.e + off) }),
@@ -949,6 +949,7 @@ function capSecs(L) {
     h('button', { type:'button', class:'icon-btn', html:ICON_PEN, title:'Escrever este trecho à mão', 'aria-label':'Escrever à mão', onclick:() => capAddBlock(L, m.s, m.e) }),
     h('button', { type:'button', class:'icon-btn', html:CAP_ICO_X, title:'Não é fala (tirar o aviso)', 'aria-label':'Tirar o aviso', onclick:() => { pushUndo(); L.capt = { ...L.capt, miss:miss.filter((_, i) => i !== j) }; changed({ props:true }); renderProps(); renderTimeline(); } })])]));
   rows.sort((p, q) => p[0] - q[0]).forEach(r => list.append(r[1]));
+  requestAnimationFrame(() => capMark(L)); // rola até o escolhido quando a lista acaba de entrar no painel
   const s = dub > 1 ? 's' : '', ms = miss.length > 1 ? 's' : '';
   const sum = [dub ? `${dub} para conferir` : '', miss.length ? `${miss.length} sem legenda` : ''].filter(Boolean).join(' · ') || `${bl.length} trechos`;
   out.push(h('h3', { text:'Texto da legenda', 'data-sum':sum }),
@@ -960,6 +961,23 @@ function capSecs(L) {
     h('div', { class:'row' }, [h('button', { class:'btn small', text:'Baixar .srt', title:'Arquivo de legenda para Instagram, YouTube ou outro editor', onclick:() => capSrt(L) }),
       h('button', { class:'btn small ghost', text:'Gerar de novo', onclick:() => capGenerate(L) })]));
   return out.filter(Boolean);
+}
+// trecho escolhido (timeline, palco ou a própria lista): linha marcada na lista do painel, rolada até ela, e o pedaço na timeline.
+// Só rola quando a escolha muda (`RT.capMarkKey`), senão refazer o painel desfazia a rolagem do usuário.
+function capMark(L) {
+  const k = capSelK(L), list = document.getElementById(fid(L, 'caplist'));
+  const bar = document.querySelector(`.tl-row[data-id="${L.id}"] .tl-bar`); if (bar) placeBar(bar, L);
+  if (!list) return;
+  let row = null;
+  for (const r of list.querySelectorAll('.leg-row[data-k]')) { const on = +r.dataset.k === k; r.classList.toggle('on', on); if (on) row = r; }
+  const key = k >= 0 ? L.id + ':' + k : '';
+  if (!row || key === RT.capMarkKey) { RT.capMarkKey = key; return; }
+  RT.capMarkKey = key;
+  if (!list.offsetParent) return; // seção fechada: rola quando abrir de novo e a escolha mudar
+  const lr = list.getBoundingClientRect(), rr = row.getBoundingClientRect();
+  if (rr.top < lr.top || rr.bottom > lr.bottom) list.scrollTop += rr.top - lr.top - (lr.height - rr.height) / 2;
+  const P = document.getElementById('props'), pr = P && P.getBoundingClientRect(), r2 = row.getBoundingClientRect();
+  if (pr && (r2.top < pr.top || r2.bottom > pr.bottom)) P.scrollTop += r2.top - pr.top - (pr.height - r2.height) / 2;
 }
 // clique duplo no palco (ou Enter): vai para o trecho da agulha na lista
 function capFocus(L) {
