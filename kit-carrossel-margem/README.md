@@ -8,3 +8,6 @@ Gera carrosséis do Instagram da Margem como `.json` que o Mola importa ("Import
 - `fonts/`: Urbanist (latin 500 a 800, @fontsource, licença OFL) para medir a quebra de linha igual ao Mola.
 
 Mudou o formato do JSON do Mola ou o visual dos carrosséis? Exporte um carrossel exemplo, ajuste os índices de camada em `_extrair_template.py` e gere o template de novo.
+
+## Ajustes do Vitor viram template
+`_aplicar_ajustes.py roteiro.json template_mola.json ajustado_no_mola.json template_novo.json` leva para o template as posições, larguras, alinhamentos, mesclagem das fotos, `flow` dos frames de dentro e camadas novas que ele mexeu num carrossel gerado. Não copia texto, foto espelhada nem ajuste de cor. Estilo atual: impacto (ajustado em 23/10/2026, "Descansar virou privilégio").

@@ -275,12 +275,19 @@ def gerar(roteiro, tpl):
         # foto parcial (nao de fundo) no mesmo slide: texto nao pode encostar nela
         tl, tr = (L["x"] - L["maxW"] / 2) * W, (L["x"] + L["maxW"] / 2) * W
         for F in camadas:
-            if F["type"] != "image" or (F.get("mh") or 2) > 1.2 or int(F["x"]) != int(L["x"]):
+            if F["type"] != "image":
                 continue
-            fw, fh = F["size"] * W, F["mh"] * W
+            fw, fh = F["size"] * W, (F.get("mh") or F["size"]) * W
             fl, fr = F["x"] * W - fw / 2, F["x"] * W + fw / 2
             ft, fb = F["y"] * H - fh / 2, F["y"] * H + fh / 2
-            if tl < fr and tr > fl and top < fb and bot > ft - 10:
+            # foto que ocupa o slide inteiro (fundo, atras do texto de proposito) nao conta
+            if ft <= 0.05 * H and fb >= 0.95 * H and fl <= (int(F["x"]) + 0.05) * W and fr >= (int(F["x"]) + 0.95) * W:
+                continue
+            # so conta foto que pega o slide do texto (a que sangra de outro slide entra pela borda)
+            sl0, sl1 = int(L["x"]) * W, (int(L["x"]) + 1) * W
+            if fr <= sl0 or fl >= sl1:
+                continue
+            if tl < fr and tr > fl and top < fb and bot > ft - 50:
                 avisos.append(f"{L['_ref']}: texto encosta na foto. Encurte.")
     # texto x texto no mesmo slide (frame com fundo colorido conta pela caixa inteira)
     def cadeia(g):
