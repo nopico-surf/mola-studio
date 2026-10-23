@@ -11,3 +11,6 @@ Mudou o formato do JSON do Mola ou o visual dos carrosséis? Exporte um carrosse
 
 ## Ajustes do Vitor viram template
 `_aplicar_ajustes.py roteiro.json template_mola.json ajustado_no_mola.json template_novo.json` leva para o template as posições, larguras, alinhamentos, mesclagem das fotos, `flow` dos frames de dentro e camadas novas que ele mexeu num carrossel gerado. Não copia texto, foto espelhada nem ajuste de cor. Estilo atual: impacto (ajustado em 23/10/2026, "Descansar virou privilégio").
+
+## Skill
+`SKILL.md` = cópia da skill `carrossel-margem` (a que vale é a salva na conta do Claude; esta fica versionada junto com o kit).
