@@ -2983,9 +2983,8 @@ function layoutText(L, txt) {
   };
   for (const c of all) { if (c.ch === '\n') { flush(); pStart = c.i + 1; } else para.push(c); }
   flush();
-  // entrelinha pode ser 0 ou negativa (até −1): a linha seguinte fica em cima da anterior; a caixa tem pelo menos uma linha de altura
-  const step = size * (L.lh ?? 1.1), lineH = Math.abs(step);
-  let blockH = (lines.length - 1) * lineH + Math.max(lineH, size * .8);
+  const lineH = size * (L.lh || 1.1);
+  let blockH = lines.length * lineH;
   let wi = 0, ci = 0, blockW = 0;
   const out = lines.map((cs, li) => {
     const glyphs = []; let k = 0, segX = 0, nsp = 0;
@@ -3004,7 +3003,7 @@ function layoutText(L, txt) {
     }
     wi++;
     const width = mw(cs); blockW = Math.max(blockW, width);
-    const baseline = (li - (lines.length - 1) / 2) * step + size * .34;
+    const baseline = -blockH / 2 + li * lineH + lineH / 2 + size * .34;
     return { text:cs.map(c => c.ch).join(''), glyphs, width, baseline, li, i0:i0s[li] };
   });
   if (L.fixW && !tk) blockW = Math.max(blockW, maxW); // largura fixa (puxada pela alça lateral): a caixa tem essa largura e o texto se alinha dentro
@@ -11014,14 +11013,35 @@ function toSlide(ls, s0, s) {
   const d = s - s0; if (!d) return;
   for (const l of ls) { l.x = +((+l.x || 0) + d).toFixed(5); if (l.fpos) for (const f of Object.values(l.fpos)) if (f && f.x != null) f.x = +(f.x + d).toFixed(5); }
 }
+/* Colar entra logo acima da camada escolhida na lista de Camadas; sem seleção, acima de tudo (pedido do usuário).
+   O fundo escolhido conta como "nada selecionado": é o que fica escolhido depois do Esc, e colava logo acima dele, por baixo de tudo.
+   Vale para camadas copiadas, imagem e SVG colados (esses chegam depois de ler o arquivo: RT.pasteAt guarda a escolha do Ctrl+V) */
+function pasteAnchor() {
+  const ids = RT.picks && RT.picks.size ? RT.picks : new Set([RT.selected]);
+  let a = null; S.layers.forEach(l => { if (ids.has(l.id) && l.type !== 'bg') a = l.id; });
+  return a;
+}
+// ls já estão em S.layers: sobem para logo acima de anchorId (null = no topo). Anchor dentro de um grupo em que os colados não
+// entraram: acima do grupo inteiro (senão a camada solta ficava no meio dos itens dele)
+function stackAbove(ls, anchorId) {
+  ls = ls.filter(l => S.layers.includes(l)); if (!ls.length) return;
+  const A = anchorId && S.layers.find(l => l.id === anchorId);
+  ls.forEach(l => S.layers.splice(S.layers.indexOf(l), 1));
+  let i = A ? S.layers.indexOf(A) : S.layers.length - 1;
+  if (A) for (let g = A.grp, n = 0; g && n < 20; g = gpar(g), n++)
+    if (!ls.every(l => l.grp && ginside(l.grp, g))) i = Math.max(i, ...gleaves(g).map(l => S.layers.indexOf(l)));
+  S.layers.splice(i + 1, 0, ...ls);
+}
+// imagem/SVG colados: a escolha do Ctrl+V vale uma vez, logo depois dele
+function stackPasted(ls) {
+  const P = RT.pasteAt; RT.pasteAt = null;
+  if (P && performance.now() - P.t < 1e4) stackAbove(ls, P.id);
+}
 function pasteLayers(p) {
   const src = (p && Array.isArray(p.layers) ? p.layers : []).filter(o => o && o.type && o.type !== 'bg');
   if (!src.length) return;
   const fr = insertTarget(new Set(src.map(o => o.id)));
-  // cola logo acima do que está escolhido; sem seleção, na frente de tudo (pedido do usuário)
-  // (o fundo escolhido conta como "nada selecionado": é o que fica escolhido depois do Esc, e colava logo acima dele, por baixo de tudo)
-  const topIdx = ids_ => Math.max(-1, ...S.layers.map((l, i) => ids_.has(l.id) && l.type !== 'bg' ? i : -1));
-  const at = topIdx(RT.picks || new Set());
+  const anchor = pasteAnchor();
   pushUndo();
   let fontsAdded = false;
   for (const f of p.fonts || []) if (f && f.family && !S.brand.loaded.some(x => x.family === f.family)) {
@@ -11048,7 +11068,7 @@ function pasteLayers(p) {
     if (c.src) getImage(c.src);
     out.push(c);
   }
-  S.layers.splice(at < 0 ? S.layers.length : at + 1, 0, ...out);
+  S.layers.push(...out);
   // veio de um arquivo com outro formato principal (reclamação do usuário: elemento salvo perdia tamanho e espaçamento em outro arquivo):
   // x/y são frações do quadro de origem, então as distâncias esticavam com a altura (3:4 → 9:16 = 1,33×). Mantém os px entre as peças,
   // com o centro do conjunto no mesmo ponto relativo. Os ajustes por formato (fpos/fszF) eram relativos ao principal de lá: saem
@@ -11066,6 +11086,7 @@ function pasteLayers(p) {
   // (sem carrossel aqui, o que estava no slide 3 de lá entra no quadro, e não fora dele)
   if (!fr) { const s0 = Math.floor(clamp(Math.min(...out.map(l => +l.x || 0)), 0, 1e3)); toSlide(out, s0, curSlide()); }
   if (fr) intoFrame(fr, out);
+  stackAbove(out, anchor);
   RT.picks = new Set(out.map(l => l.id)); RT.selected = out[out.length - 1].id;
   if (fontsAdded) renderBrand();
   renderLayers(); renderProps(); changed();
@@ -12172,7 +12193,7 @@ function blendF(L) {
       })])
     );
     items = [...m.querySelectorAll('button')];
-    m.addEventListener('pointerleave', () => { items.forEach(x => x.classList.remove('on')); restore(); });
+    m.addEventListener('pointerleave', () => { if (done) return; items.forEach(x => x.classList.remove('on')); restore(); });
     document.body.append(m);
     const r = btn.getBoundingClientRect(), mh = Math.min(m.offsetHeight, innerHeight - 16);
     m.style.minWidth = Math.max(r.width, 196) + 'px'; m.style.maxHeight = mh + 'px';
@@ -13170,7 +13191,7 @@ function styleProps(L) {
     // com um trecho escolhido no palco o tamanho vale só para ele (L.runs, z)
     rangeF(L, 'size', 'Tamanho', 16, 400, 1, px, { layout:true, presets:FONT_SIZES, ico:'nf_fs', low:8, sedit:true, get:() => seditShown(L, 'size'),
       put:v => { if (seditPut(L, 'size', v)) return; for (const o of peersOf(L)) o.size = v; RT.layout.clear(); } }),
-    rangeF(L, 'lh', 'Entrelinha', -1, 1.6, .01, v => v.toFixed(2), { layout:true }),
+    rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
     rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
     segF(L, 'align', 'Alinhamento', ALIGN_OPTS),
     togF(L, 'Letras', CASE_OPTS)];
@@ -14042,6 +14063,7 @@ function addLayer(L, opts = {}) {
   S.layers.push(L);
   if (!fr && opts.x == null && !spot) flowAppend(L, si);
   if (fr) { intoFrame(fr, [L]); toast(`Entrou em "${groupName(fr)}"`); }
+  stackPasted([L]);
   select(L.id, !!fr); propTab = 'style'; renderProps(); changed({ layers:true }); seekLayer(L); RT.userSeek = false;
   // a agulha não passa da saída de quem estava na tela (entrada do novo mais longa que o resto da vida dele): o novo pode
   // ainda estar entrando, mas ninguém "some" ao adicionar
@@ -14163,6 +14185,7 @@ async function addSvgLayers(units, name, pos) {
   S.layers.push(...Ls);
   if (fr) intoFrame(fr, Ls);
   else { const gid = 'g' + Math.random().toString(36).slice(2, 7); Ls.forEach(l => { l.grp = gid; }); gmeta(gid, true).name = name || 'SVG'; }
+  stackPasted(Ls);
   RT.picks = new Set(Ls.map(l => l.id)); RT.selected = Ls[Ls.length - 1].id; propTab = 'style';
   renderProps(); changed({ layers:true }); seekLayers(Ls); RT.userSeek = false;
   toast(`SVG separado em ${Ls.length} camadas`);
@@ -14206,10 +14229,10 @@ $('#svgFile').addEventListener('change', e => { addImageFile(e.target.files[0]);
   });
   document.addEventListener('paste', e => {
     const tag = (e.target.tagName || '').toLowerCase(); if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable || overlayOpen()) return;
-    const f = [...(e.clipboardData?.files || [])].find(isImg); if (f) { e.preventDefault(); addImageFile(f); return; }
+    const f = [...(e.clipboardData?.files || [])].find(isImg); if (f) { e.preventDefault(); RT.pasteAt = { id:pasteAnchor(), t:performance.now() }; addImageFile(f); return; }
     const t = (e.clipboardData?.getData('text/plain') || '').trim();
     if (t.startsWith(CLIP_TAG)) { e.preventDefault(); try { pasteLayers(JSON.parse(t.slice(CLIP_TAG.length))); } catch (err) { toast('Não consegui colar esses elementos'); } return; }
-    if (/^(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(t)) { e.preventDefault(); addSvgText(t, 'SVG'); }
+    if (/^(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(t)) { e.preventDefault(); RT.pasteAt = { id:pasteAnchor(), t:performance.now() }; addSvgText(t, 'SVG'); }
   });
 }
 

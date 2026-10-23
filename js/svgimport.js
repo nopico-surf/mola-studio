@@ -503,6 +503,7 @@ async function addSvgNative(norm, name, pos) {
   S.layers.push(...Ls);
   if (fr) intoFrame(fr, Ls);
   else { const gid = 'g' + Math.random().toString(36).slice(2, 7); Ls.forEach(l => { l.grp = gid; }); gmeta(gid, true).name = name || 'SVG'; }
+  stackPasted(Ls); // Ctrl+V: logo acima da camada escolhida
   RT.picks = new Set(Ls.map(l => l.id)); RT.selected = Ls[Ls.length - 1].id; propTab = 'style';
   renderProps(); changed({ layers:true }); seekLayers(Ls); RT.userSeek = false;
   const nv = Ls.filter(l => l.type === 'shape').length, nt = Ls.filter(l => l.type === 'text').length, nl = Ls.filter(l => l.type === 'logo').length;
