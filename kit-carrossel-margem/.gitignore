@@ -1,0 +1,5 @@
+roteiros/
+saida/
+*.png
+__pycache__/
+*.pyc
