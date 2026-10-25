@@ -720,6 +720,8 @@ function imgCover(L, w, h, iw, ih, zoom) {
 }
 function setFrame(L, patch) { if (fmtOwn()) setFmt(L, patch); else Object.assign(L, patch); }
 const setPan = (L, ix, iy) => setFrame(L, { ix, iy });
+// opções do rangeF para ix/iy/zoom: lê e grava o enquadramento do formato aberto, na seleção toda
+const frameOpts = (L, k) => ({ get:() => panOf(L)[k], put:v => { for (const o of peersOf(L)) setFrame(o, { [k]:v }); } });
 // escala pela alça do canto (e "Tamanho da seleção"): fora do principal, um fator só deste formato
 // mw = largura em que o texto quebra (fração do quadro, já limitada pela margem): escalar o texto escala ela junto, senão as linhas quebram em outro lugar e a altura não acompanha
 const wrapW = o => { const M = marginBox(); return Math.min((o.maxW || .84) * SU, M ? M.x1 - M.x0 : Infinity) / SU; };
@@ -6489,6 +6491,7 @@ cv.addEventListener('dblclick', ev => {
   if (ev.shiftKey || ev.ctrlKey || ev.metaKey) return; // Shift/Ctrl + clique duplo só soma o item, não sobe para o grupo
   const pk0 = pickedLayers();
   if (L.grp && (L.type === 'text' || L.type === 'cta') && !L.locked && pk0.length === 1 && pk0[0] === L && !wholeGroup()) { editText(L); return; } // texto/botão de dentro de frames já escolhido sozinho: o clique duplo edita; antes disso só desce um nível (até escolher o texto)
+  if (L.grp && (L.type === 'text' || L.type === 'cta') && !L.locked && pk0.length === 1 && pk0[0] === L) { editText(L); return; } // frame (ou frames embrulhados) escolhido que só tem este texto: não há mais nível para descer, edita (a Caixa precisava de um clique duplo a mais)
   if (L.grp && (L.type === 'text' || L.type === 'cta')) { drillSelect(L); return; }
   if (L.grp && (wholeGroup() || (!(pk0.length === 1 && pk0[0] === L) && (pk0.length > 1 || gpar(L.grp))))) { drillSelect(L); return; } // frame de um item só escolhido inteiro: entra no item
   editText(L);
@@ -13260,10 +13263,11 @@ function styleProps(L) {
       fixH('Máscara'),
       field('Forma', maskSeg, null),
       // a imagem dentro da máscara
-      rangeF(L, 'zoom', 'Zoom', .2, 5, .01, v => v.toFixed(2) + '×'),
+      // enquadramento: fora do principal vale só no formato aberto (setFrame/panOf), como no palco
+      rangeF(L, 'zoom', 'Zoom', .2, 5, .01, v => v.toFixed(2) + '×', frameOpts(L, 'zoom')),
       rangeF(L, 'irot', 'Girar imagem', -180, 180, 1, v => Math.round(v || 0) + '°'),
-      rangeF(L, 'ix', 'Imagem ↔', -1, 1, .005, pct),
-      rangeF(L, 'iy', 'Imagem ↕', -1, 1, .005, pct),
+      rangeF(L, 'ix', 'Imagem ↔', -1, 1, .005, pct, frameOpts(L, 'ix')),
+      rangeF(L, 'iy', 'Imagem ↕', -1, 1, .005, pct, frameOpts(L, 'iy')),
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Preencher a máscara', onclick:() => { pushUndo(); setFrame(L, { zoom:1, ix:0, iy:0 }); delete L.irot; changed({ props:true }); renderProps(); } })]),
       h('p', { class:'hint', text:'A imagem nunca distorce. No palco: a alça do canto aumenta tudo, as das laterais mudam a máscara, a roda do mouse dá zoom na imagem, Alt + arrastar move a imagem dentro e as bolinhas nos cantos arredondam (Alt = só um canto).' }),
       ...tail(),
