@@ -10710,7 +10710,11 @@ function layerCell(L, where, depth = L.grp ? 1 : 0) {
 // escolhe o frame gid inteiro (com os de dentro), não o frame de fora
 function selectGroup(gid) {
   const lv = gleaves(gid); if (!lv.length) return;
-  RT.picks = new Set(lv.map(l => l.id)); RT.selected = lv[lv.length - 1].id; renderLayers(); renderProps(); needs = true;
+  RT.picks = new Set(lv.map(l => l.id)); RT.selected = lv[lv.length - 1].id;
+  // grupo do vídeo com o som (av): o painel é o do vídeo (máscara, zoom, posição da imagem…), como no clique no palco
+  RT.itemPicks = (gmeta(gid, true).av && !flowOf(gid) && !gkids(gid).length && lv.filter(l => !NOBOX(l)).length === 1) ? RT.picks : null;
+  if (RT.itemPicks) RT.selected = lv.find(l => !NOBOX(l)).id;
+  renderLayers(); renderProps(); needs = true;
 }
 function groupCell(gid, where, depth = 0) {
   const list = where === 'list', g = gmeta(gid, true), mem = gleaves(gid);
