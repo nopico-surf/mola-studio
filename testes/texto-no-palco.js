@@ -112,7 +112,12 @@ const ok = (c, msg, extra) => { if (c) console.log('ok   ' + msg); else { falhas
   if (wid) {
     const vals = await p.evaluate(sel => [...document.querySelector(sel).options].map(o => o.value), wid);
     const alvo = vals.includes('300') ? '300' : vals.find(v => v !== '500');
-    await p.selectOption(wid, alvo);
+    // com cliques de verdade: a lista é a própria do editor (.sel-pop, presa no body), não a nativa; o selectOption pulava ela
+    // e não pegava a edição fechando antes da escolha valer (o peso ia para o texto todo)
+    await p.click(wid);
+    await p.waitForTimeout(300);
+    const nome = await p.evaluate(([sel, v]) => [...document.querySelector(sel).options].find(o => o.value === v).textContent, [wid, alvo]);
+    await p.click(`.sel-pop:not(.pop-out) button:has-text("${nome}")`);
     await p.waitForTimeout(400);
     const r6 = await p.evaluate(() => { const L = S.layers.find(l => l.type === 'text'); return { runs: (L.runs || []).map(r => [r.t, r.w || null]), weight: L.weight, aberto: !!document.querySelector('.sedit') }; });
     ok(r6.weight === 500 && r6.runs.some(r => r[0].trim() === 'palavras' && String(r[1]) === alvo),

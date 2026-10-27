@@ -7344,12 +7344,15 @@ function seditStyle(k) {
   if (!SED.dirty) { pushUndo(); SED.dirty = true; }
   return seditPut(L, k, v);
 }
+// o que pertence ao painel e não fecha a edição: o painel, a janelinha ao lado, o seletor de cor, os menus e as listas próprias
+// dos selects (`.sel-pop`, presas no body: sem elas, escolher a fonte ou o peso fechava a edição antes e valia para o texto todo)
+const seditKeep = t => !!t.closest('#props, .pop, .cp-pop, .ctx, .mpop, .sel-pop, .gf-pop');
 // foco que vai para o painel (ou para uma janelinha / seletor de cor) não fecha a edição: o trecho continua escolhido
 function seditBlur() {
   setTimeout(() => {
     const el = SED.el; if (!el) return;
     const ae = document.activeElement;
-    if (ae && ae !== document.body && ae !== el && (ae.closest('#props') || ae.closest('.left') || ae.closest('.pop') || ae.closest('.cp-pop') || ae.closest('.ctx') || ae.closest('.mpop'))) return;
+    if (ae && ae !== document.body && ae !== el && (ae.closest('.left') || seditKeep(ae))) return;
     if (ae === el) return;
     seditClose();
   }, 0);
@@ -7358,7 +7361,7 @@ function seditBlur() {
 document.addEventListener('pointerdown', e => {
   if (!SED.el) return;
   const t = e.target;
-  if (!t || !t.closest || t.closest('.sedit') || t.closest('#props') || t.closest('.pop') || t.closest('.cp-pop') || t.closest('.ctx') || t.closest('.mpop') || t.closest('.modal')) return;
+  if (!t || !t.closest || t.closest('.sedit') || seditKeep(t) || t.closest('.modal')) return;
   if (e.button === 0 && !RT.hand && t.closest('#stageBox') && !t.closest('#stageHint') && seditNear(e)) { e.preventDefault(); e.stopPropagation(); seditPointer(e); return; }
   seditClose();
 }, true);
