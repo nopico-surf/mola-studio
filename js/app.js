@@ -297,9 +297,9 @@ const SU = 1080; // unidade dos tamanhos (fração × SU = px): igual em todo fo
 const sameW = () => FORMATS[baseFmt()].w === W();
 const FPS_OPTS = [24, 25, 30, 50, 60];
 const fps = () => (S && FPS_OPTS.includes(S.fps) ? S.fps : 30);
-const TYPE_LABEL = { bg:'Fundo', text:'Texto', logo:'Logo', cta:'Botão', image:'Imagem', video:'Vídeo', svg:'SVG', shape:'Forma', camera:'Câmera', fx:'Transição', audio:'Áudio' };
+const TYPE_LABEL = { bg:'Fundo', text:'Texto', logo:'Logo', cta:'Botão', image:'Imagem', video:'Vídeo', svg:'SVG', shape:'Forma', camera:'Câmera', fx:'Transição', audio:'Áudio', sfx:'Efeito sonoro' };
 const typeKey = L => L.type === 'image' && L.video ? 'video' : L.type === 'logo' && L.svg ? 'svg' : L.type;
-const TYPE_COLOR = { bg:'var(--c-bg)', text:'var(--c-text)', logo:'var(--c-logo)', cta:'var(--c-cta)', image:'var(--c-image)', video:'var(--c-video)', svg:'var(--c-svg)', shape:'var(--c-shape)', camera:'var(--c-camera)', fx:'var(--c-fx)', audio:'var(--c-audio)' };
+const TYPE_COLOR = { bg:'var(--c-bg)', text:'var(--c-text)', logo:'var(--c-logo)', cta:'var(--c-cta)', image:'var(--c-image)', video:'var(--c-video)', svg:'var(--c-svg)', shape:'var(--c-shape)', camera:'var(--c-camera)', fx:'var(--c-fx)', audio:'var(--c-audio)', sfx:'var(--c-sfx)' };
 const ROLE_NAME = { logo:'Logo', logoSmall:'Logo pequeno', brand:'Nome da marca', title:'Título', sub:'Subtítulo', cta:'Botão', big:'Número grande', offer:'Oferta', tag:'Etiqueta', kicker:'Chamada', k1:'Frase 1', k2:'Frase 2', k3:'Frase 3', image:'Imagem', bg:'Fundo', caption:'Legenda' };
 const ROLE_TEXT = { brand:'GRÃO LENTO', title:'Café de verdade,\nsem pressa.', sub:'Torra artesanal na sua porta em 24h', cta:'Peça agora  →', big:'-30%', offer:'na primeira assinatura', tag:'Só até domingo', kicker:'LANÇAMENTO', k1:'Moído na hora.', k2:'Torrado ontem.', k3:'Na sua porta amanhã.' };
 const GOOGLE_SUGGEST = ['Urbanist','Inter Tight','Roboto','Open Sans','Lato','Nunito','Nunito Sans','Raleway','Work Sans','Mulish','Karla','Barlow','Barlow Condensed','Josefin Sans','Quicksand','Kanit','Prompt','Jost','Albert Sans','Be Vietnam Pro','Public Sans','IBM Plex Sans','IBM Plex Serif','Libre Franklin','Merriweather','Lora','EB Garamond','Crimson Pro','Source Serif 4','Noto Sans','Noto Serif','Playfair','Abril Fatface','Alfa Slab One','Space Mono','JetBrains Mono','Fraunces','Manrope','Unbounded','Bricolage Grotesque','Syne','Sora','Outfit','Plus Jakarta Sans','DM Sans','DM Serif Display','Instrument Serif','Instrument Sans','Space Grotesk','Archivo','Archivo Black','Anton','Bebas Neue','Oswald','Montserrat','Poppins','Inter','Figtree','Onest','Rubik','Geist','Hanken Grotesk','Schibsted Grotesk','Familjen Grotesk','Big Shoulders Display','Bodoni Moda','Playfair Display','Cormorant Garamond','Gloock','Caveat','Permanent Marker','Lexend','Red Hat Display','Chivo','Darker Grotesque','Krona One','Dela Gothic One','Rethink Sans','Epilogue','Young Serif','Libre Caslon Display','Shrikhand','Righteous','Bowlby One','Lilita One'];
@@ -4180,7 +4180,7 @@ function drawFrame(ctx, t, rs, isExport, clip) {
    Tudo por preset. Câmera e transição são camadas da timeline (tipos 'camera' e 'fx'): não aparecem no palco
    e só valem entre o início e o fim da barra. Sombra, marca, movimento e moldura são escolhas da própria camada.
    ============================================================ */
-const NOBOX = L => L.type === 'camera' || L.type === 'fx' || L.type === 'audio'; // áudio: só tempo, também não aparece no palco
+const NOBOX = L => L.type === 'camera' || L.type === 'fx' || L.type === 'audio' || L.type === 'sfx'; // áudio e efeito sonoro: só tempo, também não aparecem no palco
 const sinIO = u => .5 - .5 * Math.cos(Math.PI * clamp(u));
 const hashId = s => { let x = 7; for (const c of String(s)) x = (x * 31 + c.charCodeAt(0)) % 100003; return x; };
 // telas de apoio do tamanho do quadro: uma por uso e por tamanho
@@ -7582,6 +7582,7 @@ async function flushSave() {
 }
 function changed(opts = {}) {
   linkSync();
+  if (sfxEnsure()) { opts = { ...opts, layers:true }; queueMicrotask(renderTimeline); } // efeito sonoro novo (ou que saiu) com a animação
   tpSync(); // texto que segue uma forma
   flowBake();
   RT.rev++; needs = true; autosave();
@@ -7607,6 +7608,7 @@ async function openState(st, id, name, project = FILES.project) {
   undoStack.length = 0; redoStack.length = 0; redoBase = null; HIST_STR.clear(); HIST_ID.clear(); syncHist();
   FC.pre = FC.suf = null; FC.sigs = null; LCACHE.clear(); LCACHE_PX = 0; // o cache do palco era do arquivo de antes
   S = st; RT.layout.clear(); RT.slide = 0; RT.slidePicks = null;
+  if (sfxEnsure()) autosave(); // arquivo antigo com "Sons nas entradas" ligado: os sons viram camadas
   // fotos de outros arquivos saem da memória (cada arquivo aberto deixava as dele decodificadas até fechar a aba); quem precisar carrega de novo
   { const keep = new Set(); for (const L of S.layers) for (const k of [L.src, L.vsrc, L.cut && L.cut.orig, L.cut && L.cut.mask]) if (k) keep.add(k);
     for (const k of [...RT.images.keys()]) if (!keep.has(k)) RT.images.delete(k); }
@@ -8968,7 +8970,7 @@ async function cutFiles(got) {
 /* ============================================================
    Trilha: música (batidas detectadas) e efeitos sonoros automáticos nas entradas
    S.audio = { id, name, dur, vol, from:'zero'|'beat'|'peak', bpm, beats:[s na música], peaks:[0..1 a cada 0,1 s], firstLoud, peakAt }
-   S.sfx = 'off' | 'soft' | 'punchy'. A mistura é feita num OfflineAudioContext: igual na prévia e no MP4.
+   S.sfx = 'off' | 'soft' | 'punchy' (sons nas animações, cada um uma camada: js/sons.js). A mistura é feita num OfflineAudioContext: igual na prévia e no MP4.
    ============================================================ */
 const MUSIC = new Map(); // id da mídia → AudioBuffer
 async function musicBuffer(id) {
@@ -9068,58 +9070,7 @@ function snapToBeats() {
   changed({ layers:true, props:true }); renderTimeline();
   toast(n ? `${n} elemento${n > 1 ? 's' : ''} no ritmo da música` : 'Tudo já estava na batida', 4000, UNDO_ACT);
 }
-/* efeitos: o som vem do preset de entrada (deslizes = sopro, molas = pop, digitação = cliques, desenho = brilho) */
-const SFX = { off:'Nenhum', soft:'Sutis', punchy:'Marcantes' };
-function sfxKind(L) {
-  if (L.type === 'fx') return L.fx === 'flash' ? 'shine' : 'whoosh';
-  if (L.type === 'camera') return L.cam === 'punch' || L.cam === 'shake' ? 'boom' : null;
-  const k = L.in || ''; if (!k || k === 'cut' || k === 'fade') return null;
-  if (/^(pop|spring|stamp|elastic|flip|spin|drop|bounce)/.test(k)) return 'pop';
-  if (/^(type|counter|scramble|glitch)/.test(k)) return 'tick';
-  if (/^(handwrite|draw|assemble|line)/.test(k)) return 'shine';
-  return 'whoosh';
-}
-function sfxEvents() {
-  const ev = [];
-  for (const L of S.layers) {
-    if (!L.visible || L.type === 'bg') continue;
-    const kind = sfxKind(L); if (!kind) continue;
-    const ph = phase(L, L.start) || { inD:.5 }, span = (L.end ?? S.duration) - L.start;
-    if (kind === 'tick') { const n = clamp(Math.round(((L.text || '').length || 8) * .6), 3, 18); for (let i = 0; i < n; i++) ev.push({ t:L.start + Math.max(.3, ph.inD) * .9 * i / n, kind, i }); }
-    else ev.push({ t:L.start, kind, d:L.type === 'fx' ? span : Math.max(.3, ph.inD), mid:L.type === 'fx', i:0 });
-  }
-  ev.sort((a, b) => a.t - b.t);
-  // o mesmo som ao mesmo tempo (grupo entrando junto) toca uma vez só
-  return ev.filter((e, i) => e.kind === 'tick' || !ev.slice(Math.max(0, i - 6), i).some(o => o.kind === e.kind && Math.abs(o.t - e.t) < .06));
-}
-function sfxNoise(ctx) {
-  const n = ctx.sampleRate, b = ctx.createBuffer(1, n, n), d = b.getChannelData(0);
-  for (let i = 0; i < n; i++) d[i] = rand(i, 17) * 2 - 1;
-  return b;
-}
-function playSfx(ctx, out, noise, e) {
-  const t = Math.max(0, e.t), g = ctx.createGain(); g.connect(out);
-  const env = (a, peak, dec) => { g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(.0001, t + a + dec); };
-  if (e.kind === 'whoosh') {
-    const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), d = clamp(e.d || .5, .3, 1.2);
-    const a = e.mid ? d * .5 : .07, dec = e.mid ? d * .5 : d * .8;
-    s.buffer = noise; s.loop = true; f.type = 'bandpass'; f.Q.value = 1.2;
-    f.frequency.setValueAtTime(350, t); f.frequency.exponentialRampToValueAtTime(2600, t + a); f.frequency.exponentialRampToValueAtTime(700, t + a + dec);
-    s.connect(f); f.connect(g); env(a, .6, dec); s.start(t); s.stop(t + a + dec + .05);
-  } else if (e.kind === 'pop') {
-    const o = ctx.createOscillator(); o.frequency.setValueAtTime(620, t); o.frequency.exponentialRampToValueAtTime(170, t + .1);
-    o.connect(g); env(.004, .7, .16); o.start(t); o.stop(t + .25);
-  } else if (e.kind === 'tick') {
-    const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(); s.buffer = noise; f.type = 'highpass'; f.frequency.value = 2500 + (e.i % 3) * 400;
-    s.connect(f); f.connect(g); env(.001, .35, .035); s.start(t, rand(e.i, 5) * .5); s.stop(t + .06);
-  } else if (e.kind === 'boom') {
-    const o = ctx.createOscillator(); o.frequency.setValueAtTime(95, t); o.frequency.exponentialRampToValueAtTime(38, t + .45);
-    o.connect(g); env(.006, 1, .55); o.start(t); o.stop(t + .7);
-  } else if (e.kind === 'shine') {
-    [1320, 1980, 2640].forEach((fr, i) => { const o = ctx.createOscillator(), og = ctx.createGain(); o.frequency.value = fr; og.gain.value = [.5, .3, .15][i]; o.connect(og); og.connect(g); o.start(t + i * .04); o.stop(t + 1.3); });
-    env(.02, .28, 1.1);
-  }
-}
+/* efeitos sonoros: cada um é uma camada (type:'sfx'), em js/sons.js */
 /* som com velocidade (vSpd): o trecho [a, b] do som tocado sp vezes mais rápido sem mudar o tom (como o <video> e o "manter o tom"
    dos editores). WSOLA: quadros de 40 ms com janela de Hann a cada 20 ms na saída, lidos a cada 20 × sp ms na entrada; cada quadro
    procura (±12 ms) o encaixe que mais se parece com a continuação do anterior (correlação numa grade de 4 em 4 amostras, depois
@@ -9168,7 +9119,7 @@ function vidStretch(A, buf, a, b, sp) {
   return res;
 }
 const audLayers = () => S.layers.filter(l => l.type === 'audio' && l.visible && l.aud && (l.vol ?? 1) > 0);
-const hasAudio = () => !!(S.audio && S.audio.id) || (!!S.sfx && S.sfx !== 'off') || audLayers().length > 0;
+const hasAudio = () => !!(S.audio && S.audio.id) || audLayers().length > 0 || sfxLayers().length > 0;
 // sl = slide (carrossel: cada arquivo leva só o som dos vídeos do próprio slide); null = todos
 // voice = só o som das camadas de áudio (a fala, para a legenda): sem a música nem os efeitos
 async function buildMix(sr = 48000, d = S.duration, sl = null, voice = false) {
@@ -9234,11 +9185,7 @@ async function buildMix(sr = 48000, d = S.duration, sl = null, voice = false) {
     g.gain.setValueAtTime(0, st); g.gain.linearRampToValueAtTime(v, up); g.gain.setValueAtTime(v, Math.max(up, dn)); g.gain.linearRampToValueAtTime(0, en);
     s.connect(g); g.connect(vo); s.start(st, o0); s.stop(en);
   }
-  if (S.sfx && S.sfx !== 'off' && !voice) {
-    const out = off.createGain(), comp = off.createDynamicsCompressor(), noise = sfxNoise(off);
-    out.gain.value = S.sfx === 'punchy' ? .9 : .4; out.connect(comp); comp.connect(off.destination);
-    for (const e of sfxEvents()) if (e.t < d) playSfx(off, out, noise, e);
-  }
+  if (!voice) await sfxMix(off, d, sfxLayers(sl)); // efeitos sonoros (camadas sfx; no carrossel, só os do slide)
   return off.startRendering();
 }
 /* entra e sai suave (pedido do usuário: o corte do som não ficar seco). afIn/afOut = segundos no começo/fim da barra da camada,
@@ -9396,8 +9343,8 @@ async function encodeAudio(buf, pick) {
 /* prévia: a mistura toca junto com o palco e a agulha segue o relógio do áudio (sem deriva entre som e imagem) */
 const AUD = { ctx:null, src:null, buf:null, sig:'', chk:0, building:false, c0:0, t0:0 };
 function audioSig() {
-  const A = S.audio, fx = S.sfx && S.sfx !== 'off';
-  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from, riseOf()] : 0, S.sfx || 'off', audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol, l.afIn, l.afOut, l.vPause, l.vSkip, l.vSpeed, riseOf(l), l.vEnh, l.vDen]), S.layers.filter(l => l.xin).map(l => [l.id, l.xin, l.start, l.visible]), fx ? S.layers.map(l => [l.visible, l.type, l.start, l.end, l.in, l.inDur, l.speed, l.cam, l.fx, l.text && l.text.length]) : 0]);
+  const A = S.audio;
+  return JSON.stringify([S.duration, A ? [A.id, A.vol, A.from, riseOf()] : 0, sfxSigAll(), audLayers().map(l => [l.aud, l.start, l.end, l.vIn, l.vOut, l.vol, l.afIn, l.afOut, l.vPause, l.vSkip, l.vSpeed, riseOf(l), l.vEnh, l.vDen]), S.layers.filter(l => l.xin).map(l => [l.id, l.xin, l.start, l.visible])]);
 }
 async function rebuildMix(sig) {
   AUD.building = true;
@@ -10740,6 +10687,7 @@ function ltIcons() { // SI só existe mais adiante no arquivo: os ícones entram
   lt_camera:SI('<rect x="1.5" y="4.5" width="9.5" height="7" rx="1.5"/><path d="M11 7l3.5-2v6L11 9"/>'),
   lt_fx:SI('<path d="M3 13 13 3M3 8.5 8.5 3M7.5 13 13 7.5"/>'),
   lt_audio:SI('<path d="M2.5 6.2h2.3L8 3.5v9L4.8 9.8H2.5z"/><path d="M10.5 6a3 3 0 0 1 0 4M12.3 4.3a5.5 5.5 0 0 1 0 7.4"/>'),
+  lt_sfx:SI('<path d="M2 6.4h2L7 4v8L4 9.6H2z"/><path d="M11.5 2.5v3M10 4h3M12.5 9v4M11 11h3"/>'),
   lt_group:SI('<rect x="2.5" y="2.5" width="11" height="11" rx="1" stroke-dasharray="2 1.6"/>'),
   lt_frame:SI('<path d="M5 1.5v13M11 1.5v13M1.5 5h13M1.5 11h13"/>'),
   chev_d:SI('<path d="M4.5 6.5 8 10l3.5-3.5"/>'),
@@ -11015,6 +10963,7 @@ function duplicateLayer(L) {
     S.layers.splice(S.layers.indexOf(o) + 1, 0, c); last = c;
   }
   for (const c of cs) if (c.link && idm.has(c.link)) c.link = idm.get(c.link); // som copiado junto com o vídeo segue a cópia
+  for (const c of cs) if (c.links) { c.links = c.links.filter(id => idm.has(id)).map(id => idm.get(id)); if (!c.links.length) { delete c.links; c.auto = false; } } // efeito sonoro copiado com o elemento segue a cópia; sozinho fica solto
   for (const c of cs) if (c.tpRef && idm.has(c.tpRef)) c.tpRef = idm.get(c.tpRef); // texto copiado junto com a forma segue a cópia
   select(last.id); changed({ layers:true });
 }
@@ -11023,6 +10972,7 @@ function deleteLayer(L, msg) {
   const grp = isPicked(L.id) ? pickedLayers() : [L];
   if (grp.some(g => g.locked)) { lockedNote(grp); return; }
   for (const o of [...grp]) if (o.video) for (const a of S.layers) if (linkOf(a) === o && !grp.includes(a)) grp.push(a); // apagar o vídeo leva o som dele
+  sfxOnDelete(grp); // apagar o elemento leva o efeito sonoro dele; apagar o efeito não o traz de volta sozinho
   pushUndo(); const i = S.layers.indexOf(L);
   grp.forEach(g => S.layers.splice(S.layers.indexOf(g), 1));
   // apagou o som do vídeo: o grupo que só existia para os dois (sem nome, animação ou estilo próprios) se desfaz
@@ -11054,6 +11004,7 @@ function clipPayload() {
 function insertTarget(ids) {
   let g = wholeGroup() || (pickedLayers().length === 1 && selL()?.grp) || null;
   while (g && ids && gleaves(g).every(l => ids.has(l.id))) g = gpar(g);
+  if (g && (gmeta(g) || {}).sfx) return null; // o grupo "Efeitos sonoros" só guarda os sons: o que se adiciona com um som escolhido não entra nele
   return g;
 }
 // ls já estão em S.layers: entram no frame gid (grupos colados viram frames de dentro), logo acima do último item dele na pilha;
@@ -11157,7 +11108,7 @@ function pasteLayers(p) {
     }
     for (const g of Object.values(gm)) if (S.groups[g]) delete S.groups[g].fszF;
   }
-  const idm = new Map(src.map((o, i) => [o.id, out[i].id])); out.forEach(c => { if (c.link && idm.has(c.link)) c.link = idm.get(c.link); if (c.tpRef && idm.has(c.tpRef)) c.tpRef = idm.get(c.tpRef); }); // som colado junto com o vídeo (e texto com a forma que ele segue) vai com a cópia
+  const idm = new Map(src.map((o, i) => [o.id, out[i].id])); out.forEach(c => { if (c.link && idm.has(c.link)) c.link = idm.get(c.link); if (c.tpRef && idm.has(c.tpRef)) c.tpRef = idm.get(c.tpRef); if (c.links) { c.links = c.links.filter(id => idm.has(id)).map(id => idm.get(id)); if (!c.links.length) { delete c.links; c.auto = false; } } }); // som colado junto com o vídeo (e texto com a forma que ele segue) vai com a cópia
   // carrossel: Meus elementos entram no slide atual; colado que cairia depois do último slide (veio de um carrossel maior) também
   // (sem carrossel aqui, o que estava no slide 3 de lá entra no quadro, e não fora dele)
   if (!fr) { const s0 = Math.floor(clamp(Math.min(...out.map(l => +l.x || 0)), 0, 1e3)); toSlide(out, s0, curSlide()); }
@@ -11299,6 +11250,7 @@ const tlLabel = L => {
   if (L.type === 'camera') return (CAMS[L.cam] || {}).label || '';
   if (L.type === 'fx') return (FXS[L.fx] || {}).label || '';
   if (L.type === 'audio') return '';
+  if (L.type === 'sfx') return (SFXK[L.sk] || {}).label || '';
   if (L.capt) return 'Legenda · ' + capStyle(L).name;
   const m = L.type === 'text' ? TP : BP; return (m[L.in] || {}).label || '';
 };
@@ -12854,6 +12806,7 @@ function renderProps() {
 
   if (L.type === 'bg') { box.append(frameFlowSec(), bgProps(L)); return; }
   if (L.type === 'audio' && !gid) { box.append(...audioProps(L)); return; }
+  if (L.type === 'sfx' || (gid && gleaves(gid).every(l => l.type === 'sfx'))) { const As = pickedLayers().filter(o => o.type === 'sfx'); box.append(...sfxProps(L.type === 'sfx' ? L : As[0], As)); return; }
   if (NOBOX(L) && !gid) { box.append(...camFxProps(L)); return; } // câmera e transição: só preset, ritmo e tempo
 
   const tabs = h('div', { class:'tabs', role:'tablist' }, [['anim', 'Animação'], ['style', 'Conteúdo e estilo']].map(([k, t]) =>
@@ -14152,7 +14105,7 @@ function addLayer(L, opts = {}) {
 }
 // Adicionar em grupos (pedido do usuário: só layout, nada novo): os mesmos itens separados por tipo, cada um com o glifo de ADD_KINDS[].gl.
 // Item que não estiver em nenhum grupo vai para o fim do último
-const ADD_GROUPS = [['Texto', ['title', 'sub', 'kicker', 'big', 'hl', 'impact', 'price', 'caption']], ['Mídia', ['image', 'video', 'logo', 'svg', 'sound']],
+const ADD_GROUPS = [['Texto', ['title', 'sub', 'kicker', 'big', 'hl', 'impact', 'price', 'caption']], ['Mídia', ['image', 'video', 'logo', 'svg', 'sound', 'sfx']],
   ['Formas', ['shape', 'pen', 'box', 'cta']], ['Cena', ['camera', 'fx']]];
 function renderAdds() {
   const box = $('#adds'); box.innerHTML = '';
@@ -14846,6 +14799,7 @@ ADD_KINDS.push(
   { id:'price', label:'Preço de/por', gl:'<span style="font-size:10px;font-weight:700"><s style="opacity:.6">9</s> 5</span>', add:addPrice },
   { id:'sound', label:'Som', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 6v4M5.5 3.5v9M9 1.5v13M12.5 4.5v7M16 6.5v3"/></svg>', add:() => pickFile('audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac', addAudioFile) },
   { id:'video', label:'Vídeo', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="18" height="14" rx="2"/><path d="M8 5v6l5-3z" fill="currentColor"/></svg>', add:() => pickFile('video/*', addVideoFile) },
+  { id:'sfx', label:'Efeito sonoro', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 6h2.5L8 3v10l-4-3H1.5z"/><path d="M14 1.5v4M12 3.5h4M15.5 9.5v5M13 12h5"/></svg>', add:() => sfxAdd() },
   { id:'camera', label:'Câmera', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="13" height="10" rx="2"/><path d="M14 7l5-3v8l-5-3"/></svg>', add:addCamera },
   { id:'fx', label:'Transição', gl:'<svg width="20" height="16" viewBox="0 0 20 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 15L9 1M6 15L14 1M11 15L19 1"/></svg>', add:addFx },
 );
@@ -14871,8 +14825,13 @@ function renderAudio() {
       ...riseFields(A),
       h('div', { class:'row' }, [h('button', { class:'btn small', text:'Encaixar na batida', title:'Cada elemento entra na batida mais próxima (Ctrl+Z desfaz)', onclick:snapToBeats })]));
   }
-  box.append(segSet(S, 'sfx', 'Sons nas entradas', Object.entries(SFX)),
-    h('p', { class:'hint', text:'Sopro nos deslizes, pop nas molas, cliques na digitação. Toca na prévia (espaço) e sai no MP4.' }));
+  { // efeitos sonoros: cada um vira uma camada no grupo "Efeitos sonoros" (js/sons.js)
+    const wrap = h('div', { class:'segs tight', role:'group', 'aria-label':'Efeitos sonoros' }), cur = S.sfx || 'off';
+    SFX_LV.forEach(([v, t]) => wrap.append(h('button', { 'aria-pressed':String(cur === v), text:t, onclick:() => { if (cur !== v) sfxSetLevel(v); } })));
+    box.append(field('Efeitos sonoros', wrap, null, true),
+      h('p', { class:'hint', text:(cur === 'off' ? 'Ligados, cada animação de entrada ganha o som dela (sopro nos deslizes, pop nas molas, cliques na digitação). ' : '')
+        + 'Cada som é uma camada no grupo "Efeitos sonoros" da timeline: apague, arraste ou troque o som de qualquer um (ou adicione um em Adicionar → Efeito sonoro). Toca na prévia (espaço) e sai no MP4.' }));
+  }
 }
 // "Sobe depois": baixo até a agulha marcada e depois sobe suave até o Volume (riseOf/riseGain, buildMix)
 // A = a trilha (S.audio, painel da coluna da esquerda) ou uma camada de Áudio (painel do som e do vídeo dele)
@@ -15083,6 +15042,7 @@ $('#varBtn').onclick = openVars;
   }
   const interned = !fresh && await internImages(S);
   const torn = !fresh && fixTornGroups(S);
+  const sfxNew = !fresh && sfxEnsure(); // arquivo antigo com "Sons nas entradas" ligado: os sons viram camadas
   DB.set('currentId', FILES.id); ABAS.setCur(FILES.id); showFileName(); projSync(); setSaveState('Salvo');
   RT.selected = S.layers.find(l => l.type === 'logo')?.id || S.layers[1]?.id || S.layers[0]?.id;
   renderAll(); updPlay(); fitStage();
@@ -15092,6 +15052,6 @@ $('#varBtn').onclick = openVars;
   S.layers.forEach(l => l.src && getImage(l.src));
   ensureFonts();
   pause(); T = heroTime(); needs = true;
-  if (fresh || interned || torn) autosave();
+  if (fresh || interned || torn || sfxNew) autosave();
   setTimeout(gcMedia, 20000);
 })();
