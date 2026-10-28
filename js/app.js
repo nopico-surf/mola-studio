@@ -7122,7 +7122,7 @@ function seditGeo(L) {
   if (one) { const G = geomNow(L); k = G && G.w ? b.w / G.w : 1; lineH = size * 1.2; w = b.w / k; }
   else {
     const lay = layoutText(L, caseTxt(L, seditShow(L))); size = lay.size; lineH = lay.lineH; w = lay.innerW; k = b.k || 1; font = lay.font;
-    nowrap = lay.nLines <= seditShow(L).split('\n').length; // sem quebra automática o campo também não quebra (o DOM mede uma fração a mais que o canvas e a seleção virava blocos soltos)
+    nowrap = !!seditBreaks(L, seditTxt(L)) || lay.nLines <= seditShow(L).split('\n').length; // o campo só quebra onde o canvas quebrou (seditBreaks); sem isso, só sem quebra automática (o DOM mede uma fração a mais que o canvas e a seleção virava blocos soltos)
   }
   const f = k * sc * (cm ? cm.s : 1), dy = seditDy(font, size, lineH, lineH / 2 + size * (one ? .35 : .34));
   const cen = camFwd(cm, { x:b.x + b.w / 2, y:b.y + b.h / 2 }), bx = $('#stageBox').getBoundingClientRect();
@@ -7144,6 +7144,7 @@ function seditPlace() {
     if (fresh) { el.style.display = 'none'; void el.offsetHeight; el.style.display = ''; if (SED.range && document.activeElement === el) seditSelect(SED.range[0], SED.range[1]); }
   }
   el.classList.toggle('one', !!g.one);
+  seditRewrap();
 }
 // o texto do campo sai dos nós, não do innerText: com "Caixa alta" (text-transform) o innerText devolve o texto já em maiúsculas
 // e era isso que ia para a camada
@@ -7185,17 +7186,68 @@ function seditRetext(L, txt) {
 // o campo com o peso, itálico, fonte e tamanho de cada trecho: com o texto corrido numa fonte só, as letras do campo ficavam mais largas
 // ou mais estreitas que as do canvas e o cursor e a seleção caíam na letra errada
 function seditFill(el, L) {
-  const rs = !L.capt && runsOf(L);
-  el.textContent = rs ? '' : seditTxt(L);
-  if (rs) for (const r of rs) {
-    if (!r.t) continue;
-    const sp = h('span', { text:r.t });
-    if (r.w != null) sp.style.fontWeight = r.w;
-    if (r.i != null) sp.style.fontStyle = r.i ? 'italic' : 'normal';
-    if (r.f) sp.style.fontFamily = `"${r.f}", system-ui, sans-serif`;
-    if (r.z != null) sp.style.fontSize = (r.z * 100) + '%';
-    el.append(sp);
+  const rs = !L.capt && runsOf(L), txt = seditTxt(L), brk = new Set(seditBreaks(L, txt) || []);
+  el.textContent = '';
+  let i = 0;
+  for (const r of rs || [{ t:txt }]) {
+    const cs = [...(r.t || '')];
+    for (let j = 0; j < cs.length;) {
+      const b = brk.has(i + j); let k = j; while (k < cs.length && brk.has(i + k) === b) k++;
+      const s = cs.slice(j, k).join('');
+      let n = document.createTextNode(s);
+      if (rs) { // um span por trecho, como o editor do painel
+        n = h('span', { text:s });
+        if (r.w != null) n.style.fontWeight = r.w;
+        if (r.i != null) n.style.fontStyle = r.i ? 'italic' : 'normal';
+        if (r.f) n.style.fontFamily = `"${r.f}", system-ui, sans-serif`;
+        if (r.z != null) n.style.fontSize = (r.z * 100) + '%';
+      }
+      if (b) { const w = h('span', { class:'sbrk' }); w.append(n); n = w; }
+      el.append(n); j = k;
+    }
+    i += cs.length;
   }
+}
+// O campo quebra a linha exatamente onde o canvas quebrou (reclamação do usuário: a seleção não chegava à 1ª linha). Quebrando sozinho,
+// o campo errava: com uma palavra mais larga que a caixa ("somosmargem.com.br") ele ficava com a largura dela e a 1ª linha levava
+// a palavra seguinte, então as linhas do campo não ficavam em cima das do desenho. Agora o campo não quebra (white-space:pre) e os
+// espaços onde o canvas quebrou ficam num `.sbrk` (largura zero, `::after` = quebra de linha): continuam sendo letras do texto,
+// então Backspace no começo da linha apaga o espaço como em qualquer editor. Devolve os índices (em letras) desses espaços, ou null
+// quando o campo quebra sozinho como antes (legenda, texto em curva, caixa alta que muda o número de letras).
+function seditBreaks(L, txt) {
+  if (L.type !== 'text' || L.capt || tpKind(L)) return null;
+  const cs = [...txt], shown = caseTxt(L, txt);
+  if ([...shown].length !== cs.length) return null;
+  const out = [];
+  let prev = 0;
+  for (const ln of layoutText(L, shown).lines.slice(1)) {
+    const i0 = ln.i0; if (!(i0 > prev)) continue;
+    prev = i0;
+    if (cs[i0 - 1] === '\n') continue; // quebra do Enter: o próprio texto já quebra
+    const brk = []; for (let j = i0 - 1; j >= 0 && cs[j] === ' '; j--) brk.unshift(j);
+    out.push(...brk);
+  }
+  return out;
+}
+// os índices das letras que estão nos `.sbrk` do campo agora (o navegador mexe no campo enquanto se digita)
+function seditDomBrk(el) {
+  const out = []; let n = 0;
+  const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let t = tw.nextNode(); t; t = tw.nextNode()) {
+    const len = [...t.data].length, b = t.parentElement && t.parentElement.closest('.sbrk');
+    if (b) for (let j = 0; j < len; j++) out.push(n + j);
+    n += len;
+  }
+  return out;
+}
+// o canvas quebrou a linha em outro lugar (digitando, ou o tamanho/largura mudou no painel): refaz o campo e devolve a seleção
+function seditRewrap() {
+  const el = SED.el, L = seditL(); if (!el || !L || SED.comp) return;
+  const want = seditBreaks(L, seditTxt(L)); if (!want) return;
+  if (want.join() === seditDomBrk(el).join() && seditRead(el) === seditTxt(L)) return;
+  const on = document.activeElement === el, rg = on ? seditSel(el) : null;
+  seditFill(el, L);
+  if (rg) seditSelect(rg[0], rg[1]);
 }
 // clicar ou arrastar logo fora das letras (na caixa do texto ou pouco além dela) põe o cursor / escolhe no campo, como no Figma;
 // antes o clique ia para o palco: pegava a alça da caixa (a largura mudava) ou fechava a edição
@@ -7241,6 +7293,10 @@ function stageEdit(L) {
   const rg = document.createRange(); rg.selectNodeContents(el); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(rg);
   el.addEventListener('pointerdown', e => e.stopPropagation()); // o clique dentro do campo não mexe na seleção do palco
   el.addEventListener('input', seditInput);
+  // acento com tecla morta (´ + a) é uma composição: refazer o campo no meio dela perdia a letra
+  el.addEventListener('compositionstart', () => { SED.comp = true; });
+  el.addEventListener('compositionend', () => { SED.comp = false; seditPlace(); });
+  SED.comp = false;
   SED.range = [0, [...SED.orig].length]; SED.syncs = []; // abre com o texto todo escolhido
   const onSel = () => { if (!SED.el) { document.removeEventListener('selectionchange', onSel); return; } if (document.activeElement !== SED.el) return; const rg = seditSel(SED.el); if (rg) { SED.range = rg; for (const f of SED.syncs || []) if (f.el.isConnected) f(); } };
   document.addEventListener('selectionchange', onSel);
@@ -7294,7 +7350,17 @@ function seditSel(el) {
 }
 function seditSelect(a, b) {
   const el = SED.el; if (!el) return;
-  const at = i => { let n = 0; for (const tn of el.childNodes) { const t = tn.nodeType === 3 ? tn : tn.firstChild; const len = t && t.data ? [...t.data].length : 0; if (t && i <= n + len) return [t, [...t.data].slice(0, i - n).join('').length]; n += len; } return [el, el.childNodes.length]; };
+  // letra i → nó de texto + posição; no fim de um `.sbrk` (espaço onde a linha quebra) o cursor vai para o começo da linha de baixo
+  const at = i => {
+    let n = 0, last = null;
+    const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let t = tw.nextNode(); t; t = tw.nextNode()) {
+      const len = [...t.data].length; last = t;
+      if (i < n + len || (i === n + len && !(t.parentElement && t.parentElement.closest('.sbrk')))) return [t, [...t.data].slice(0, i - n).join('').length];
+      n += len;
+    }
+    return last ? [last, last.data.length] : [el, el.childNodes.length];
+  };
   try { const r = document.createRange(), [n1, o1] = at(a), [n2, o2] = at(b); r.setStart(n1, o1); r.setEnd(n2, o2); const s = getSelection(); s.removeAllRanges(); s.addRange(r); } catch (e) {}
 }
 // grava no trecho escolhido; devolve false quando não há trecho (aí o painel grava na camada como sempre)

@@ -369,6 +369,9 @@ input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{bord
 .sedit{position:absolute;z-index:2;margin:0;padding:0;border:0;outline:0;background:none;color:transparent;
   white-space:pre-wrap;overflow-wrap:normal;word-break:normal;caret-color:var(--accent);cursor:text;-webkit-text-fill-color:transparent}
 .sedit.one{white-space:pre;overflow:visible}
+/* espaço onde o canvas quebrou a linha (seditBreaks): largura zero e a quebra vem do ::after, então as linhas do campo são as do desenho */
+.sedit .sbrk{font-size:0;line-height:0} /* sem line-height 0 a caixa vazia ficava centrada na linha de base e a linha crescia */
+.sedit .sbrk::after{content:'\A';white-space:pre}
 .sedit::selection{background:rgba(var(--sel-rgb),.35);color:transparent;-webkit-text-fill-color:transparent}
 @keyframes editFlash{0%{box-shadow:0 0 0 0 rgba(var(--sel-rgb),.7)}100%{box-shadow:0 0 0 10px rgba(var(--sel-rgb),0)}}
 .richbar{display:flex;gap:4px;align-items:center}
