@@ -6328,7 +6328,9 @@ function cvDown(ev) {
   }
   // grupo/frame: o primeiro clique pega o grupo inteiro, o clique duplo entra no item; vizinho de um item já escolhido sozinho pega só ele (arrastar troca de lugar na fila)
   const sel = pickedLayers(), deep = !!L.grp && !(isPicked(L.id) && sel.length > 1) && sel.length === 1 && sel[0].grp === L.grp && !wholeGroup(); // frame de um item só escolhido inteiro: o clique continua no frame
-  const only = ev.ctrlKey || ev.metaKey || deep, grp = isPicked(L.id) && sel.length > 1 && !only;
+  // já escolhido como parte do frame (ou grupo) escolhido inteiro: o clique fica nesse nível. Com um frame de um item só dentro de outro
+  // (texto com largura fixa num frame, dentro da coluna) o clique subia para o frame de fora e o clique duplo descia de novo: nunca editava
+  const only = ev.ctrlKey || ev.metaKey || deep, grp = isPicked(L.id) && (sel.length > 1 || (!!L.grp && !!wholeGroup())) && !only;
   if (only) select(L.id, true);
   else if (grp) { RT.selected = L.id; renderLayers(); renderProps(); needs = true; } else select(L.id);
   pushUndo();
@@ -13901,6 +13903,9 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (document.querySelector('.ctx:not(.pop-out)')) { closeMenu(); return; }
     if (openPicker) { closePicker(); return; }
+    // edição no palco aberta com o foco no painel (mudou fonte/tamanho do trecho): Esc no painel também conclui a edição.
+    // Senão o campo ficava aberto sem cursor e o próximo clique no texto caía nele: Ctrl+C copiava um trecho vazio, não a camada
+    if (SED.el && e.target !== SED.el) { if (typing && e.target.blur) e.target.blur(); seditClose(); return; }
     if (typing) { if (tag === 'textarea' || e.target.isContentEditable) e.target.blur(); return; } // Esc sai do texto
     if (overlayOpen() || !$('#mPop').hidden || RT.drag || RT.marq) return; // cada janela fecha sozinha
     const L = selL(); if (L && L.type !== 'bg') { e.preventDefault(); selectBg(); }
