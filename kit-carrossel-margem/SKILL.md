@@ -78,28 +78,28 @@ Regras do gancho:
 Os slides seguem **módulos** (a ordem importa, porque fotos e fundos atravessam de um slide pro outro): `abertura` + `extra` (0 ou 1 vez, logo depois da abertura) + `meio` (0, 1 ou 2 vezes) + `fecho`. O `extra` é um slide só de texto que repete o último tipo da abertura (`alerta` no impacto, `canais` no informativo). Ele foi conferido na prévia do Mola e não desalinha fotos nem fundos.
 
 **Regras fixas do Vitor (nov/2026):**
-- **Sempre 10 slides.** Atual = abertura (3) + `card` extra + meio 1x (3) + fecho (3). Impacto = abertura (3) + `alerta` extra + meio 1x (3) + fecho (3). Informativo = abertura (3) + `canais` extra + meio 2x (4) + fecho (2). O gerador avisa quando o carrossel não tem 10.
+- **Sempre 10 slides.** Atual = abertura (3) + meio 1x (4, com a dupla de foto que vaza) + fecho (3), sem extra. Impacto = abertura (3) + `alerta` extra + meio 1x (3) + fecho (3). Informativo = abertura (3) + `canais` extra + meio 2x (4) + fecho (2). O gerador avisa quando o carrossel não tem 10.
 - **Visual dos posts mais recentes.** Quando o Vitor mudar o visual, peça o .json do carrossel novo (no Mola, "Exportar .json", ou a pasta `Documentos/Mola_Design/Mola Studio/arquivos` no computador dele, só leitura) e refaça o estilo com um script como `_estilo_atual.py`.
 - **Psicólogos e psiquiatras da Margem aparecem sempre** no carrossel, em um slide próprio ou dividindo o slide com o fecho (frase padrão da seção "A Margem no conteúdo"), depois do serviço público.
 - **Capa sem CTA.** O campo `chamada` da capa fica de fora (omitir remove a camada). Os gatilhos de salvar e enviar entram ao longo dos slides e no `cta` final.
 
-**Estilo `atual`** (o padrão; 10 slides: capa, virada, card, card extra, foto_baixo, card_lista, foto_baixo_b, impacto, foto_cheia, cta)
+**Estilo `atual`** (o padrão; 10 slides: capa, virada, card, dupla_esq, dupla_dir, card_lista, foto_baixo, impacto, foto_cheia, cta)
 
-Tirado de dois carrosséis reais de nov/2026 ("Consulta psiquiátrica não deveria ser um privilégio" e "O que o novo estudo sobre duas doses de álcool por dia mostra"; script `_estilo_atual.py`). Fundo verde-menta alternando com verde escuro, cartões verde-escuros de cantos arredondados, fotos documentais com degradê verde, Urbanist. Sem listras e sem verde-limão.
+Tirado de dois carrosséis reais de nov/2026 ("Consulta psiquiátrica não deveria ser um privilégio" e "O que o novo estudo sobre duas doses de álcool por dia mostra"; script `_estilo_atual.py`). Fundo verde-menta alternando com verde escuro, cartões verde-escuros de cantos arredondados, fotos documentais com degradê verde, Urbanist, sem listras. Do "Guia de redes de apoio" vem a dupla dos slides 4 e 5 (uma foto só atravessando os dois); do "Redução de danos intranasal", o slide de impacto em verde-limão e os títulos com peso misturado. Ritmo de fotos: 1-2 foto, 3 cartão, 4-5 foto, 6 cartão, 7 foto, 8 limão, 9 foto, 10 CTA (nunca dois slides sem foto seguidos, a não ser o 8 e o 10).
 | Módulo | tipo | campos (limite aproximado de caracteres) |
 |---|---|---|
-| abertura | `capa` | titulo (55, 2 a 3 linhas; `**trecho**` sai mais leve em verde-menta, como "não deveria ser um"). Logo + "Arrasta pro lado ➔" já vêm no slide |
+| abertura | `capa` | etiqueta (36, pílula verde-menta: o contexto, ex.: "Pra quem convive com alguém que usa"), titulo (3 linhas curtas; quebre com \n onde a frase respira; `**trecho**` sai mais leve em verde-menta). Logo + "Arrasta pro lado ➔" já vêm no slide |
 | | `virada` | titulo (20, com fundo verde-escuro atrás), texto (70), foto **larga** (ver Fotos) |
 | | `card` | titulo (26), texto (110), cartão verde-escuro |
-| extra | `card` | o mesmo cartão: dado da pesquisa ou normalização |
-| meio | `foto_baixo` | titulo (24), texto (60), foto na metade de baixo |
+| meio | `dupla_esq` | titulo (26, 2 linhas), texto (90), foto **larga** que atravessa os slides 4 e 5 |
+| | `dupla_dir` | titulo (22, alinhado à direita), texto (90); usa a mesma foto |
 | | `card_lista` | titulo (30), subtitulo (30), itens (5 linhas com "• ", até ~28 caracteres cada) |
-| | `foto_baixo_b` | titulo (20), texto (45), foto na metade de baixo |
-| fecho | `impacto` | titulo (22, letra grande), texto (70) |
+| | `foto_baixo` | titulo (18, 1 linha), texto (45), foto grande embaixo |
+| fecho | `impacto` | titulo (22, letra grande), texto (70); fundo verde-limão |
 | | `foto_cheia` | titulo (16), texto (120): apoio público + psicólogos e psiquiatras da Margem |
 | | `cta` | link, tema (28), salvar_titulo, salvar_texto, enviar_titulo, enviar_texto |
 
-Ideias do post "Redução de danos intranasal" que ainda não estão no template (pedir o .json desse post pra incluir): etiqueta pequena "✕ tema" no topo de cada slide, ilustração em traço no lugar de foto (objeto em linha verde sobre menta), caixa só com contorno para "O que fazer", e slide de fundo verde-limão para a rede pública.
+Títulos com `**trecho**` fora da capa: o resto do título fica regular e o trecho em negrito ("O uso costuma **aliviar algo**"), como no post intranasal. Ainda fora do template (o post intranasal não está no Mola): etiqueta "✕ tema" no topo, ilustração em traço no lugar de foto e caixa só com contorno para "O que fazer".
 
 **Estilo `impacto`** (visual antigo; 10 slides: capa, passo, alerta, alerta extra, dica_foto, lista, dica_foto_b, impacto, frase_foto, cta)
 | Módulo | tipo | campos (limite aproximado de caracteres) |
@@ -144,7 +144,7 @@ Use quando o tema pede passo a passo e encaminhamento. É uma **estrutura de con
 | 9 | Checklist do que fazer hoje | 4 a 5 itens práticos | Mais de 5 itens |
 | 10 | Margem como ponte + fecho | Frase de ponte, CTA "Ver psicólogo e psiquiatra parceiros", gatilho de salvar e de enviar | "Saiba mais" |
 
-Sugestão de mapeamento (a ordem dos tipos é fixa; as funções se encaixam nela): no impacto, `alerta` extra = dado da pesquisa ou normalização, `lista` = passos ou checklist, `dica_foto_b` = apoio público, `impacto` = limite ou segurança, `frase_foto` = Margem (psicólogos e psiquiatras), `cta` = fecho. No informativo, `canais` e `canais` extra = apoio público e grupos, `info_dir` = psicólogo ou psiquiatra, `link` = Margem.
+Sugestão de mapeamento (a ordem dos tipos é fixa; as funções se encaixam nela): no atual, `virada` = validação, `card` = o que acontece, `dupla_esq`/`dupla_dir` = pesquisa e normalização, `card_lista` = passos ou checklist, `foto_baixo` = limite e contexto ou cuidado de si, `impacto` (limão) = segurança ou alerta, `foto_cheia` = apoio público + Margem, `cta` = fecho. No impacto, `alerta` extra = dado da pesquisa ou normalização, `lista` = passos ou checklist, `dica_foto_b` = apoio público, `impacto` = limite ou segurança, `frase_foto` = Margem (psicólogos e psiquiatras), `cta` = fecho. No informativo, `canais` e `canais` extra = apoio público e grupos, `info_dir` = psicólogo ou psiquiatra, `link` = Margem.
 
 **Quadro do slide 8 (psicólogo ou psiquiatra?)**
 > Quer entender o que sente e aprender a lidar? **Psicólogo.**
@@ -191,8 +191,9 @@ O template já vem assim (aprendido no carrossel "Descansar virou privilégio");
 Para cada `foto`, escreva uma descrição pronta pra virar prompt (Gemini ou Google Flow): pessoa(s) real(is), cena do cotidiano brasileiro, fotografia documental realista, luz natural, levemente esverdeada como nos posts, **sem texto na imagem**. Rostos diversos. Nada de seringa, pó, pino, garrafa em destaque ou cena de uso. Para fundos mais abstratos, uma linha por slide (ex.: "mãos em volta de uma xícara, luz de fim de tarde, tons quentes, sem rosto").
 
 **Tamanho de cada espaço de foto no estilo `atual`** (pedir a imagem já nesse formato):
-- `virada`: **foto larga que vaza** da capa pro slide 2, 2160 × 1440 (3:2). É uma foto só, composta pra cada metade funcionar sozinha: a metade esquerda é o fundo da capa (título embaixo à esquerda, então deixar o rosto no alto ou no meio) e a direita é o slide 2. Duas pessoas, uma em cada metade, funcionam bem (ex.: post "Guia de redes de apoio", slides 4 e 5). Começar a descrição com "FOTO LARGA (vaza da capa pro slide 2)".
-- `foto_baixo` e `foto_baixo_b`: 1080 × 820, metade de baixo do slide (o texto fica em cima, no verde).
+- `virada`: **foto larga que vaza** da capa pro slide 2, 2160 × 1440 (3:2). É uma foto só, composta pra cada metade funcionar sozinha: a metade esquerda é o fundo da capa (título embaixo à esquerda, então deixar o rosto no alto ou no meio) e a direita é o slide 2. Começar a descrição com "FOTO LARGA (vaza da capa pro slide 2)".
+- `dupla_esq`: **foto larga** dos slides 4 e 5, 2160 × 1440. Uma pessoa em cada metade, rostos próximos (como o "Guia de redes de apoio"), parte de cima mais escura pros títulos.
+- `foto_baixo`: 1080 × 918, do meio pra baixo do slide (o texto fica em cima, no verde).
 - `foto_cheia`: 1080 × 1440, slide inteiro, com o texto embaixo à esquerda (deixar a parte de baixo mais escura ou vazia).
 O template não espelha foto nenhuma; espelhar é decisão de cada post.
 

@@ -110,7 +110,10 @@ def runs_de_markup(texto, L_orig=None):
     if "**" not in texto:
         return texto, None
     dest = next(({k: v for k, v in r.items() if k != "t"} for r in (L_orig or {}).get("runs") or []
-                 if any(k != "t" for k in r)), None) or {"w": 800}
+                 if any(k != "t" for k in r)), None)
+    base = {}
+    if dest is None:                     # sem estilo no template: resto regular + trecho em negrito
+        dest, base = {"w": 800}, {"w": 500}  # ("Use sempre o seu **proprio canudo**", post intranasal)
     partes = re.split(r"(\*\*.+?\*\*)", texto)
     runs, limpo = [], ""
     for p in partes:
@@ -121,7 +124,7 @@ def runs_de_markup(texto, L_orig=None):
             runs.append(dict(t=t, **dest))
         else:
             t = p
-            runs.append({"t": t})
+            runs.append(dict(t=t, **base))
         limpo += t
     return limpo, runs
 
@@ -218,9 +221,7 @@ def gerar(roteiro, tpl):
                       f"(abertura={m['abertura']}, extra={m.get('extra')} 0 ou 1x, meio={m['meio']} 0 a 2x, "
                       f"fecho={m['fecho']}). Fotos e fundos que atravessam slides podem ficar desalinhados.")
     if len(tipos) != 10:
-        vezes = "1x" if estilo == "impacto" else "2x"
-        avisos.append(f"O carrossel tem {len(tipos)} slides. A regra da Margem é 10: no estilo {estilo}, "
-                      f"abertura + {m.get('extra')} extra + meio {vezes} + fecho.")
+        avisos.append(f"O carrossel tem {len(tipos)} slides. A regra da Margem é 10 (a ordem de cada estilo está no SKILL.md).")
 
     camadas, grupos = [], {}
     for pos, s in enumerate(slides_in):
@@ -266,6 +267,8 @@ def gerar(roteiro, tpl):
                 desc = s.get(foto)
                 L["name"] = ("FOTO: " + desc)[:120] if desc else "FOTO: escolher imagem"
                 L["src"] = placeholder_jpeg(L.get("size") or 1, L.get("mh") or 1)
+                L.update({"zoom": 1, "ix": 0, "iy": 0})     # enquadramento da foto antiga nao serve pra nova
+                L.pop("_bounds", None)
             novas.append(L)
         # remove icones de grupos que ficaram sem texto
         com_texto = {L.get("grp") for L in novas if L["type"] == "text" and L.get("grp")}
