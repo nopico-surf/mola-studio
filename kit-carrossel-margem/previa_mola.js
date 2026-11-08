@@ -17,6 +17,15 @@ function chromium() {
   const p = await (await b.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
   const erros = []; p.on('pageerror', e => erros.push(e.message));
   await p.goto(url); await p.waitForTimeout(2000);
+  // Urbanist local (a da marca): sem ela o Chromium daqui usa outra fonte e a quebra de linha sai diferente do Mola
+  const fontes = fs.readdirSync(path.join(__dirname, 'fonts')).filter(f => /^urbanist-latin-(\d+)-normal\.woff$/.test(f))
+    .map(f => ({ w: f.match(/(\d+)/)[1], b64: fs.readFileSync(path.join(__dirname, 'fonts', f)).toString('base64') }));
+  await p.evaluate(async fs => {
+    for (const f of fs) {
+      const ff = new FontFace('Urbanist', `url(data:font/woff;base64,${f.b64})`, { weight: f.w });
+      await ff.load(); document.fonts.add(ff);
+    }
+  }, fontes);
   const r = await p.evaluate(async st => {
     await loadState(st, 'previa'); await new Promise(r => setTimeout(r, 2500));
     const k = 0.5, c = document.createElement('canvas'); c.width = FW() * k; c.height = H() * k;

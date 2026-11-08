@@ -21,7 +21,7 @@ Se o clone for recusado, use `add_repo` (nopico-surf/mola-studio) antes. **Nunca
 
 Campos (os mesmos do prompt do Notion): **tema, público, objetivo, mensagem central**. Se faltar algo essencial, pergunte uma vez só e siga. Decida também:
 - **Linha editorial:** `álcool e outras drogas` ou `saúde mental geral` (sem falar de substância).
-- **Estilo:** `impacto` (passo a passo, orientação prática, alerta, frases fortes) ou `informativo` (guia, lista de recursos, explicação de serviço).
+- **Estilo:** `atual` é o padrão (o visual dos posts de nov/2026, ver "Estilo `atual`" na seção 3). `impacto` (listras e verde-limão) e `informativo` são o visual antigo: só quando o Vitor pedir.
 - **Gancho de capa:** escolha um dos modelos da seção 3 (identificação, lembrete, o que ninguém avisa, fala de pessoa, pergunta direta, quebra de mito).
 
 ## 2. Olhar o que tem funcionado (rápido)
@@ -78,11 +78,30 @@ Regras do gancho:
 Os slides seguem **módulos** (a ordem importa, porque fotos e fundos atravessam de um slide pro outro): `abertura` + `extra` (0 ou 1 vez, logo depois da abertura) + `meio` (0, 1 ou 2 vezes) + `fecho`. O `extra` é um slide só de texto que repete o último tipo da abertura (`alerta` no impacto, `canais` no informativo). Ele foi conferido na prévia do Mola e não desalinha fotos nem fundos.
 
 **Regras fixas do Vitor (nov/2026):**
-- **Sempre 10 slides.** Impacto = abertura (3) + `alerta` extra + meio 1x (3) + fecho (3). Informativo = abertura (3) + `canais` extra + meio 2x (4) + fecho (2). O gerador avisa quando o carrossel não tem 10.
+- **Sempre 10 slides.** Atual = abertura (3) + `card` extra + meio 1x (3) + fecho (3). Impacto = abertura (3) + `alerta` extra + meio 1x (3) + fecho (3). Informativo = abertura (3) + `canais` extra + meio 2x (4) + fecho (2). O gerador avisa quando o carrossel não tem 10.
+- **Visual dos posts mais recentes.** Quando o Vitor mudar o visual, peça o .json do carrossel novo (no Mola, "Exportar .json", ou a pasta `Documentos/Mola_Design/Mola Studio/arquivos` no computador dele, só leitura) e refaça o estilo com um script como `_estilo_atual.py`.
 - **Psicólogos e psiquiatras da Margem aparecem sempre** no carrossel, em um slide próprio ou dividindo o slide com o fecho (frase padrão da seção "A Margem no conteúdo"), depois do serviço público.
 - **Capa sem CTA.** O campo `chamada` da capa fica de fora (omitir remove a camada). Os gatilhos de salvar e enviar entram ao longo dos slides e no `cta` final.
 
-**Estilo `impacto`** (10 slides: capa, passo, alerta, alerta extra, dica_foto, lista, dica_foto_b, impacto, frase_foto, cta)
+**Estilo `atual`** (o padrão; 10 slides: capa, virada, card, card extra, foto_baixo, card_lista, foto_baixo_b, impacto, foto_cheia, cta)
+
+Tirado de dois carrosséis reais de nov/2026 ("Consulta psiquiátrica não deveria ser um privilégio" e "O que o novo estudo sobre duas doses de álcool por dia mostra"; script `_estilo_atual.py`). Fundo verde-menta alternando com verde escuro, cartões verde-escuros de cantos arredondados, fotos documentais com degradê verde, Urbanist. Sem listras e sem verde-limão.
+| Módulo | tipo | campos (limite aproximado de caracteres) |
+|---|---|---|
+| abertura | `capa` | titulo (55, 2 a 3 linhas; `**trecho**` sai mais leve em verde-menta, como "não deveria ser um"). Logo + "Arrasta pro lado ➔" já vêm no slide |
+| | `virada` | titulo (20, com fundo verde-escuro atrás), texto (70), foto **larga** (ver Fotos) |
+| | `card` | titulo (26), texto (110), cartão verde-escuro |
+| extra | `card` | o mesmo cartão: dado da pesquisa ou normalização |
+| meio | `foto_baixo` | titulo (24), texto (60), foto na metade de baixo |
+| | `card_lista` | titulo (30), subtitulo (30), itens (5 linhas com "• ", até ~28 caracteres cada) |
+| | `foto_baixo_b` | titulo (20), texto (45), foto na metade de baixo |
+| fecho | `impacto` | titulo (22, letra grande), texto (70) |
+| | `foto_cheia` | titulo (16), texto (120): apoio público + psicólogos e psiquiatras da Margem |
+| | `cta` | link, tema (28), salvar_titulo, salvar_texto, enviar_titulo, enviar_texto |
+
+Ideias do post "Redução de danos intranasal" que ainda não estão no template (pedir o .json desse post pra incluir): etiqueta pequena "✕ tema" no topo de cada slide, ilustração em traço no lugar de foto (objeto em linha verde sobre menta), caixa só com contorno para "O que fazer", e slide de fundo verde-limão para a rede pública.
+
+**Estilo `impacto`** (visual antigo; 10 slides: capa, passo, alerta, alerta extra, dica_foto, lista, dica_foto_b, impacto, frase_foto, cta)
 | Módulo | tipo | campos (limite aproximado de caracteres) |
 |---|---|---|
 | abertura | `capa` | titulo (30), subtitulo (45); `chamada` não se usa mais |
@@ -169,7 +188,13 @@ O template já vem assim (aprendido no carrossel "Descansar virou privilégio");
 - Quando o Vitor mandar um .json ajustado: `python3 gerar_mola.py` do mesmo roteiro, compare e rode `_aplicar_ajustes.py roteiro.json template_mola.json ajustado.json template_novo.json`, confirme com ele o que vira regra e suba.
 
 ### Fotos
-Para cada `foto`, escreva uma descrição pronta pra virar prompt no Gemini: pessoa(s) real(is), cena do cotidiano brasileiro, fotografia documental realista, luz natural, **sem texto na imagem**. Rostos diversos. Nada de seringa, pó, pino, garrafa em destaque ou cena de uso. Para fundos mais abstratos, uma linha por slide (ex.: "mãos em volta de uma xícara, luz de fim de tarde, tons quentes, sem rosto").
+Para cada `foto`, escreva uma descrição pronta pra virar prompt (Gemini ou Google Flow): pessoa(s) real(is), cena do cotidiano brasileiro, fotografia documental realista, luz natural, levemente esverdeada como nos posts, **sem texto na imagem**. Rostos diversos. Nada de seringa, pó, pino, garrafa em destaque ou cena de uso. Para fundos mais abstratos, uma linha por slide (ex.: "mãos em volta de uma xícara, luz de fim de tarde, tons quentes, sem rosto").
+
+**Tamanho de cada espaço de foto no estilo `atual`** (pedir a imagem já nesse formato):
+- `virada`: **foto larga que vaza** da capa pro slide 2, 2160 × 1440 (3:2). É uma foto só, composta pra cada metade funcionar sozinha: a metade esquerda é o fundo da capa (título embaixo à esquerda, então deixar o rosto no alto ou no meio) e a direita é o slide 2. Duas pessoas, uma em cada metade, funcionam bem (ex.: post "Guia de redes de apoio", slides 4 e 5). Começar a descrição com "FOTO LARGA (vaza da capa pro slide 2)".
+- `foto_baixo` e `foto_baixo_b`: 1080 × 820, metade de baixo do slide (o texto fica em cima, no verde).
+- `foto_cheia`: 1080 × 1440, slide inteiro, com o texto embaixo à esquerda (deixar a parte de baixo mais escura ou vazia).
+O template não espelha foto nenhuma; espelhar é decisão de cada post.
 
 ### CTA: sempre um gatilho de salvar e um de enviar no direct
 - **Salvar** diz QUANDO a pessoa vai precisar: "pra ter na mão no próximo rolê", "pra reler quando a culpa bater", "pra consultar quando precisar", "pra quando o corpo disparar", "antes que se perca no feed".
@@ -245,9 +270,9 @@ Formato no chat: estilo, linha editorial, gancho escolhido, e uma tabela slide |
 
 1. Escreva o roteiro em `roteiros/<slug>.json` (dentro da pasta do kit; `roteiros/` e `saida/` não vão para o repositório):
 ```json
-{"estilo": "impacto", "slides": [
-  {"tipo": "capa", "titulo": "...", "subtitulo": "..."},
-  {"tipo": "passo", "destaque": "...", "texto": "...", "foto": "descrição"},
+{"estilo": "atual", "slides": [
+  {"tipo": "capa", "titulo": "texto com **trecho em destaque**"},
+  {"tipo": "virada", "titulo": "...", "texto": "...", "foto": "FOTO LARGA (vaza da capa pro slide 2): descrição"},
   ...
   {"tipo": "cta", "tema": "...", "link": "somosmargem.com.br/profissionais", "salvar_titulo": "Salve este post", "salvar_texto": "...", "enviar_titulo": "Envie no direct", "enviar_texto": "..."}
 ]}

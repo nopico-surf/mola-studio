@@ -6,7 +6,7 @@ Uso:
 
 Roteiro (exemplo minimo):
 {
-  "estilo": "impacto",                      # "impacto" ou "informativo"
+  "estilo": "atual",                         # "atual" (padrao), "impacto" ou "informativo"
   "slides": [
     {"tipo": "capa", "titulo": "...", "subtitulo": "...", "chamada": "..."},
     {"tipo": "passo", "destaque": "Primeiro", "texto": "...", "foto": "descricao da foto"},
@@ -104,9 +104,13 @@ def altura_estimada(L, texto):
     return n * size * lh, n
 
 
-def runs_de_markup(texto):
+def runs_de_markup(texto, L_orig=None):
+    """**trecho** = destaque. O estilo do destaque vem do proprio template (o 1o trecho com peso/cor
+    proprios no texto original, ex.: capa do estilo atual = peso 600 em verde-menta); sem isso, negrito 800."""
     if "**" not in texto:
         return texto, None
+    dest = next(({k: v for k, v in r.items() if k != "t"} for r in (L_orig or {}).get("runs") or []
+                 if any(k != "t" for k in r)), None) or {"w": 800}
     partes = re.split(r"(\*\*.+?\*\*)", texto)
     runs, limpo = [], ""
     for p in partes:
@@ -114,7 +118,7 @@ def runs_de_markup(texto):
             continue
         if p.startswith("**") and p.endswith("**"):
             t = p[2:-2]
-            runs.append({"t": t, "w": 800})
+            runs.append(dict(t=t, **dest))
         else:
             t = p
             runs.append({"t": t})
@@ -199,7 +203,7 @@ def validar_sequencia(tipos, modulos):
 
 def gerar(roteiro, tpl):
     erros, avisos = [], []
-    estilo = roteiro.get("estilo", "impacto")
+    estilo = roteiro.get("estilo", "atual")
     if estilo not in tpl["estilos"]:
         raise SystemExit(f"ERRO: estilo '{estilo}' nao existe. Use: {list(tpl['estilos'])}")
     E = tpl["estilos"][estilo]
@@ -250,7 +254,7 @@ def gerar(roteiro, tpl):
                 if slot == "link":
                     L["text"], L["runs"] = txt, runs_link(L0, txt)
                 else:
-                    L["text"], L["runs"] = runs_de_markup(txt)
+                    L["text"], L["runs"] = runs_de_markup(txt, L0)
                 h_new, nlin = altura_estimada(L, L["text"])
                 L["_dh"] = h_new - h_old
                 L["_bot0"] = L["y"] * H + h_old / 2      # base do texto no desenho original
@@ -354,7 +358,7 @@ def gerar(roteiro, tpl):
         "slides": n, "still": True,
         "export": {"fmts": ["3x4"], "vars": False, "sl": list(range(n))},
         "grpFix": 1,
-        "brand": tpl["brand"], "groups": grupos,
+        "brand": E.get("brand") or tpl["brand"], "groups": grupos,
         "layers": [bg] + camadas,
     }
     return doc, erros, avisos
