@@ -14,7 +14,7 @@ Roteiro (exemplo minimo):
   ]
 }
 - A sequencia de "tipo" precisa ser uma combinacao de modulos do estilo
-  (abertura + meio x0..2 + fecho). O script avisa quando nao for.
+  (abertura + extra x0..1 + meio x0..2 + fecho; a Margem usa sempre 10 slides). O script avisa quando nao for.
 - Campo omitido = camada removida do slide.
 - **trecho** = trecho em negrito (peso 800).
 - "foto": vira um espaco de imagem com nome "FOTO: <descricao>" para colar a imagem no Mola.
@@ -187,6 +187,9 @@ def validar_sequencia(tipos, modulos):
     if tipos[:len(ab)] != ab or tipos[n - len(fe):] != fe:
         return False
     corpo = tipos[len(ab):n - len(fe)]
+    extra = modulos.get("extra")             # slide de texto a mais logo depois da abertura (pra fechar 10)
+    if extra and corpo[:1] == [extra]:
+        corpo = corpo[1:]
     while corpo:
         if corpo[:len(meio)] != meio:
             return False
@@ -208,8 +211,12 @@ def gerar(roteiro, tpl):
     m = E["modulos"]
     if not validar_sequencia(tipos, m):
         avisos.append("Sequencia fora dos modulos do template "
-                      f"(abertura={m['abertura']}, meio={m['meio']} 0 a 2x, fecho={m['fecho']}). "
-                      "Fotos e fundos que atravessam slides podem ficar desalinhados.")
+                      f"(abertura={m['abertura']}, extra={m.get('extra')} 0 ou 1x, meio={m['meio']} 0 a 2x, "
+                      f"fecho={m['fecho']}). Fotos e fundos que atravessam slides podem ficar desalinhados.")
+    if len(tipos) != 10:
+        vezes = "1x" if estilo == "impacto" else "2x"
+        avisos.append(f"O carrossel tem {len(tipos)} slides. A regra da Margem é 10: no estilo {estilo}, "
+                      f"abertura + {m.get('extra')} extra + meio {vezes} + fecho.")
 
     camadas, grupos = [], {}
     for pos, s in enumerate(slides_in):

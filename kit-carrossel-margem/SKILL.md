@@ -75,14 +75,14 @@ Regras do gancho:
 
 ### Tipos de slide e campos
 
-Os slides seguem **módulos** (a ordem importa, porque fotos e fundos atravessam de um slide pro outro): `abertura` + `meio` (0, 1 ou 2 vezes) + `fecho`.
+Os slides seguem **módulos** (a ordem importa, porque fotos e fundos atravessam de um slide pro outro): `abertura` + `extra` (0 ou 1 vez, logo depois da abertura) + `meio` (0, 1 ou 2 vezes) + `fecho`. O `extra` é um slide só de texto que repete o último tipo da abertura (`alerta` no impacto, `canais` no informativo). Ele foi conferido na prévia do Mola e não desalinha fotos nem fundos.
 
 **Regras fixas do Vitor (nov/2026):**
-- **No máximo 10 slides.** No impacto, use 9 (meio 1x) ou 6 (sem meio); nunca 12. No informativo, 5, 7 ou 9.
+- **Sempre 10 slides.** Impacto = abertura (3) + `alerta` extra + meio 1x (3) + fecho (3). Informativo = abertura (3) + `canais` extra + meio 2x (4) + fecho (2). O gerador avisa quando o carrossel não tem 10.
 - **Psicólogos e psiquiatras da Margem aparecem sempre** no carrossel, em um slide próprio ou dividindo o slide com o fecho (frase padrão da seção "A Margem no conteúdo"), depois do serviço público.
 - **Capa sem CTA.** O campo `chamada` da capa fica de fora (omitir remove a camada). Os gatilhos de salvar e enviar entram ao longo dos slides e no `cta` final.
 
-**Estilo `impacto`** (9 slides; 6 sem o meio)
+**Estilo `impacto`** (10 slides: capa, passo, alerta, alerta extra, dica_foto, lista, dica_foto_b, impacto, frase_foto, cta)
 | Módulo | tipo | campos (limite aproximado de caracteres) |
 |---|---|---|
 | abertura | `capa` | titulo (30), subtitulo (45); `chamada` não se usa mais |
@@ -95,7 +95,7 @@ Os slides seguem **módulos** (a ordem importa, porque fotos e fundos atravessam
 | | `frase_foto` | titulo (25), texto (90), foto |
 | | `cta` | tema (30), link, salvar_titulo, salvar_texto, enviar_titulo, enviar_texto |
 
-**Estilo `informativo`** (7 slides; 5 sem o meio; 9 com o meio 2x, o máximo)
+**Estilo `informativo`** (10 slides: capa, texto_foto, canais, canais extra, info_esq, info_dir, info_esq, info_dir, cta, link)
 | Módulo | tipo | campos |
 |---|---|---|
 | abertura | `capa` | titulo (50, aceita **negrito**), subtitulo (145) |
@@ -110,7 +110,7 @@ Campo omitido = camada removida. `**trecho**` = negrito. Logo + somosmargem.com.
 
 ### Roteiro de 10 slides com apoio público e Margem como ponte (versão em texto)
 
-Use quando o tema pede passo a passo e encaminhamento. É uma **estrutura de conteúdo**: mapeie cada slide para os tipos acima, sem inventar tipo novo nem mexer no template. Como o limite é 10 e o impacto fecha em 9, no impacto junte 4+5 em um slide só e mantenha o slide da Margem (psicólogos e psiquiatras), que é obrigatório.
+Use quando o tema pede passo a passo e encaminhamento. É uma **estrutura de conteúdo**: mapeie cada slide para os tipos acima, sem inventar tipo novo nem mexer no template. São sempre 10 slides, e o slide da Margem (psicólogos e psiquiatras) é obrigatório.
 
 | Slide | Função | O que escrever | Evitar |
 |---|---|---|---|
@@ -125,7 +125,7 @@ Use quando o tema pede passo a passo e encaminhamento. É uma **estrutura de con
 | 9 | Checklist do que fazer hoje | 4 a 5 itens práticos | Mais de 5 itens |
 | 10 | Margem como ponte + fecho | Frase de ponte, CTA "Ver psicólogo e psiquiatra parceiros", gatilho de salvar e de enviar | "Saiba mais" |
 
-Sugestão de mapeamento: slide 7 → `canais` (informativo) ou `lista` (impacto); slide 8 → `info_dir` ou `lista`; slide 10 → `cta`.
+Sugestão de mapeamento (a ordem dos tipos é fixa; as funções se encaixam nela): no impacto, `alerta` extra = dado da pesquisa ou normalização, `lista` = passos ou checklist, `dica_foto_b` = apoio público, `impacto` = limite ou segurança, `frase_foto` = Margem (psicólogos e psiquiatras), `cta` = fecho. No informativo, `canais` e `canais` extra = apoio público e grupos, `info_dir` = psicólogo ou psiquiatra, `link` = Margem.
 
 **Quadro do slide 8 (psicólogo ou psiquiatra?)**
 > Quer entender o que sente e aprender a lidar? **Psicólogo.**
@@ -237,7 +237,7 @@ Publicidade profissional: psicólogos (CFP) e médicos (CFM) têm regras própri
 
 ## 5. Mostrar o roteiro
 
-Antes de mostrar, confira: no máximo 10 slides, capa sem CTA, slide com psicólogos e psiquiatras da Margem, legenda com uma frase + os quatro CTAs.
+Antes de mostrar, confira: exatamente 10 slides, capa sem CTA, slide com psicólogos e psiquiatras da Margem, legenda com uma frase + os quatro CTAs.
 
 Formato no chat: estilo, linha editorial, gancho escolhido, e uma tabela slide | tipo | texto de cada campo | foto. Depois a legenda, o comentário fixado e o checklist prático. Em pauta política, incluir também a linha "Risco político". Sem gerar o .json ainda.
 
