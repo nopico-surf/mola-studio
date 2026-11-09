@@ -197,6 +197,12 @@ Para cada `foto`, escreva uma descrição pronta pra virar prompt (Gemini ou Goo
 - `foto_cheia`: 1080 × 1440, slide inteiro, com o texto embaixo à esquerda (deixar a parte de baixo mais escura ou vazia).
 O template não espelha foto nenhuma; espelhar é decisão de cada post.
 
+**Gerar e colocar as fotos (Google Flow, projeto "Instagram cenario": flow.google.com/project/00160f48-ba94-4122-88cf-bb79f4e0a8ff):**
+1. **Usar as pessoas que já aparecem nas imagens do projeto**, não gente nova. Anexe a foto da pessoa como referência pelo "+" da caixa de comando (ex.: `mulher-meiaidade-branca.jpg`, mulher de cabelo curto e tatuagens; `Man_posing_in_studio_…_2K.jpg`, rapaz). Comece o prompt com "Use the woman from the first reference image as … and the young man from the second … keeping their faces, hair and tattoos". Personagens salvos também servem, mas não são o foco.
+2. Formato: 16:9 para foto larga, 4:3 para `foto_baixo`, 3:4 para `foto_cheia`. Prompt em inglês, estilo da casa: documental, cotidiano brasileiro, "muted teal-green color grade, green clothing", sem texto, sem garrafa nem cena de uso.
+3. Baixar em **2K** (abrir a imagem, menu ⋮, "Baixar mídia", 2K). Clicar nos itens do menu pelo nome, nunca por coordenada: o item de baixo é "Mover para a lixeira". Os arquivos caem em Downloads no computador do Vitor.
+4. No roteiro, `"foto_arquivo": "<caminho>"` e, se precisar subir ou descer o enquadramento, `"foto_foco": [x, y]`. O gerador recorta a foto no tamanho do espaço e põe dentro do .json (o Mola importa e guarda como mídia). Conferir na prévia se nenhum rosto ficou embaixo do texto.
+
 ### CTA: sempre um gatilho de salvar e um de enviar no direct
 - **Salvar** diz QUANDO a pessoa vai precisar: "pra ter na mão no próximo rolê", "pra reler quando a culpa bater", "pra consultar quando precisar", "pra quando o corpo disparar", "antes que se perca no feed".
 - **Enviar** diz PRA QUEM, específico: "pra quem anda cansado demais", "no grupo de quem vai com você", "pra quem está tentando ajudar alguém", "pra aquela pessoa que sempre diz que tá tudo bem", "pra quem anda tenso demais".

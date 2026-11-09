@@ -18,10 +18,13 @@ Roteiro (exemplo minimo):
 - Campo omitido = camada removida do slide.
 - **trecho** = trecho em negrito (peso 800).
 - "foto": vira um espaco de imagem com nome "FOTO: <descricao>" para colar a imagem no Mola.
+  "foto_arquivo": caminho de uma imagem pronta; ela entra no espaco ja recortada no tamanho dele
+  (jpeg dentro do .json). "foto_foco": [x, y] de 0 a 1, ponto da imagem que fica no centro do recorte
+  (padrao [0.5, 0.5]; ex.: [0.5, 0.35] sobe o enquadramento).
 - "link" (slides cta/link): "somosmargem.com.br/caminho".
 Sai com codigo 1 se houver ERRO (ex.: travessao). AVISOS nao bloqueiam, mas devem ser lidos.
 """
-import base64, copy, io, json, random, re, string, sys
+import base64, copy, io, json, os, random, re, string, sys
 
 W, H = 1080, 1440            # 3x4
 SAFE_TOP, SAFE_BOTTOM = 90, 280
@@ -156,6 +159,28 @@ def placeholder_jpeg(w_rel, h_rel, cor=(3, 66, 44)):
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
+def foto_jpeg(caminho, w_rel, h_rel, foco=None):
+    """Recorta a imagem na proporcao do espaco (cobre, sem distorcer) e devolve um jpeg em data URL.
+    Tamanho final = o do espaco em px (largura W * w_rel), sem passar do tamanho da propria foto."""
+    from PIL import Image
+    fx, fy = foco or (0.5, 0.5)
+    im = Image.open(caminho).convert("RGB")
+    alvo = (w_rel * W) / (h_rel * W)                  # proporcao do espaco (largura/altura)
+    iw, ih = im.size
+    if iw / ih > alvo:                                # foto mais larga: corta os lados
+        cw, ch = int(ih * alvo), ih
+    else:                                             # foto mais alta: corta em cima/embaixo
+        cw, ch = iw, int(iw / alvo)
+    x0 = min(max(int(fx * iw - cw / 2), 0), iw - cw)
+    y0 = min(max(int(fy * ih - ch / 2), 0), ih - ch)
+    im = im.crop((x0, y0, x0 + cw, y0 + ch))
+    lw = min(cw, int(round(w_rel * W)))
+    im = im.resize((lw, int(round(lw / alvo))), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=88, optimize=True, progressive=True)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
 NUM = re.compile(r"-?\d+(?:\.\d+)?(?:e-?\d+)?")
 
 
@@ -265,10 +290,15 @@ def gerar(roteiro, tpl):
                 L["fpos"] = None
             if foto:
                 desc = s.get(foto)
-                L["name"] = ("FOTO: " + desc)[:120] if desc else "FOTO: escolher imagem"
-                L["src"] = placeholder_jpeg(L.get("size") or 1, L.get("mh") or 1)
+                arq = s.get(foto + "_arquivo")
                 L.update({"zoom": 1, "ix": 0, "iy": 0})     # enquadramento da foto antiga nao serve pra nova
                 L.pop("_bounds", None)
+                if arq:
+                    L["name"] = ("Foto: " + (desc or os.path.basename(arq)))[:120]
+                    L["src"] = foto_jpeg(arq, L.get("size") or 1, L.get("mh") or 1, s.get(foto + "_foco"))
+                else:
+                    L["name"] = ("FOTO: " + desc)[:120] if desc else "FOTO: escolher imagem"
+                    L["src"] = placeholder_jpeg(L.get("size") or 1, L.get("mh") or 1)
             novas.append(L)
         # remove icones de grupos que ficaram sem texto
         com_texto = {L.get("grp") for L in novas if L["type"] == "text" and L.get("grp")}
