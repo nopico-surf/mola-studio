@@ -264,6 +264,17 @@
         "3189"
       ],
       "port": 3189
+    },
+    {
+      "name": "mola-btn",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3197"
+      ],
+      "port": 3197
     }
   ]
 }

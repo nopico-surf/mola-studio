@@ -3832,9 +3832,13 @@ function drawBlockBody(ctx, L, G, info, R) {
     return;
   }
   if (L.type === 'cta') {
-    if (info.mode === 'hold' && L.idle === 'pulse') {
-      const k = (info.tl % 1.6) / 1.6, I = info.I;
-      ctx.save(); ctx.globalAlpha *= (1 - k) * .55; ctx.strokeStyle = L.bg; ctx.lineWidth = 4;
+    // anel do Pulsar: nasce no pico do pulso (idleState: sen⁶, pico em 1/4 do ciclo de 1,6 s) e some em 45% do ciclo;
+    // no resto do ciclo e parado (imagem estática, slide-imagem) não aparece. Antes ficava sempre visível e, com a agulha
+    // parada, parecia um contorno que não estava em Contorno (reclamação do usuário: "uma linha que não consigo tirar")
+    const k = info.mode === 'hold' && L.idle === 'pulse' && !stillNow(L) ? ((info.tl / 1.6 - .25) % 1 + 1) % 1 / .45 : 1;
+    if (k < 1) {
+      const I = info.I;
+      ctx.save(); ctx.globalAlpha *= Math.pow(1 - k, 1.5) * .55; ctx.strokeStyle = L.bg; ctx.lineWidth = 4;
       const g = 1 + k * (.18 + .25 * I); const ww = G.w * g + k * 30, hh = G.h * g + k * 30;
       rrect(ctx, -ww / 2, -hh / 2, ww, hh, L.radius); ctx.stroke(); ctx.restore();
     }
@@ -5466,6 +5470,12 @@ function drawOverlays() {
     // slide selecionado pelo nome: contorno da seleção em volta dele (some ao escolher um elemento)
     const sl = selL(), sp = RT.slidePick;
     if (sp != null && sp < slides() && (!sl || sl.type === 'bg')) { ctx.lineWidth = 2 * px; ctx.strokeStyle = uiC('sel'); ctx.strokeRect(sp * W(), 0, W(), H()); }
+    // arrastando o nome de um slide: o slide fica apagado e uma linha mostra onde ele vai entrar
+    const sd = RT.slideDrag;
+    if (sd && sd.to != null) {
+      ctx.fillStyle = uiA('sel', .12); ctx.fillRect(sd.from * W(), 0, W(), H());
+      ctx.fillStyle = uiC('sel'); ctx.fillRect(sd.to * W() - 2 * px, -18 * px, 4 * px, H() + 18 * px);
+    }
     ctx.restore();
   }
   const ub = selUnion();
@@ -5712,7 +5722,7 @@ $('#stageBox').addEventListener('pointerdown', ev => {
       const cur = new Set(RT.slidePicks || []);
       cur.has(ls) ? cur.delete(ls) : cur.add(ls); if (!cur.size) cur.add(ls);
       RT.slide = ls; selectSlides([...cur]);
-    } else { RT.slidePicks = null; pickSlide(ls); }
+    } else { RT.slidePicks = null; pickSlide(ls); slideDragStart(ev, ls); } // arrastar o nome reorganiza
     return;
   }
   const p = stagePt(ev); if (p.x < 0 || p.x > FW() || p.y < 0 || p.y > H()) return;
@@ -5760,6 +5770,111 @@ function renameSlide(s) {
   inp.addEventListener('blur', () => end(true));
   ['pointerdown', 'click', 'dblclick'].forEach(n => inp.addEventListener(n, e => e.stopPropagation()));
   document.body.append(inp); inp.focus(); inp.select();
+}
+/* ------------ reorganizar e apagar slides (pedido do usuário) ------------
+   Arrastar o nome do slide para outro lugar, botão direito no nome (mover para a esquerda/direita, apagar) ou Delete com o slide
+   escolhido pelo nome. Cada slide leva o que é dele: as camadas (x anda de N larguras de slide, também a posição presa nos outros
+   formatos), o nome, a duração e a escolha da exportação. "Do slide" = slide do centro (L.x); grupo/frame = a média dos itens, então
+   não se desmonta. Fundo, câmera e transição são do quadro todo e ficam. Limite: o que atravessa de um slide para o outro (carrossel
+   emendado) vai com o slide do centro e deixa de emendar. */
+const SLIDE_WHOLE = L => L.type === 'bg' || L.type === 'camera' || L.type === 'fx';
+function layerSlides() {
+  const m = new Map();
+  for (const L of S.layers) {
+    if (m.has(L.id) || SLIDE_WHOLE(L)) continue;
+    const g = L.grp ? gtop(L.grp) : null, gm = g && S.groups && S.groups[g];
+    if (g && !(gm && gm.sfx)) { // o grupo "Efeitos sonoros" junta sons de todos os slides: cada som fica com o próprio x
+      const lv = gleaves(g).filter(l => !SLIDE_WHOLE(l)), box = lv.filter(l => !NOBOX(l)), src = box.length ? box : lv;
+      const s = slideOfX(src.reduce((a, l) => a + (+l.x || 0), 0) / src.length);
+      lv.forEach(l => m.set(l.id, s));
+    } else m.set(L.id, slideOfX(L.x));
+  }
+  return m;
+}
+// order = os slides de antes na ordem nova; o que não estiver na lista é apagado (com tudo que está nele)
+function slideApply(order, msg) {
+  const n = slides(), m = order.length; if (m < 1 || n < 2) return false;
+  const at = new Map(order.map((o, i) => [o, i])), map = layerSlides(), dur = order.map(o => slideDur(o)), hadSdur = !!S.sdur && !S.still;
+  pushUndo(); pause(); if (RT.vec) vecExit();
+  // apagados: as camadas do slide (e o efeito sonoro de quem saiu)
+  const gone = S.layers.filter(L => map.has(L.id) && !at.has(map.get(L.id)));
+  if (gone.length) { sfxOnDelete(gone); gone.forEach(g => { const i = S.layers.indexOf(g); if (i >= 0) S.layers.splice(i, 1); }); pruneGroups(); }
+  // os que ficam andam com o slide deles (e a posição presa nos outros formatos junto)
+  for (const L of S.layers) {
+    if (!map.has(L.id)) continue;
+    const d = at.get(map.get(L.id)) - map.get(L.id); if (!d) continue;
+    L.x = +((+L.x || 0) + d).toFixed(5);
+    if (L.fpos) for (const f of Object.values(L.fpos)) if (f && f.x != null) f.x = +(f.x + d).toFixed(5);
+  }
+  if (S.snames) { const a = order.map(o => S.snames[o] || null); while (a.length && !a[a.length - 1]) a.pop(); if (a.length) S.snames = a; else delete S.snames; }
+  if (S.export && S.export.sl) { const sl = S.export.sl.filter(i => at.has(i)).map(i => at.get(i)).sort((a, b) => a - b); S.export = { ...S.export, sl:sl.length && m > 1 ? sl : undefined }; }
+  if (m > 1) S.slides = m; else delete S.slides;
+  // duração: cada slide leva a sua; a timeline vai até o mais longo que sobrou
+  if (hadSdur) {
+    const vids = dur.filter(x => x > 0), D = vids.length ? Math.max(...vids) : S.duration;
+    if (m === 1) delete S.sdur; else if (vids.length === m && vids.every(x => x === D)) delete S.sdur; else S.sdur = dur;
+    if (!vids.length) { S.still = true; if (propTab === 'anim') propTab = 'style'; renderAdds(); }
+    else if (D < S.duration - .001) {
+      for (const L of S.layers) { if (L.end != null && L.end > D) L.end = D; if (L.start > D - .3) L.start = Math.max(0, D - .3); }
+      S.duration = D; T = Math.min(T, D);
+    }
+  }
+  RT.slide = at.get(clamp(RT.slide || 0, 0, n - 1)) ?? Math.min(RT.slide || 0, m - 1);
+  RT.slidePick = RT.slidePick != null ? at.get(RT.slidePick) ?? null : null; RT.slidePicks = null;
+  if (RT.picks && [...RT.picks].some(id => !S.layers.some(l => l.id === id))) { RT.picks = null; selectBg(); }
+  RT.layout.clear(); renderFormats(); if (m !== n) zoomFit(); updDur(true); changed({ props:true, layers:true });
+  if (msg) toast(msg, 5000, UNDO_ACT);
+  return true;
+}
+// leva o slide `from` para a posição `to` (0..n-1)
+function moveSlide(from, to) {
+  const n = slides(); to = clamp(to, 0, n - 1); if (from === to || from < 0 || from >= n) return;
+  const order = [...Array(n).keys()]; order.splice(from, 1); order.splice(to, 0, from);
+  slideApply(order, `${slideName(from)} agora é o ${to + 1}º slide`);
+}
+function deleteSlide(s) {
+  const n = slides(); if (n < 2 || s < 0 || s >= n) return;
+  const map = layerSlides(), k = S.layers.filter(l => map.get(l.id) === s && !NOBOX(l)).length, nm = slideName(s);
+  slideApply([...Array(n).keys()].filter(i => i !== s), `${nm} apagado${k ? ` (${k} elemento${k > 1 ? 's' : ''})` : ''}`);
+}
+function slideMenu(ev, s) {
+  ev.preventDefault(); closeMenu(); pickSlide(s);
+  const n = slides(), item = (text, fn, o = {}) => h('button', { class:o.danger ? 'danger' : null, disabled:o.off || null, onclick:e => { closeMenu(e.currentTarget); fn(); } }, [h('span', { text }), o.kbd ? h('kbd', { text:o.kbd }) : null]);
+  const m = h('div', { class:'ctx', role:'menu' }, [
+    item('Renomear', () => renameSlide(s)),
+    item('Mover para a esquerda', () => moveSlide(s, s - 1), { off:s === 0 }),
+    item('Mover para a direita', () => moveSlide(s, s + 1), { off:s === n - 1 }),
+    item('Mover para o começo', () => moveSlide(s, 0), { off:s === 0 }),
+    item('Mover para o fim', () => moveSlide(s, n - 1), { off:s === n - 1 }),
+    h('hr'),
+    item('Apagar slide', () => deleteSlide(s), { danger:true, kbd:'Del' }),
+  ]);
+  document.body.append(m);
+  m.style.left = Math.min(ev.clientX, innerWidth - m.offsetWidth - 8) + 'px';
+  m.style.top = Math.min(ev.clientY, innerHeight - m.offsetHeight - 8) + 'px';
+  popGrow(m, { left:ev.clientX, right:ev.clientX, top:ev.clientY, bottom:ev.clientY });
+}
+$('#stageBox').addEventListener('contextmenu', ev => {
+  if (slides() < 2 || RT.pen) return;
+  const ls = slideLabelAt(ev); if (ls < 0) return;
+  ev.stopImmediatePropagation(); slideMenu(ev, ls);
+}, true);
+// arrastar o nome: o slide vai para onde a linha aparece (RT.slideDrag.to = posição entre os slides, 0..n)
+function slideDragStart(ev, s) {
+  const x0 = ev.clientX, D = RT.slideDrag = { from:s, to:null };
+  const mv = e => {
+    if (D.to == null && Math.abs(e.clientX - x0) < 5) return;
+    const p = stagePt(e); D.to = clamp(Math.round(p.x / W()), 0, slides()); needsOv = true; document.body.style.cursor = 'grabbing';
+  };
+  const up = e => {
+    removeEventListener('pointermove', mv, true); removeEventListener('pointerup', up, true); removeEventListener('keydown', esc, true);
+    document.body.style.cursor = ''; RT.slideDrag = null; needsOv = true;
+    if (!e || D.to == null) return;
+    const to = D.to > s ? D.to - 1 : D.to; // a linha depois do próprio slide = o mesmo lugar
+    if (to !== s) moveSlide(s, to);
+  };
+  const esc = e => { if (e.key === 'Escape') { e.stopPropagation(); D.to = null; up(null); } };
+  addEventListener('pointermove', mv, true); addEventListener('pointerup', up, true); addEventListener('keydown', esc, true);
 }
 // A câmera mexe no desenho (zoom, deslocamento, giro, paralaxe) e os grupos girados giram o conjunto por cima dela (`g`: do grupo mais de dentro
 // para o de fora, cada um com o pivô e o ângulo), então contornos e alças ficam no que se vê na tela: `camFwd` leva um ponto do espaço da camada
@@ -13937,7 +14052,7 @@ document.addEventListener('keydown', e => {
   // Espaço segurado = mão (arrasta o palco); tocar e soltar sem arrastar toca/pausa, como antes
   if (e.code === 'Space') { e.preventDefault(); if (tag === 'button') e.target.blur(); if (!e.repeat) handOn(); return; }
   // atalhos do Figma: Delete / Backspace apagam a camada selecionada
-  if (e.key === 'Delete' || e.key === 'Backspace') { const L = selL(); if (L && L.capt && capSelK(L) >= 0) { e.preventDefault(); closeMenu(); capDelBlock(L, capSelK(L)); return; } if (L && L.type !== 'bg') { e.preventDefault(); closeMenu(); deleteLayer(L); } return; }
+  if (e.key === 'Delete' || e.key === 'Backspace') { const L = selL(); if (RT.slidePick != null && slides() > 1 && (!L || L.type === 'bg')) { e.preventDefault(); closeMenu(); deleteSlide(RT.slidePick); return; } if (L && L.capt && capSelK(L) >= 0) { e.preventDefault(); closeMenu(); capDelBlock(L, capSelK(L)); return; } if (L && L.type !== 'bg') { e.preventDefault(); closeMenu(); deleteLayer(L); } return; }
   if (e.key === '?') { e.preventDefault(); showKeys(true); return; }
   if (e.key === '/') { e.preventDefault(); findPreset(); return; }
   if (e.key === '+' || e.key === '=') { e.preventDefault(); setZoom((RT.zoom || 1) * 1.25); return; }
