@@ -11183,6 +11183,23 @@ function stackPasted(ls) {
   const P = RT.pasteAt; RT.pasteAt = null;
   if (P && performance.now() - P.t < 1e4) stackAbove(ls, P.id);
 }
+/* Colado dentro de um frame (reclamação do usuário: "perde as propriedades"): a fila põe a cópia no fim da coluna e, se ali há algo
+   de fora do frame que está acima dele na pilha (a caixa do "somosmargem"), a cópia ficava escondida por baixo. O frame de cima sobe
+   para logo acima do mais alto que cobre a cópia (no mesmo tempo); devolve o nome de quem cobria, ou null */
+function unhideInFrame(fr, out) {
+  const top = gtop(fr), mine = gleaves(top); if (!mine.length) return null;
+  const hi = Math.max(...mine.map(l => S.layers.indexOf(l)));
+  const cands = S.layers.slice(hi + 1).filter(l => l.visible && l.type !== 'bg' && !NOBOX(l) && !(l.grp && ginside(l.grp, top)));
+  const vis = out.filter(l => l.visible && !NOBOX(l)); if (!cands.length || !vis.length) return null;
+  RT.frameNo = (RT.frameNo || 0) + 1; ensureBounds([...vis, ...cands], true);
+  const meet = (a, b) => a && b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  const along = (a, b) => { const [a0, a1] = holdSpan(a), [b0, b1] = holdSpan(b); return a0 < b1 && b0 < a1; };
+  let cov = null;
+  for (const c of cands) if (vis.some(l => along(l, c) && meet(l._bounds, c._bounds))) cov = c; // o mais alto na pilha
+  if (!cov) return null;
+  stackAbove(mine, cov.id);
+  return cov.grp ? groupName(gtop(cov.grp)) : cov.name;
+}
 function pasteLayers(p) {
   const src = (p && Array.isArray(p.layers) ? p.layers : []).filter(o => o && o.type && o.type !== 'bg');
   if (!src.length) return;
@@ -11233,10 +11250,12 @@ function pasteLayers(p) {
   if (!fr) { const s0 = Math.floor(clamp(Math.min(...out.map(l => +l.x || 0)), 0, 1e3)); toSlide(out, s0, curSlide()); }
   if (fr) intoFrame(fr, out);
   stackAbove(out, anchor);
+  const cov = fr ? unhideInFrame(fr, out) : null;
   RT.picks = new Set(out.map(l => l.id)); RT.selected = out[out.length - 1].id;
   if (fontsAdded) renderBrand();
   renderLayers(); renderProps(); changed();
-  toast((out.length > 1 ? `${out.length} elementos colados` : `"${out[0].name}" colado`) + (fr ? ` em "${groupName(fr)}"` : ''));
+  toast((out.length > 1 ? `${out.length} elementos colados` : `"${out[0].name}" colado`) + (fr ? ` em "${groupName(fr)}"` : '')
+    + (cov ? `. O frame subiu para a frente de "${cov}", que cobria a cópia` : ''), cov ? 6000 : undefined, cov ? UNDO_ACT : undefined);
 }
 const typingIn = t => { const tag = (t && t.tagName || '').toLowerCase(); return tag === 'input' && !['range', 'checkbox', 'color', 'button'].includes(t.type) || tag === 'textarea' || tag === 'select' || !!(t && t.isContentEditable); };
 /* Texto selecionado na página que o Ctrl+C/X deve copiar no lugar das camadas. O clique duplo para descer de frame em frame
