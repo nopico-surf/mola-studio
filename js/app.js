@@ -7396,7 +7396,9 @@ function stageEdit(L) {
   let b = null;
   if (L.capt) { b = seditBlock(L); if (!b) return false; T = clamp(b.s + capOff(L) + .02, 0, S.duration); RT.userSeek = true; }
   else { const ph = phase(L, T); if (!ph || ph.mode !== 'hold') seekLayer(L); } // com o texto inteiro na tela
-  if (!isPicked(L.id) || (RT.picks && RT.picks.size > 1)) select(L.id, true);
+  // frame de um item só escolhido inteiro (a Caixa): a seleção já é só o texto, mas valia como o frame e o painel mostrava o frame;
+  // editando, o texto fica escolhido como item (reclamação do usuário: não achava as propriedades do texto)
+  if (!isPicked(L.id) || (RT.picks && RT.picks.size > 1) || wholeGroup()) select(L.id, true);
   if (b) { RT.capSel = { id:L.id, k:b.k, picks:RT.picks }; capMark(L); } // o trecho editado fica marcado na lista e na timeline
   ensureBounds([L]);
   if (!L._bounds) return false;

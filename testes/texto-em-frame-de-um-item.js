@@ -46,6 +46,8 @@ const confere = (nome, real, esperado) => {
   confere('clique de novo: continua no frame do título', await nivel(), { dentro:true, fora:false });
   await p.mouse.dblclick(pos.x, pos.y); await p.waitForTimeout(400);
   confere('2º clique duplo: edita o texto', await st(), { n:1, t:true, sed:true });
+  // editando, o painel é o do texto, não o do frame (reclamação do usuário: não achava as propriedades do texto)
+  confere('editando: painel do texto', await p.evaluate(() => ({ grupo:wholeGroup(), tipo:[...document.querySelectorAll('#props h3')].some(h => /Tipografia/.test(h.textContent)) })), { grupo:null, tipo:true });
 
   // 2) com a edição aberta, mexer no painel e dar Esc nele conclui a edição; o Ctrl+C copia a camada
   await p.evaluate(() => { if (!SED.el) stageEdit(S.layers.find(l => l.id === window.__t)); }); // independente da parte 1
