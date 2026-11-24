@@ -3125,7 +3125,12 @@ function drawText(ctx, L, t, R) {
     c.translate(gx, line.baseline); c.rotate(SUBPX); // ver SUBPX: sem isso a letra anda em degraus de 1 px na vertical
     // sem ctx.filter por letra (brilho e filtro com sombra custam centenas de ms por quadro): desfoque pela sombra, brilho pela cor
     const bl = st.blur > .15 ? st.blur * R.rs : 0;
-    const put = (col, x) => { c.fillStyle = col; if (bl) blurText(c, ch, x, 0, col, bl); else c.fillText(ch, x, 0); };
+    const fk = (L.fake || 0) * size; // engrossar falso: contorno da mesma cor (a fonte só tem um peso)
+    const put = (col, x) => {
+      c.fillStyle = col;
+      if (bl) { blurText(c, ch, x, 0, col, bl); if (fk > .05) blurText(c, ch, x, 0, col, bl, fk); }
+      else { c.fillText(ch, x, 0); if (fk > .05) { c.save(); c.strokeStyle = col; c.lineWidth = fk; c.lineJoin = 'round'; c.strokeText(ch, x, 0); c.restore(); } }
+    };
     if (st.split) { c.save(); c.globalAlpha *= .7; put('#FF3D6E', -st.split); put('#3DD6FF', st.split); c.restore(); }
     const col = brightCol(st.col || g.c || L.color, st.bright), gl = (st.glow || 0) + glowIdle; // st.col: palavra em destaque (legenda)
     const putStroke = () => {
@@ -13369,6 +13374,7 @@ function styleProps(L) {
       put:v => { if (seditPut(L, 'size', v)) return; for (const o of peersOf(L)) o.size = v; RT.layout.clear(); } }),
     rangeF(L, 'lh', 'Entrelinha', .8, 1.6, .01, v => v.toFixed(2), { layout:true }),
     rangeF(L, 'ls', 'Entre letras', -.08, .6, .005, v => v.toFixed(3) + 'em', { layout:true }),
+    rangeF(L, 'fake', 'Engrossar (falso)', 0, .12, .002, v => (v || 0).toFixed(3) + 'em', { get:() => L.fake || 0, ico:'nf_fs' }), // contorno fino da mesma cor: peso a mais em fonte de um peso só
     segF(L, 'align', 'Alinhamento', ALIGN_OPTS),
     togF(L, 'Letras', CASE_OPTS)];
   if (L.type === 'text' && L.capt) { // legenda (js/legenda.js): estilo, texto para revisar e a tipografia do texto
