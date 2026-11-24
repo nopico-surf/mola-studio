@@ -1412,21 +1412,30 @@ async function loadGoogleFont0(family) {
   RT.fontsOk.add(family); RT.fontsBad.delete(family); RT.layout.clear(); needs = true;
   return true;
 }
-// maior peso que a fonte realmente tem (document.fonts lê as @font-face mesmo de folha de outra origem); 0 = não deu para saber
-function fontMaxWeight(family) {
-  let mx = 0;
+// pesos que a fonte realmente tem: [menor, maior] (document.fonts lê as @font-face mesmo de folha de outra origem); null = não deu para saber
+function fontRange(family) {
+  let mn = Infinity, mx = 0;
   try {
     document.fonts.forEach(ff => {
       if (ff.family.replace(/["']/g, '') !== family) return;
-      const m = String(ff.weight).match(/\d+/g); if (m) mx = Math.max(mx, ...m.map(Number));
+      const m = String(ff.weight).match(/\d+/g); if (m) { mn = Math.min(mn, ...m.map(Number)); mx = Math.max(mx, ...m.map(Number)); }
     });
   } catch (e) { /* sem document.fonts */ }
-  return mx;
+  return mx ? [mn, mx] : null;
 }
+function fontMaxWeight(family) { const r = fontRange(family); return r ? r[1] : 0; }
 // só os pesos que a fonte tem (se não deu para saber, todos)
 function weightsOf(family) {
-  const mx = fontMaxWeight(family);
-  return mx ? WEIGHTS.filter(([v]) => v <= mx) : WEIGHTS;
+  const r = fontRange(family);
+  return r ? WEIGHTS.filter(([v]) => v >= r[0] && v <= r[1]) : WEIGHTS;
+}
+/* Peso que o desenho usa: fonte de um peso só (Instrument Serif, só 400) pedida em 700 saía em negrito sintético do navegador,
+   com outro desenho; vale o peso mais perto que a fonte tem. Cache limpo quando uma fonte carrega. */
+const WCLAMP = new Map();
+function faceWeight(family, w) {
+  const k = family + '|' + w; let v = WCLAMP.get(k);
+  if (v === undefined) { const r = fontRange(family); v = r ? clamp(w, r[0], r[1]) : w; if (r) WCLAMP.set(k, v); }
+  return v;
 }
 function loadFileFont(f) {
   const d = String(f.data || ''), key = `${f.family}|${d.length}|${d.slice(-96)}`;
@@ -1444,7 +1453,7 @@ async function ensureFonts() {
   await Promise.all(S.brand.loaded.map(f => f.src === 'file' ? loadFileFont(f) : loadGoogleFont(f.family)));
   renderBrand(); needs = true;
 }
-document.fonts && document.fonts.addEventListener && document.fonts.addEventListener('loadingdone', () => { RT.layout.clear(); RT.fontRev = (RT.fontRev || 0) + 1; needs = true; }); // fontRev: o cache do palco (FC) refaz o texto
+document.fonts && document.fonts.addEventListener && document.fonts.addEventListener('loadingdone', () => { WCLAMP.clear(); RT.layout.clear(); RT.fontRev = (RT.fontRev || 0) + 1; needs = true; }); // fontRev: o cache do palco (FC) refaz o texto
 
 /* ============================================================
    Logo: SVG em partes
@@ -2716,7 +2725,7 @@ function rasterFx(ctx, st, w, h, pad, R, draw) {
    Texto: layout e desenho
    ============================================================ */
 let MCTX = document.createElement('canvas').getContext('2d');
-function fontStr(L, size, w = L.weight, it = L.italic, fam = L.font) { return `${it ? 'italic ' : ''}${w} ${size}px "${fam}", system-ui, sans-serif`; }
+function fontStr(L, size, w = L.weight, it = L.italic, fam = L.font) { w = faceWeight(fam, w); return `${it ? 'italic ' : ''}${w} ${size}px "${fam}", system-ui, sans-serif`; }
 // peso, itálico, cor e fonte por trecho: L.runs = [{ t, w?, i?, c?, f? }]. Só vale enquanto os trechos somam exatamente L.text
 function runsOf(L) { const r = L.runs; return r && r.length && r.map(x => x.t).join('') === L.text ? r : null; }
 function charStyles(L, txt) {
