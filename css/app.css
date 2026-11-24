@@ -968,6 +968,13 @@ body.nf-scrub,body.nf-scrub *{cursor:ew-resize !important;user-select:none}
 .fx-ic,.fill-sw{flex:none;width:28px;height:100%;border:0;background:transparent;color:var(--muted);padding:0;display:grid;place-items:center;cursor:pointer;border-radius:var(--r) 0 0 var(--r)}
 .fx-ic svg,.fill-sw i svg{width:16px;height:16px}
 .fx-ic:hover{color:var(--fg)}
+/* Textura: grade dos tipos com a amostra (ladrilho claro/escuro sobre o Neutro) */
+.tex-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.tex-k{display:flex;flex-direction:column;gap:4px;padding:4px;background:var(--raised-2);border:1px solid transparent;border-radius:var(--r);color:var(--muted);font:inherit;font-size:11px;text-align:left;cursor:pointer;min-width:0}
+.tex-k span:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tex-k:hover{border-color:var(--line-2);color:var(--fg)}
+.tex-k[aria-pressed="true"],.tex-k[aria-pressed="true"]:hover{border-color:var(--accent);background:var(--accent-on);color:var(--fg)}
+.tex-sw{display:block;height:30px;border-radius:3px;background-color:var(--faint);background-size:128px;background-repeat:repeat}
 .fill-sw{position:relative}
 .fill-sw::before{content:"";position:absolute;inset:4px;border-radius:3px;border:1px solid var(--line-2);background:var(--g,transparent),var(--checker)}
 .fill-sw i{position:relative;display:grid;place-items:center}

@@ -2731,18 +2731,35 @@ function runsOf(L) { const r = L.runs; return r && r.length && r.map(x => x.t).j
 function charStyles(L, txt) {
   const r = runsOf(L); if (!r) return null;
   const st = [];
-  for (const x of r) for (const ch of x.t) for (const _ of caseTxt(L, ch)) st.push([x.w ?? L.weight, x.i ?? !!L.italic, x.c || null, x.f || L.font, x.z || 1]);
-  return st.length === [...txt].length && st.some(s => s[0] !== L.weight || s[1] !== !!L.italic || s[2] || s[3] !== L.font || s[4] !== 1) ? st : null;
+  for (const x of r) for (const ch of x.t) for (const _ of caseTxt(L, ch)) st.push([x.w ?? L.weight, x.i ?? !!L.italic, x.c || null, x.f || L.font, x.z || 1, x.u ?? !!L.underline]);
+  return st.length === [...txt].length && st.some(s => s[0] !== L.weight || s[1] !== !!L.italic || s[2] || s[3] !== L.font || s[4] !== 1 || s[5] !== !!L.underline) ? st : null;
 }
 // o texto letra a letra com o estilo de cada uma (null = segue o da camada), e de volta para L.text + L.runs
 // (o editor do painel, richF, e a edição no palco, js/editar-texto.js, usam os dois)
-const TCH_K = ['w', 'i', 'c', 'f', 'z']; // z = tamanho do trecho em fração do tamanho da camada (0,5 = metade)
-function textChars(L) { const cs = []; for (const x of runsOf(L) || [{ t:L.text || '' }]) for (const ch of x.t) cs.push({ ch, w:x.w ?? null, i:x.i ?? null, c:x.c ?? null, f:x.f ?? null, z:x.z ?? null }); return cs; }
+const TCH_K = ['w', 'i', 'c', 'f', 'z', 'u']; // z = tamanho do trecho em fração do tamanho da camada (0,5 = metade)
+function textChars(L) { const cs = []; for (const x of runsOf(L) || [{ t:L.text || '' }]) for (const ch of x.t) cs.push({ ch, w:x.w ?? null, i:x.i ?? null, c:x.c ?? null, f:x.f ?? null, z:x.z ?? null, u:x.u ?? null }); return cs; }
 function setTextChars(L, cs) {
   const runs = [];
-  for (const c of cs) { const p = runs[runs.length - 1]; if (p && TCH_K.every(k => p[k] === c[k])) p.t += c.ch; else runs.push({ t:c.ch, w:c.w, i:c.i, c:c.c, f:c.f, z:c.z }); }
+  for (const c of cs) { const p = runs[runs.length - 1]; if (p && TCH_K.every(k => p[k] === c[k])) p.t += c.ch; else runs.push({ t:c.ch, w:c.w, i:c.i, c:c.c, f:c.f, z:c.z, u:c.u }); }
   L.text = cs.map(c => c.ch).join('');
   L.runs = runs.every(r => TCH_K.every(k => r[k] == null)) ? null : runs.map(r => { const o = { t:r.t }; for (const k of TCH_K) if (r[k] != null) o[k] = r[k]; return o; });
+}
+// Sublinhado (L.underline; por trecho, L.runs[].u): faixa abaixo da linha de base, na cor da letra. Cada letra desenha o seu pedaço
+// até a próxima sublinhada (passa pelo espaço entre palavras sublinhadas), então anima junto com a letra e, parada, vira uma linha só.
+const UL_Y = .09, UL_H = .06; // em (fração do tamanho da letra): distância da linha de base até o traço e espessura
+const ulOn = (L, g) => !g.space && (g.u ?? !!L.underline);
+function ulNext(L, line, g) { // a próxima letra sublinhada logo depois desta (pelos espaços sublinhados), ou null
+  const gs = line.glyphs; let j = g.gi + 1;
+  while (j < gs.length && gs[j].space && (gs[j].u ?? !!L.underline)) j++;
+  const n = gs[j];
+  return n && ulOn(L, n) ? n : null;
+}
+function ulW(L, line, g) { const n = ulNext(L, line, g); return n ? n.x - g.x : g.w; } // largura do pedaço da letra (até a próxima sublinhada, ou só a letra)
+// os pedaços no espaço do texto reto (SVG e "Converter em vetor"; texto em curva não entra)
+function ulRects(L, lay) {
+  const out = [];
+  for (const line of lay.lines) for (const g of line.glyphs) if (ulOn(L, g)) { const z = lay.size * (g.z || 1); out.push({ x:line.x0 + g.x, y:line.baseline + UL_Y * z, w:ulW(L, line, g), h:UL_H * z, c:g.c || L.color }); }
+  return out;
 }
 // Fundo atrás do texto (o marca-texto do Destaque; caixa colorida por linha, como nos stories, ou uma só para o bloco). null = sem fundo.
 // L.tbg ligado/desligado manda; sem escolha vale o de antes (só com o preset Marca-texto). Espaços e cantos em em (fração do tamanho da letra),
@@ -2971,7 +2988,7 @@ function layoutText(L, txt) {
   let lay = RT.layout.get(key); if (lay) return lay;
   if (RT.layout.size > 400) RT.layout.clear();
   // i = posição da letra no texto mostrado (o cursor da edição no palco acha a letra por ela); fm = fonte do trecho (vetor)
-  const all = [...txt].map((ch, i) => ({ ch, i, c:sty ? sty[i][2] : null, fm:sty ? sty[i][3] : null, z:sty ? sty[i][4] : 1, f:sty ? fontStr(L, size * sty[i][4], sty[i][0], sty[i][1], sty[i][3]) : font }));
+  const all = [...txt].map((ch, i) => ({ ch, i, c:sty ? sty[i][2] : null, fm:sty ? sty[i][3] : null, z:sty ? sty[i][4] : 1, u:sty ? sty[i][5] : null, f:sty ? fontStr(L, size * sty[i][4], sty[i][0], sty[i][1], sty[i][3]) : font }));
   // trechos seguidos com a mesma fonte são medidos juntos: assim o kerning entre as letras vale
   const segs = arr => { const out = []; for (const c of arr) { const s = out[out.length - 1]; if (s && s.f === c.f) s.s += c.ch; else out.push({ f:c.f, s:c.ch }); } return out; };
   let curF = null;
@@ -3007,7 +3024,7 @@ function layoutText(L, txt) {
         const w = meas(s.f, ch), x = segX + meas(s.f, pre) - w + k * ls + nsp * wsp;
         const space = ch === ' '; if (space) nsp++;
         if (space) wi++;
-        glyphs.push({ ch, x, w, k, f:s.f, c:cs[k].c, fm:cs[k].fm, z:cs[k].z, i:cs[k].i, space, word:wi, ci:space ? -1 : ci++ });
+        glyphs.push({ ch, x, w, k, gi:glyphs.length, f:s.f, c:cs[k].c, fm:cs[k].fm, z:cs[k].z, u:cs[k].u, i:cs[k].i, space, word:wi, ci:space ? -1 : ci++ });
         k++;
       });
       segX += meas(s.f, s.s);
@@ -3139,9 +3156,19 @@ function drawText(ctx, L, t, R) {
       if (bl) blurText(c, ch, 0, 0, sc, bl, lw); else { c.strokeStyle = sc; c.lineWidth = lw; c.strokeText(ch, 0, 0); }
       c.restore();
     };
-    if (skOn && skOut) putStroke();
-    put(col, 0);
-    if (skOn && !skOut) putStroke();
+    // sublinhado: o pedaço desta letra, com o mesmo desfoque e contorno da letra (passa 1 px da tela por baixo do próximo: sem isso a borda suavizada de cada pedaço deixava uma emenda clara entre as letras)
+    const ul = ulOn(L, g) ? (() => { const z = size * (g.z || 1), n = ulNext(L, line, g), w = n ? n.x - g.x : g.w, m = c.getTransform(), ov = n ? 1 / (Math.hypot(m.a, m.b) || 1) : 0; return [line.x0 + g.x + track - gx, UL_Y * z, w + (n ? st.track || 0 : 0) + ov, UL_H * z]; })() : null;
+    const ulPut = (cl, lw) => {
+      if (!ul) return;
+      const [ux, uy, uw, uh] = ul;
+      if (bl) { const m = c.getTransform(); c.save(); c.setTransform(m.a, m.b, m.c, m.d, m.e - OFFX, m.f); c.shadowColor = cl; c.shadowBlur = bl * 2; c.shadowOffsetX = OFFX; c.shadowOffsetY = 0; }
+      else c.save();
+      if (lw) { c.strokeStyle = cl; c.lineWidth = lw; c.strokeRect(ux, uy, uw, uh); } else { c.fillStyle = cl; c.fillRect(ux, uy, uw, uh); }
+      c.restore();
+    };
+    if (skOn && skOut) { putStroke(); ulPut(brightCol(skC(L), st.bright), skw * 2); }
+    put(col, 0); ulPut(col);
+    if (skOn && !skOut) { putStroke(); ulPut(brightCol(skC(L), st.bright), skw); }
     if (gl > .01) { // luz na cor da própria letra (neon, flash): só o halo desfocado, por cima
       const m = c.getTransform(), r = size * (.12 + .16 * Math.min(gl, 2)) * Math.hypot(m.a, m.b);
       c.globalAlpha *= Math.min(1, gl);
@@ -3863,6 +3890,7 @@ function drawBlockBody(ctx, L, G, info, R) {
     ctx.translate(ls / 2, L.size * .35); ctx.rotate(SUBPX / 3); // o botão é largo: giro menor, também acima do limite (ver SUBPX)
     ctx.fillText(ctaText(L), 0, 0);
     if (ls) ctx.letterSpacing = '0px';
+    if (L.underline) { const w = ctaMeasure(L).w; ctx.fillRect(-ls / 2 - w / 2, UL_Y * L.size, w, UL_H * L.size); } // sublinhado do texto do botão
   }
 }
 const freeType = L => ((L.type === 'image' || L.type === 'shape' || tpFree(L)) && !L.keepIn); // sem margem: imagem e forma podem sangrar (com "Manter dentro da margem" obedecem)
@@ -3916,13 +3944,91 @@ function drawBlock(ctx, L, t, R) {
 /* ============================================================
    Fundo
    ============================================================ */
-let NOISE = null;
-function noiseTile() {
-  if (NOISE) return NOISE;
-  const c = document.createElement('canvas'); c.width = c.height = 220;
-  const x = c.getContext('2d'), d = x.createImageData(220, 220);
-  for (let i = 0; i < d.data.length; i += 4) { const v = Math.random() * 255; d.data[i] = d.data[i + 1] = d.data[i + 2] = v; d.data[i + 3] = 255; }
-  x.putImageData(d, 0, 0); NOISE = c; return c;
+/* ------------ Texturas (pedido do usuário: mais tipos de granulado e textura, em tudo: texto, forma, logo, botão, imagem, fundo) ------------
+   L.grain = força (0..1; 0 = sem textura), L.grainK = tipo (TEX_KINDS; ausente = 'fine', o granulado de antes), L.grainS = tamanho
+   (ausente = 1), L.grainAnim = mexe a cada quadro (ausente = o padrão do tipo), L.grainOff = força guardada com o olho fechado.
+   Cada tipo é um ladrilho de TEX_N px que se repete sem emenda, em cinza com 0,5 = neutro (texGen, determinístico por rand). Para
+   desenhar vira claro/escuro com transparência (texAtop: branco com alfa onde passa de 0,5, preto onde fica abaixo) e entra por cima
+   com 'source-atop': só onde a camada já tem pixels, borda certa e sem tela de mistura. No fundo, dentro do paintFill; nas outras
+   camadas, na tela à parte da camada (drawLayerFx0, a mesma da sombra/mesclagem), então o contorno e as letras levam a textura junto.
+   O ladrilho fica preso à caixa da camada (anda com ela); o que mexe pula para outro lugar do ladrilho a cada quadro. */
+const TEX_N = 256;
+const TEX_KINDS = { fine:['Fino', 1], coarse:['Grosso', 1], film:['Filme', 1], color:['Colorido', 1], dust:['Poeira', 1], scratch:['Arranhado', 1],
+  paper:['Papel', 0], stone:['Concreto', 0], canvas:['Tela', 0], halftone:['Retícula', 0], lines:['Linhas de TV', 0] };
+const TEX_TYPES = new Set(['bg', 'text', 'logo', 'cta', 'image', 'shape']);
+const texKind = L => TEX_KINDS[L.grainK] ? L.grainK : 'fine';
+const texOn = L => !!L && TEX_TYPES.has(L.type) && L.grain > 0;
+const texAnim = L => L.grainAnim != null ? !!L.grainAnim : !!TEX_KINDS[texKind(L)][1];
+const texSize = L => clamp(L.grainS ?? 1, .25, 8);
+// ruído suave que fecha no ladrilho (grade de TEX_N / cell pontos)
+function texVN(x, y, cell, seed) {
+  const P = TEX_N / cell, gx = x / cell, gy = y / cell, x0 = Math.floor(gx), y0 = Math.floor(gy), fx = gx - x0, fy = gy - y0;
+  const v = (i, j) => rand(((i % P) + P) % P + seed * 101, ((j % P) + P) % P + seed * 57);
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy), a = v(x0, y0), b = v(x0 + 1, y0), c = v(x0, y0 + 1), d = v(x0 + 1, y0 + 1);
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+// o ladrilho do tipo: três canais (Float32Array, 0,5 = neutro); os cinzas repetem o mesmo canal
+function texGen(k) {
+  const N = TEX_N, R = (x, y, s) => rand(x + s * 977, y + s * 613);
+  const plane = fn => { const v = new Float32Array(N * N); for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) v[y * N + x] = fn(x, y); return v; };
+  const fbm = (x, y, cs, s) => { let a = 0, w = 0, m = 1; for (const c of cs) { a += texVN(x, y, c, s + c) * m; w += m; m *= .55; } return a / w; };
+  if (k === 'color') return [1, 2, 3].map(s => plane((x, y) => .5 + (R(x, y, 20 + s) - .5) * .75 + (texVN(x, y, 2, 21 + s) - .5) * .6));
+  let v;
+  const stamp = (x, y, val, a) => { if (a <= 0) return; const i = ((y % N + N) % N) * N + ((x % N + N) % N); v[i] += (val - v[i]) * Math.min(1, a); };
+  const dots = (n, s, rMax, pick) => { // pingos redondos com borda suave
+    for (let i = 0; i < n; i++) {
+      const cx = R(i, 0, s) * N, cy = R(i, 1, s) * N, r = .55 + R(i, 2, s) ** 3 * rMax, val = pick(i), e = Math.ceil(r) + 1;
+      for (let dy = -e; dy <= e; dy++) for (let dx = -e; dx <= e; dx++) { const px = Math.floor(cx) + dx, py = Math.floor(cy) + dy; stamp(px, py, val, r + .5 - Math.hypot(px + .5 - cx, py + .5 - cy)); }
+    }
+  };
+  const walk = (n, s, len0, len1, th0, wob, pick, alpha) => { // fios e riscos: um passo de 1 px por vez, virando um pouco
+    for (let i = 0; i < n; i++) {
+      let x = R(i, 0, s) * N, y = R(i, 1, s) * N, th = th0(i);
+      const len = len0 + R(i, 2, s) * (len1 - len0), val = pick(i), a = alpha(i);
+      for (let j = 0; j < len; j++) { stamp(Math.round(x), Math.round(y), val, a * Math.min(1, 3 * (1 - Math.abs(j / len - .5) * 2))); th += (R(i, j, s + 1) - .5) * wob; x += Math.cos(th); y += Math.sin(th); }
+    }
+  };
+  if (k === 'coarse') v = plane((x, y) => .5 + (texVN(x, y, 4, 2) - .5) * .95 + (texVN(x, y, 2, 18) - .5) * .65 + (R(x, y, 3) - .5) * .22);
+  else if (k === 'film') v = plane((x, y) => .5 + (R(x, y, 4) - .5) * .6 + (texVN(x, y, 2, 5) - .5) * .7 + (texVN(x, y, 8, 6) - .5) * .45);
+  else if (k === 'dust') { v = new Float32Array(N * N).fill(.5); dots(260, 7, 2.4, i => R(i, 3, 7) < .6 ? 1 : 0); }
+  else if (k === 'scratch') { v = new Float32Array(N * N).fill(.5); walk(24, 8, 40, 240, i => Math.PI / 2 + (R(i, 3, 8) - .5) * .35, .03, i => R(i, 4, 8) < .6 ? 1 : 0, i => .45 + R(i, 5, 8) * .5); dots(40, 9, 1.2, i => R(i, 3, 9) < .5 ? 1 : 0); }
+  else if (k === 'paper') { v = plane((x, y) => .5 + (fbm(x, y, [64, 32, 16, 8], 9) - .5) * .55 + (R(x, y, 10) - .5) * .16); walk(170, 11, 8, 46, i => R(i, 3, 11) * Math.PI * 2, .5, i => R(i, 4, 11) < .5 ? .85 : .2, i => .2 + R(i, 5, 11) * .3); }
+  else if (k === 'stone') { v = plane((x, y) => .5 + (fbm(x, y, [32, 16, 8, 4, 2], 13) - .5) * 1.2 + (R(x, y, 14) - .5) * .28); dots(90, 15, 1.8, () => .08); }
+  else if (k === 'canvas') v = plane((x, y) => { // trama: fios de 8 px, por cima e por baixo alternados
+    const s = 8, hor = (Math.floor(x / s) + Math.floor(y / s)) % 2 === 0, fx = (x % s + .5) / s, fy = (y % s + .5) / s;
+    return .5 + (Math.sin((hor ? fy : fx) * Math.PI) - .64) * .6 - (1 - Math.sin((hor ? fx : fy) * Math.PI)) * .12 + (R(x, y, 15) - .5) * .12 + (texVN(x, y, 32, 16) - .5) * .15;
+  });
+  else if (k === 'halftone') v = plane((x, y) => { // pontos a 45°, como impressão
+    const u = (x + y + 1) / 16, w = (x - y) / 16, fu = u - Math.round(u), fw = w - Math.round(w), d = Math.sqrt(2 * (fu * fu + fw * fw)) * 8;
+    return .62 - .55 * clamp(3.3 - d, 0, 1);
+  });
+  else if (k === 'lines') v = plane((x, y) => .5 + .22 * Math.cos((y + .5) / 4 * Math.PI * 2) + (R(x, y, 17) - .5) * .06);
+  else v = plane((x, y) => R(x, y, 1)); // fine
+  return [v, v, v];
+}
+// claro/escuro com transparência a partir do ladrilho: cor = o lado para onde o pixel puxa, alfa = quanto ele se afasta do neutro
+const TEXC = {};
+function texAtop(k) {
+  if (TEXC[k]) return TEXC[k];
+  const ch = texGen(k), N = TEX_N, c = document.createElement('canvas'); c.width = c.height = N;
+  const x = c.getContext('2d'), d = x.createImageData(N, N);
+  for (let i = 0; i < N * N; i++) {
+    const r = ch[0][i] - .5, g = ch[1][i] - .5, b = ch[2][i] - .5, dev = Math.max(Math.abs(r), Math.abs(g), Math.abs(b)), q = dev > 1e-4 ? .5 / dev : 0;
+    d.data[i * 4] = clamp(.5 + r * q, 0, 1) * 255; d.data[i * 4 + 1] = clamp(.5 + g * q, 0, 1) * 255; d.data[i * 4 + 2] = clamp(.5 + b * q, 0, 1) * 255;
+    d.data[i * 4 + 3] = clamp(dev * 2, 0, 1) * 255;
+  }
+  x.putImageData(d, 0, 0); return TEXC[k] = c;
+}
+const TEXU = {};
+const texThumb = k => TEXU[k] || (TEXU[k] = texAtop(k).toDataURL());
+// passa a textura de L por cima do que já está em c. M = matriz do quadro (unidades do quadro → px de c); ax, ay = onde o ladrilho começa
+function texPaint(c, L, t, M, ax = 0, ay = 0) {
+  const pat = c.createPattern(texAtop(texKind(L)), 'repeat'); if (!pat) return;
+  const s = texSize(L);
+  if (texAnim(L) && !stillNow(L)) { const f = Math.floor(t * fps()); ax += Math.floor(rand(f, 1) * TEX_N) * s; ay += Math.floor(rand(f, 2) * TEX_N) * s; }
+  pat.setTransform(new DOMMatrix([M.a, M.b, M.c, M.d, M.e, M.f]).translate(ax, ay).scale(s));
+  c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = clamp(L.grain, 0, 1); c.globalCompositeOperation = 'source-atop'; c.filter = 'none';
+  c.fillStyle = pat; c.fillRect(0, 0, c.canvas.width, c.canvas.height); c.restore();
 }
 function drawBg(ctx, L, t, R) { paintFill(ctx, L, t, FW(), H()); }
 // degradê exato (SVG importado): paradas em [posição 0..1 na caixa, cor]; só vale enquanto as três cores são as de quando entrou (editou a cor = volta ao degradê de três paradas)
@@ -3970,13 +4076,8 @@ function paintFill(ctx, L, t, w, hh) {
       if (L.darken > 0) { ctx.fillStyle = `rgba(0,0,0,${L.darken})`; ctx.fillRect(0, 0, w, hh); }
     }
   }
-  if (L.grain > 0) {
-    const n = noiseTile(), f = Math.floor(t * fps());
-    ctx.globalAlpha *= L.grain; ctx.globalCompositeOperation = 'overlay'; // soma ao alfa herdado (opacidade, animação), senão o granulado ignora
-    const pat = ctx.createPattern(n, 'repeat');
-    const ox = Math.floor(rand(f, 1) * 220), oy = Math.floor(rand(f, 2) * 220);
-    ctx.translate(-ox, -oy); ctx.fillStyle = pat; ctx.fillRect(0, 0, w + 220, hh + 220);
-  }
+  // textura do fundo aqui dentro (cobre o quadro, sem tela à parte); a das outras camadas vai na tela delas (drawLayerFx0)
+  if (L.type === 'bg' && texOn(L) && !RT.bbMask) texPaint(ctx, L, t, ctx.getTransform());
   ctx.restore();
 }
 
@@ -4025,7 +4126,8 @@ function layerMoves(L, ph) {
   if (L.idle && L.idle !== 'none') return true;
   if (vidOn(L)) return true;
   if (L.type === 'image' && L.move && L.move !== 'none') return true;
-  if ((L.type === 'bg' || L.type === 'shape') && (L.grain > 0 || ((L.mode || 'solid') !== 'solid' && (L.motion ?? 1) !== 0))) return true;
+  if ((L.type === 'bg' || L.type === 'shape') && (L.mode || 'solid') !== 'solid' && (L.motion ?? 1) !== 0) return true;
+  if (texOn(L) && texAnim(L)) return true; // textura que mexe: muda a cada quadro (parada não)
   if (L.type === 'text' && L.mark && L.mark !== 'none') return true;
   if (L.capt) return true; // legenda: o bloco e a palavra da vez mudam com o tempo
   return false;
@@ -4928,8 +5030,9 @@ function lcPut(id, key, e) {
 function drawLayerFx0(tc, L, t, R, cam, depth, one) {
   const sh = L.type !== 'bg' && L.shadow && L.shadow !== 'none' ? SHADOWS[L.shadow] : null, bm = blendOf(L);
   const back = L.type === 'image' && L.move && L.move !== 'none' ? imageMotion(L, t) : null;
+  const tx = L.type !== 'bg' && texOn(L) && !RT.bbMask; // textura: a camada pronta à parte e a textura por cima só dos pixels dela
   try {
-    if (!sh && !bm && !blurOn(L)) { tc.save(); applyCam(tc, cam, L, depth); one(tc, L); tc.restore(); return; }
+    if (!sh && !bm && !blurOn(L) && !tx) { tc.save(); applyCam(tc, cam, L, depth); one(tc, L); tc.restore(); return; }
     if (!phase(L, t)) return;
     const lk = lcKey(tc, L, t, R, cam), le = lk && LCACHE.get(L.id);
     if (le && le.key === lk) { LCACHE.delete(L.id); LCACHE.set(L.id, le); lcBlit(tc, le); if (le.b) L._bounds = le.b; return; }
@@ -4942,6 +5045,11 @@ function drawLayerFx0(tc, L, t, R, cam, depth, one) {
       return c;
     };
     const src = paint(1);
+    if (tx) { // presa à caixa da camada (anda com ela), antes da sombra, do desfoque e da mesclagem
+      const x = src.getContext('2d'), b = L._bounds;
+      x.save(); x.setTransform(R.rs, 0, 0, R.rs, P - voX(src), P - voY(src)); applyCam(x, cam, L, depth); const M = x.getTransform(); x.restore();
+      texPaint(x, L, t, M, b ? b.x : 0, b ? b.y : 0);
+    }
     // "Desfocar atrás" numa forma: o desfoque vale na forma inteira, mesmo com o preenchimento transparente ou "sem cor" (como no
     // Figma). A forma é desenhada de novo com o preenchimento opaco (RT.bbMask) e essa é a máscara do vidro
     let mask = null;
@@ -6623,7 +6731,14 @@ cv.addEventListener('dblclick', ev => {
   const pk0 = pickedLayers();
   if (L.grp && (L.type === 'text' || L.type === 'cta') && !L.locked && pk0.length === 1 && pk0[0] === L && !wholeGroup()) { editText(L); return; } // texto/botão de dentro de frames já escolhido sozinho: o clique duplo edita; antes disso só desce um nível (até escolher o texto)
   if (L.grp && (L.type === 'text' || L.type === 'cta') && !L.locked && pk0.length === 1 && pk0[0] === L) { editText(L); return; } // frame (ou frames embrulhados) escolhido que só tem este texto: não há mais nível para descer, edita (a Caixa precisava de um clique duplo a mais)
-  if (L.grp && (L.type === 'text' || L.type === 'cta')) { drillSelect(L); return; }
+  if (L.grp && (L.type === 'text' || L.type === 'cta')) {
+    // grupo solto (sem frame em volta) escolhido inteiro: o clique duplo no texto já edita, em vez de só descer até ele e pedir outro clique duplo
+    // (reclamação do usuário: texto sobre uma forma, no grupo girado, "dois cliques e não consigo editar"). Com frames dentro de frames continua por níveis.
+    const solo = wholeGroup() === L.grp && !gpar(L.grp) && !L.locked;
+    drillSelect(L);
+    if (solo) { const pk = pickedLayers(); if (pk.length === 1 && pk[0] === L) editText(L); }
+    return;
+  }
   if (L.grp && (wholeGroup() || (!(pk0.length === 1 && pk0[0] === L) && (pk0.length > 1 || gpar(L.grp))))) { drillSelect(L); return; } // frame de um item só escolhido inteiro: entra no item
   editText(L);
 });
@@ -7436,7 +7551,7 @@ function stageEdit(L) {
   el.addEventListener('keydown', e => {
     e.stopPropagation();
     const mod = e.ctrlKey || e.metaKey, kk = (e.key || '').toLowerCase();
-    if (mod && (kk === 'b' || kk === 'i') && !L.capt) { e.preventDefault(); seditStyle(kk === 'b' ? 'weight' : 'italic'); return; } // negrito e itálico no trecho
+    if (mod && (kk === 'b' || kk === 'i' || kk === 'u') && !L.capt) { e.preventDefault(); seditStyle(kk === 'b' ? 'weight' : kk === 'i' ? 'italic' : 'underline'); return; } // negrito e itálico no trecho
     if (e.key === 'Escape') { e.preventDefault(); seditClose(true); }
     else if (L.capt && !SED.dirty && (e.key === 'Delete' || e.key === 'Backspace') && seditAllSel(el)) { const k = SED.k; e.preventDefault(); seditClose(); capDelBlock(L, k); }
     // botão e legenda são de uma linha: Enter conclui (no texto, Enter quebra a linha; Ctrl+Enter conclui)
@@ -7470,9 +7585,9 @@ function seditClose(cancel) {
    janelinha ou para o seletor de cor mantém o campo aberto e o trecho guardado em `SED.range`). Ctrl+B e Ctrl+I também valem
    para o trecho. O resto do painel (tamanho, entrelinha, alinhamento…) continua valendo para o texto inteiro: o tamanho por
    trecho não existe em `L.runs`. */
-const SED_RUN = { color:'c', weight:'w', italic:'i', font:'f', size:'z' };
+const SED_RUN = { color:'c', weight:'w', italic:'i', font:'f', size:'z', underline:'u' };
 // valor da camada e do trecho de uma letra; o tamanho do trecho é guardado em fração (z) e aparece em px
-const sedBase = (L, k) => k === 'color' ? L.color : k === 'weight' ? L.weight : k === 'italic' ? !!L.italic : L[k];
+const sedBase = (L, k) => k === 'color' ? L.color : k === 'weight' ? L.weight : k === 'italic' ? !!L.italic : k === 'underline' ? !!L.underline : L[k];
 const sedOf = (L, k, c) => k === 'size' ? Math.round(L.size * (c.z ?? 1)) : c[SED_RUN[k]] ?? sedBase(L, k);
 // o trecho escolhido no campo, em índices de letra de L.text (a caixa alta é só CSS, então bate letra a letra)
 function seditSel(el) {
@@ -7539,7 +7654,7 @@ function seditStyle(k) {
   const L = seditL(); if (!L || !SED.range) return false;
   const [a, b] = SED.range; if (!(b > a)) return false;
   const cs = textChars(L).slice(a, b);
-  const v = k === 'weight' ? (cs.every(c => (c.w ?? L.weight) >= 700) ? 400 : 700) : !cs.every(c => c.i ?? !!L.italic);
+  const v = k === 'weight' ? (cs.every(c => (c.w ?? L.weight) >= 700) ? 400 : 700) : k === 'underline' ? !cs.every(c => c.u ?? !!L.underline) : !cs.every(c => c.i ?? !!L.italic);
   if (!SED.dirty) { pushUndo(); SED.dirty = true; }
   return seditPut(L, k, v);
 }
@@ -12398,7 +12513,7 @@ Object.assign(ICONS, {
   ta_left:SI('<path d="M2.5 3.5h11M2.5 6.5h7M2.5 9.5h11M2.5 12.5h7"/>'), ta_center:SI('<path d="M2.5 3.5h11M4.5 6.5h7M2.5 9.5h11M4.5 12.5h7"/>'),
   ta_right:SI('<path d="M2.5 3.5h11M6.5 6.5h7M2.5 9.5h11M6.5 12.5h7"/>'),
   bold:SI('<path d="M4.5 2.8h4a2.6 2.6 0 0 1 0 5.2h-4zM4.5 8h4.7a2.6 2.6 0 0 1 0 5.2H4.5z"/>', 1.8),
-  italic:SI('<path d="M7 2.8h5M4 13.2h5M9.5 2.8l-3 10.4"/>'),
+  italic:SI('<path d="M7 2.8h5M4 13.2h5M9.5 2.8l-3 10.4"/>'), underline:SI('<path d="M4.5 2.5v4.5a3.5 3.5 0 0 0 7 0V2.5M3.5 13.5h9"/>'),
   cap:SI('<path d="M1.5 3h6M4.5 3v10M9.5 8h5M12 5.5v7.5"/>'), title:SI('<path d="M.8 4h3.6M2.6 4v6M5 7.5h2.6M6.3 6v4M8.8 4h3.6M10.6 4v6M13 7.5h2.4M14.2 6v4"/>'),
   upper:SI('<path d="M1.5 3h5M4 3v10M9.5 3h5M12 3v10"/>'), lower:SI('<path d="M1.5 7h5M4 4.5v8.5M9.5 7h5M12 4.5v8.5"/>'),
   // fundo atrás do texto: uma caixa por linha × uma caixa só
@@ -12491,9 +12606,9 @@ function togF(L, label, opts) {
 }
 const ALIGN_OPTS = [['left', 'Alinhar à esquerda', 'ta_left'], ['center', 'Centralizar', 'ta_center'], ['right', 'Alinhar à direita', 'ta_right']];
 const CASE_EX = ['upper', 'lower', 'cap', 'title'];
-const CASE_OPTS = [['upper', 'Caixa alta', 'upper'], ['lower', 'Caixa baixa', 'lower'], ['cap', 'Só a primeira letra em caixa alta', 'cap'], ['title', 'Inicial de cada palavra em caixa alta', 'title'], ['italic', 'Itálico', 'italic']];
+const CASE_OPTS = [['upper', 'Caixa alta', 'upper'], ['lower', 'Caixa baixa', 'lower'], ['cap', 'Só a primeira letra em caixa alta', 'cap'], ['title', 'Inicial de cada palavra em caixa alta', 'title'], ['italic', 'Itálico', 'italic'], ['underline', 'Sublinhado', 'underline']];
 // texto: caixa e itálico + negrito falso (contorno fino da mesma cor, para fonte de um peso só como a Instrument Serif)
-const TEXT_OPTS = [...CASE_OPTS.slice(0, 4), ['fb', 'Negrito (falso, para fonte de um peso só)', 'bold'], CASE_OPTS[4]];
+const TEXT_OPTS = [...CASE_OPTS.slice(0, 4), ['fb', 'Negrito (falso, para fonte de um peso só)', 'bold'], CASE_OPTS[4], CASE_OPTS[5]];
 const TBG_OPTS = [['line', 'Uma caixa por linha', 'tbg_line'], ['block', 'Uma caixa só', 'tbg_block']];
 function segF(L, k, label, opts) {
   const ico = opts.some(o => o[2]);
@@ -12537,33 +12652,35 @@ function richF(L, label) {
     for (const r of runsOf(L) || [{ t:L.text }]) {
       if (!r.t) continue;
       const sp = h('span', { text:r.t });
-      sp.style.fontWeight = r.w ?? L.weight; sp.style.fontStyle = (r.i ?? L.italic) ? 'italic' : 'normal';
+      sp.style.fontWeight = r.w ?? L.weight; sp.style.fontStyle = (r.i ?? L.italic) ? 'italic' : 'normal'; sp.style.textDecoration = (r.u ?? L.underline) ? 'underline' : 'none';
       if (r.w != null) sp.dataset.w = r.w;
       if (r.i != null) sp.dataset.i = r.i ? '1' : '0';
       if (r.c) sp.dataset.c = r.c;
+      if (r.u != null) sp.dataset.u = r.u ? "1" : "0";
       if (r.z != null) { sp.dataset.z = r.z; sp.style.fontSize = (r.z * 100) + '%'; }
       if (r.f) { sp.dataset.f = r.f; sp.style.fontFamily = `"${r.f}", var(--f-ui)`; }
       ed.append(sp);
     }
     ed.style.fontFamily = `"${L.font}", var(--f-ui)`;
-    ed.style.fontWeight = L.weight; ed.style.fontStyle = L.italic ? 'italic' : 'normal';
+    ed.style.fontWeight = L.weight; ed.style.fontStyle = L.italic ? 'italic' : 'normal'; ed.style.textDecoration = L.underline ? 'underline' : 'none';
     if (typeof showClr === 'function') showClr();
   };
   // lê o editor mantendo o estilo de cada trecho
   const read = () => {
     const cs = [];
-    const walk = (n, w, it, cl, fm, zz) => {
-      if (n.nodeType === 3) { for (const ch of n.data) cs.push({ ch:ch === ' ' ? ' ' : ch, w, i:it, c:cl, f:fm, z:zz }); return; }
-      if (n.nodeName === 'BR') { cs.push({ ch:'\n', w, i:it, c:cl, f:fm, z:zz }); return; }
-      if (n !== ed && /^(DIV|P)$/.test(n.nodeName) && cs.length && cs[cs.length - 1].ch !== '\n') cs.push({ ch:'\n', w, i:it, c:cl, f:fm, z:zz });
+    const walk = (n, w, it, cl, fm, zz, uu) => {
+      if (n.nodeType === 3) { for (const ch of n.data) cs.push({ ch:ch === ' ' ? ' ' : ch, w, i:it, c:cl, f:fm, z:zz, u:uu }); return; }
+      if (n.nodeName === 'BR') { cs.push({ ch:'\n', w, i:it, c:cl, f:fm, z:zz, u:uu }); return; }
+      if (n !== ed && /^(DIV|P)$/.test(n.nodeName) && cs.length && cs[cs.length - 1].ch !== '\n') cs.push({ ch:'\n', w, i:it, c:cl, f:fm, z:zz, u:uu });
+      if (n.dataset && n.dataset.u) uu = n.dataset.u === "1";
       if (n.dataset && n.dataset.z) zz = +n.dataset.z;
       if (n.dataset && n.dataset.c) cl = n.dataset.c;
       if (n.dataset && n.dataset.w) w = +n.dataset.w;
       if (n.dataset && n.dataset.i) it = n.dataset.i === '1';
       if (n.dataset && n.dataset.f) fm = n.dataset.f;
-      for (const c of n.childNodes) walk(c, w, it, cl, fm, zz);
+      for (const c of n.childNodes) walk(c, w, it, cl, fm, zz, uu);
     };
-    walk(ed, null, null, null, null, null);
+    walk(ed, null, null, null, null, null, null);
     return cs;
   };
   // seleção em índices de letra
@@ -13216,7 +13333,24 @@ Object.assign(ICONS, {
   fx_shadow:SI('<rect x="2.5" y="2.5" width="8.5" height="8.5" rx="1.5"/><path d="M13.5 5.5v6.5a1.5 1.5 0 0 1-1.5 1.5H5.5" stroke-opacity=".55"/>'),
   fx_lblur:SI('<circle cx="8" cy="8" r="5.5" stroke-dasharray="1.5 1.8"/><circle cx="8" cy="8" r="2.5"/>'),
   fx_bblur:SI('<rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke-dasharray="1.5 1.8"/><path d="M5.5 10.5l5-5" stroke-opacity=".55"/>'),
+  fx_grain:SI('<path d="M3.5 3.5h.01M8 3.5h.01M12.5 3.5h.01M5.8 6h.01M10.2 6h.01M3.5 8.5h.01M8 8.5h.01M12.5 8.5h.01M5.8 11h.01M10.2 11h.01M3.5 13h.01M8 13h.01M12.5 13h.01" stroke-width="1.8"/>'),
 });
+const TEX_ON = .3; // força que o "+" põe
+/* Textura (efeito de toda camada que desenha; no fundo, dentro da seção Fundo): tipo numa grade com a amostra, força, tamanho e se
+   mexe a cada quadro. peers = quem muda junto (seleção) */
+function texFields(L, peers = peersAny) {
+  // o botão clicado fica com o foco e a janelinha não se refaz com o foco dentro dela (popRefresh): solta antes, para o marcado e o Movimento acompanharem
+  const cur = texKind(L), put = fn => { const a = document.activeElement; if (a && a.closest && a.closest('.pop')) a.blur(); optSet(L, fn, peers); seekLayer(L); };
+  const grid = h('div', { class:'tex-grid', role:'group', 'aria-label':'Tipo de textura' }, Object.entries(TEX_KINDS).map(([k, [t]]) => {
+    const sw = h('span', { class:'tex-sw' }); sw.style.backgroundImage = `url(${texThumb(k)})`;
+    return h('button', { type:'button', class:'tex-k', 'aria-pressed':String(cur === k), title:t, onclick:() => put(o => { o.grainK = k; delete o.grainAnim; if (!(o.grain > 0) && !(o.grainOff > 0)) o.grain = TEX_ON; }) }, [sw, h('span', { text:t })]);
+  }));
+  const anim = texAnim(L);
+  return [field('Tipo', grid, null, true),
+    rangeF(L, 'grain', 'Força', 0, 1, .01, v => Math.round((v || 0) * 100) + '%', { ico:'nf_grain', get:() => L.grain || L.grainOff || 0, put:v => { for (const o of peers(L)) { o.grain = v; delete o.grainOff; } } }),
+    rangeF(L, 'grainS', 'Tamanho', .25, 8, .05, v => (v ?? 1).toFixed(2) + '×', { get:() => L.grainS ?? 1, put:v => { for (const o of peers(L)) o.grainS = v; } }),
+    modeF('Movimento', [[true, 'Mexe', 'Muda a cada quadro, como granulado de filme'], [false, 'Parada', 'Fica igual o tempo todo, presa ao elemento']], anim, v => put(o => { o.grainAnim = v; }))];
+}
 function effectRows(L) {
   const shOn = !!L.shadow && L.shadow !== 'none';
   const setSh = v => o => { o.shadow = v; o.shColor = v === 'none' ? null : autoShadowHex(o, v); };
@@ -13237,6 +13371,11 @@ function effectRows(L) {
       det:() => [rangeF(L, k, k === 'lblur' ? 'Desfoque' : 'Desfocar atrás', 0, 800, 1, v => Math.round(v || 0) + ' px', { get:() => L[k] || L[k + 'Off'] || 0, put:v => { for (const o of peersAny(L)) { o[k] = v; delete o[k + 'Off']; } } }),
         segPick(L, k, BLURS[k].filter(([v]) => v).map(([v, t]) => [v, t, `${t}: ${v} px`]), null, null, 0, peersAny),
         k === 'bblur' ? h('p', { class:'hint', text:'Desfoca o que está atrás, no formato do elemento. Com preenchimento meio transparente, vira vidro.' }) : null].filter(Boolean) })),
+    ...(TEX_TYPES.has(L.type) ? [{ k:'grain', t:'Textura', has:L.grain > 0 || L.grainOff > 0, on:L.grain > 0,
+      val:() => `${TEX_KINDS[texKind(L)][0]} · ${Math.round((L.grain || L.grainOff || 0) * 100)}%`,
+      add:o => { delete o.grainOff; o.grain = TEX_ON; if (!TEX_KINDS[o.grainK]) o.grainK = 'film'; },
+      hide:o => { if (o.grain > 0) { o.grainOff = o.grain; o.grain = 0; } else if (o.grainOff > 0) { o.grain = o.grainOff; delete o.grainOff; } },
+      rm:o => { o.grain = 0; delete o.grainOff; }, det:() => texFields(L, peersAny) }] : []),
   ];
   const set = fn => { optSet(L, fn, peersAny); seekLayer(L); };
   const rows = FX.filter(f => f.has).map(f => {
@@ -13592,7 +13731,8 @@ function fillProps(L, sec) {
   }
   if (L.mode === 'linear') sec.append(rangeF(L, 'angle', 'Ângulo', 0, 360, 1, v => Math.round(v) + '°'));
   if (L.mode !== 'solid') sec.append(rangeF(L, 'motion', media ? 'Zoom lento' : 'Movimento', 0, 3, .05, v => v.toFixed(2) + '×'));
-  sec.append(rangeF(L, 'grain', 'Granulado', 0, .4, .01, v => Math.round(v * 100) + '%'));
+  // textura: na forma fica em Efeitos (vale para a forma inteira, com o contorno); no fundo, aqui
+  if (bg) sec.append(h('h3', { class:'sub', text:'Textura' }), ...texFields(L, peersOf));
 }
 function renderAll() { renderFormats(); renderAdds(); renderBrand(); renderLayers(); renderProps(); renderAudio(); $('#loop').checked = S.loop !== false; syncHist(); }
 

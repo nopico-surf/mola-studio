@@ -22,10 +22,10 @@ const confere = (nome, ok, info) => { if (!ok) falhas++; console.log((ok ? 'ok  
   // 1) texto: alinhamento e caixa alta/itálico com ícones, clicando
   await p.click('#adds .add[title="Adicionar título"]'); await p.waitForTimeout(300); await style();
   const txt = await p.evaluate(() => ({ al:document.querySelectorAll('#props .segs.ico[aria-label="Alinhamento"] button svg').length,
-    letras:document.querySelectorAll('#props .segs.ico[aria-label="Letras"] button svg').length,
+    letras:document.querySelectorAll('#props .segs.ico[aria-label="Letras"] button svg').length, nLetras:TEXT_OPTS.length, ul:!!document.querySelector('#props .segs.ico[aria-label="Letras"] button[aria-label="Sublinhado"] svg'),
     checks:[...document.querySelectorAll('#props .check')].map(c => c.textContent.trim()).filter(t => /Caixa alta|Itálico/.test(t)),
     rich:document.querySelectorAll('#props .richbar .icon-btn svg').length }));
-  confere('texto: 3 ícones de alinhamento, 2 de letras, B/I do trecho em ícone e nenhuma caixa "Caixa alta/Itálico"', txt.al === 3 && txt.letras === 2 && txt.rich === 2 && !txt.checks.length, txt);
+  confere('texto: 3 ícones de alinhamento, letras em ícone (com Sublinhado), B/I do trecho em ícone e nenhuma caixa "Caixa alta/Itálico"', txt.al === 3 && txt.letras === txt.nLetras && txt.ul && txt.rich === 2 && !txt.checks.length, txt);
   await p.click('#props .segs.ico[aria-label="Alinhamento"] button[aria-label="Alinhar à direita"]');
   await p.click('#props .segs.ico[aria-label="Letras"] button[aria-label="Caixa alta"]');
   const st = await p.evaluate(() => ({ align:selL().align, upper:selL().upper, on:document.querySelector('#props .segs.ico[aria-label="Letras"] button[aria-label="Caixa alta"]').getAttribute('aria-pressed'),
@@ -79,9 +79,9 @@ const confere = (nome, ok, info) => { if (!ok) falhas++; console.log((ok ? 'ok  
 
   // 6) janela Componentes (Título e Forma) usa os mesmos controles
   await p.evaluate(() => openComps('title')); await p.waitForTimeout(300);
-  const cw = await p.evaluate(() => ({ al:document.querySelectorAll('.comp-body .segs.ico[aria-label="Alinhamento"] button svg').length, letras:document.querySelectorAll('.comp-body .segs.ico[aria-label="Letras"] button').length,
+  const cw = await p.evaluate(() => ({ al:document.querySelectorAll('.comp-body .segs.ico[aria-label="Alinhamento"] button svg').length, letras:document.querySelectorAll('.comp-body .segs.ico[aria-label="Letras"] button').length, nLetras:CASE_OPTS.length,
     play:!!document.querySelector('.comp-play svg') }));
-  confere('componentes: alinhamento, letras e "Ver" com ícone', cw.al === 3 && cw.letras === 2 && cw.play, cw);
+  confere('componentes: alinhamento, letras e "Ver" com ícone', cw.al === 3 && cw.letras === cw.nLetras && cw.play, cw);
   await p.click('.comp-body .segs.ico[aria-label="Letras"] button[aria-label="Itálico"]');
   confere('componentes: o ícone grava no padrão e fica marcado', await p.evaluate(() => (S.brand.comps.title || {}).italic === true
     && document.querySelector('.comp-body .segs.ico[aria-label="Letras"] button[aria-label="Itálico"]').getAttribute('aria-pressed') === 'true'));

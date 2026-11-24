@@ -516,6 +516,12 @@ async function textVecs(L) {
   }
   const parts = [];
   for (const [color, d] of byCol) { const vec = vecParse(d); if (vec) parts.push({ color, d, vec }); }
+  // sublinhado: os pedaços seguidos viram uma faixa por linha; caminho à parte das letras (somar no mesmo d podia furar onde encosta na letra)
+  const runs = [];
+  for (const u of lay.tp ? [] : ulRects(L, lay)) { const p = runs[runs.length - 1]; if (p && p.c === u.c && Math.abs(p.y - u.y) < .01 && Math.abs(p.h - u.h) < .01 && Math.abs(p.x + p.w - u.x) < .5) p.w = u.x + u.w - p.x; else runs.push({ ...u }); }
+  const ud = new Map();
+  for (const u of runs) ud.set(u.c, (ud.get(u.c) || '') + rrD({ x:T0.ax + u.x * fk, y:T0.ay + u.y * fk, w:u.w * fk, h:u.h * fk }));
+  for (const [color, d] of ud) { const vec = vecParse(d); if (vec) parts.push({ color, d, vec }); }
   return { parts, missing, fk };
 }
 // fundo atrás do texto (textBg) em repouso, em px do quadro (uma caixa por linha ou uma só); a mesma conta do desenho (paintBg em drawText)
@@ -739,7 +745,7 @@ async function svgText(L, X) {
     return svgWrap(L, bgs + lay.lines.flatMap(line => line.glyphs.filter(g => !g.space).map(g => { const q = g.tp, x = ax + (q.x - Math.cos(q.a) * g.w / 2) * fk, y = ay + (q.y - Math.sin(q.a) * g.w / 2) * fk;
       return `<text transform="translate(${sn(x)} ${sn(y)}) rotate(${sn(q.a * 180 / Math.PI)})" ${fa}>${svgEsc(g.ch)}</text>`; })).join(''), X);
   }
-  const out = bgs + lay.lines.map(line => `<text x="${sn(ax + line.x0 * fk)}" y="${sn(ay + line.baseline * fk)}" font-family="${svgEsc(L.font)}" font-size="${sn(lay.size * fk)}" font-weight="${L.weight}"${L.italic ? ' font-style="italic"' : ''} letter-spacing="${sn((L.ls || 0) * lay.size * fk)}" ${svgFill(L.color)} xml:space="preserve">${svgEsc(line.text)}</text>`).join('');
+  const out = bgs + lay.lines.map(line => `<text x="${sn(ax + line.x0 * fk)}" y="${sn(ay + line.baseline * fk)}" font-family="${svgEsc(L.font)}" font-size="${sn(lay.size * fk)}" font-weight="${L.weight}"${L.italic ? ' font-style="italic"' : ''}${L.underline ? ' text-decoration="underline"' : ''} letter-spacing="${sn((L.ls || 0) * lay.size * fk)}" ${svgFill(L.color)} xml:space="preserve">${svgEsc(line.text)}</text>`).join('');
   return svgWrap(L, out, X);
 }
 async function svgCta(L, X) {
@@ -753,6 +759,7 @@ async function svgCta(L, X) {
   try {
     const r2 = await glyphsD(L.font, L.size, items, { ax:cx, ay:cy, k });
     out += [...r2.map].map(([c, d]) => `<path d="${d}" ${svgFill(c)}/>`).join('');
+    if (L.underline) out += `<rect x="${sn(cx - m.w / 2 * k)}" y="${sn(cy + (.35 + UL_Y) * L.size * k)}" width="${sn(m.w * k)}" height="${sn(UL_H * L.size * k)}" ${svgFill(L.color)}/>`; // sublinhado do botão
   } catch (e) {
     console.warn(e);
     out += `<text x="${sn(cx)}" y="${sn(cy + L.size * .35 * k)}" text-anchor="middle" font-family="${svgEsc(L.font)}" font-size="${sn(L.size * k)}" font-weight="${L.weight}"${L.italic ? ' font-style="italic"' : ''}${L.ls ? ` letter-spacing="${sn(ctaLs(L) * k)}"` : ''} ${svgFill(L.color)}>${svgEsc(m.tx)}</text>`;
