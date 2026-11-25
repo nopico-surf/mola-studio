@@ -42,7 +42,7 @@ async function abre(b) {
   const p = await ctx.newPage();
   p.on('pageerror', e => {
     const pilha = String(e.stack || '').split('\n').slice(1, 4).join(' | ');
-    if (/googletagmanager|gtm\.js/.test(pilha)) { console.log('aviso (Google Tag Manager, não é do Mola) ' + e.message); return; }
+    if (/googletagmanager|gtm\.js|clarity\.ms/.test(pilha)) { console.log('aviso (script de análise de fora, não é do Mola) ' + e.message); return; }
     falhas++; console.log('ERRO (página) ' + e.message + '  @ ' + pilha);
   });
   p.on('console', m => { if (m.type() === 'error' && !/favicon|net::|Failed to load resource|fonts\.g/i.test(m.text())) console.log('console.error ' + m.text().slice(0, 200)); });
@@ -453,7 +453,8 @@ const CENARIOS = {
   // 20. Cartão com foto + texto (frame com layout)
   async fotoNoFrame(p) {
     await ev(p, () => { const L = addLayer(mkComp('image')); L.name = 'Foto'; L.size = .4; L.mh = .25; changed({ layers:true }); });
-    await add(p, 'Adicionar título'); await nomeia(p, 'Leg'); await todos0(p); await esc(p);
+    await add(p, 'Adicionar título'); await nomeia(p, 'Leg'); await todos0(p);
+    await ev(p, () => { __T.L('Foto').y = .35; __T.L('Leg').y = .62; __T.L('Foto').x = __T.L('Leg').x = .5; changed({ layers:true }); }); await esc(p); await p.waitForTimeout(250);
     await clique(p, await cen(p, 'Foto')); await clique(p, await cen(p, 'Leg'), ['Shift']);
     await p.keyboard.press('Shift+A'); await p.waitForTimeout(400); await esc(p);
     await clique(p, await cen(p, 'Foto'));
@@ -498,15 +499,59 @@ const CENARIOS = {
     await gira(p, 90);
     await clique(p, await cen(p, 'H2'), ['Control']);
     confere('Ctrl + clique: só H2', (await st(p)).pk, ['H2']);
-    const c0 = await cen(p, 'H2');
+    const c0 = await cen(p, 'H2'), o0 = await cen(p, 'H1');
     await p.keyboard.press('Shift+ArrowRight'); await p.waitForTimeout(250);
-    const c1 = await cen(p, 'H2');
+    const c1 = await cen(p, 'H2'), o1 = await cen(p, 'H1');
     const d = [Math.round(c1.x - c0.x), Math.round(c1.y - c0.y)];
-    if (!(d[0] > 0 && Math.abs(d[1]) <= 1)) nota(`seta → num item de grupo girado 90° anda na direção do grupo, não da tela (andou ${d})`);
+    confere('seta em H2 (grupo girado) não mexe em H1 na tela', perto(o1, o0, 1.5), true) || console.log('       H1 andou', Math.round(o1.x - o0.x), Math.round(o1.y - o0.y), ' H2 andou', d);
+    confere('seta → em item de grupo girado anda para a direita na tela', d, v => v[0] > 2 && Math.abs(v[1]) <= 1);
     // arrastar: segue o mouse na tela
     await p.mouse.move(c1.x, c1.y); await p.mouse.down(); await p.mouse.move(c1.x + 30, c1.y, { steps:5 }); await p.mouse.move(c1.x + 60, c1.y + 20, { steps:5 }); await p.mouse.up(); await p.waitForTimeout(300);
-    const c2 = await cen(p, 'H2');
+    const c2 = await cen(p, 'H2'), o2 = await cen(p, 'H1');
     confere('arrastar item de grupo girado segue o mouse (60, 20)', [Math.round(c2.x - c1.x), Math.round(c2.y - c1.y)], v => Math.abs(v[0] - 60) < 6 && Math.abs(v[1] - 20) < 6);
+    confere('arrastar H2 (grupo girado) não leva H1 junto', [Math.round(o2.x - o1.x), Math.round(o2.y - o1.y)], v => Math.abs(v[0]) <= 2 && Math.abs(v[1]) <= 2);
+    await p.keyboard.press('Control+z'); await p.waitForTimeout(300);
+    const c3 = await cen(p, 'H2'), o3 = await cen(p, 'H1');
+    confere('Ctrl+Z desfaz o arrasto: os dois voltam', [perto(c3, c1, 1.5), perto(o3, o1, 1.5)], [true, true]);
+    // o mesmo arrasto num formato que não é o principal
+    const alvo = await ev(p, () => S.format === '1x1' ? '9:16' : '1:1');
+    await p.click(`#fmt button:text-is("${alvo}")`); await p.waitForTimeout(600);
+    await clique(p, await cen(p, 'H2'), ['Control']);
+    const f1 = await cen(p, 'H2'), g1 = await cen(p, 'H1');
+    await p.mouse.move(f1.x, f1.y); await p.mouse.down(); await p.mouse.move(f1.x + 25, f1.y + 10, { steps:5 }); await p.mouse.move(f1.x + 50, f1.y + 20, { steps:5 }); await p.mouse.up(); await p.waitForTimeout(300);
+    const f2 = await cen(p, 'H2'), g2 = await cen(p, 'H1');
+    confere(`no ${alvo}: H2 segue o mouse e H1 fica`, [Math.round(f2.x - f1.x), Math.round(f2.y - f1.y), perto(g2, g1, 2)], v => Math.abs(v[0] - 50) < 6 && Math.abs(v[1] - 20) < 6 && v[2]);
+  },
+
+  // 24. Caixa girada: o texto cresce (mais uma linha) e a Caixa não escorrega
+  async textoCresceNaCaixaGirada(p) {
+    await add(p, 'Adicionar caixa'); await nomeia(p, 'Tc'); await todos0(p); await esc(p);
+    await clique(p, await cen(p, 'Tc')); await gira(p, 30);
+    const nw0 = await ev(p, () => __T.scr(handlesOf(selL()).find(o => o.k === 'nw')));
+    // escreve pelo palco: clique duplo (Caixa de um texto só = edita), vai ao fim e acrescenta uma linha
+    await duplo(p, await cen(p, 'Tc'));
+    if (!(await ev(p, () => !!SED.el))) { confere('abre a edição na Caixa girada', false, true); return; }
+    await p.keyboard.press('End'); await p.keyboard.press('Control+End'); await p.keyboard.press('Enter'); await p.keyboard.type('mais uma linha', { delay:10 });
+    await p.waitForTimeout(250);
+    { const sb = await ev(p, () => { const r = $('#stageScroll').getBoundingClientRect(); return { x:r.left + 8, y:r.top + 8 }; }); await p.mouse.click(sb.x, sb.y); await p.waitForTimeout(350); } // clicar fora confirma (Esc desfaz)
+    confere('o texto ganhou a linha nova', await ev(p, () => __T.L('Tc').text.includes('mais uma linha')), true);
+    await clique(p, await cen(p, 'Tc'));
+    const nw1 = await ev(p, () => __T.scr(handlesOf(selL()).find(o => o.k === 'nw')));
+    confere('Caixa girada que cresce para baixo: a quina de cima fica parada', perto(nw1, nw0, 3), true) || console.log('       antes', nw0, 'depois', nw1);
+    // digitar e cancelar com Esc: tudo volta como era, inclusive o lugar
+    const t0 = await ev(p, () => __T.L('Tc').text);
+    await duplo(p, await cen(p, 'Tc'));
+    if (await ev(p, () => !!SED.el)) {
+      await p.keyboard.press('Control+End'); await p.keyboard.press('Enter'); await p.keyboard.type('outra linha que some', { delay:10 }); await p.waitForTimeout(250);
+      await p.keyboard.press('Escape'); await p.waitForTimeout(350);
+      confere('Esc devolve o texto de antes', await ev(p, () => __T.L('Tc').text), t0);
+      await esc(p); await clique(p, await cen(p, 'Tc'));
+      const nw2 = await ev(p, () => __T.scr(handlesOf(selL()).find(o => o.k === 'nw')));
+      confere('Esc na edição da Caixa girada: ela volta ao mesmo lugar', perto(nw2, nw1, 3), true) || console.log('       antes', nw1, 'depois', nw2);
+      const semGiro = await ev(p, () => { const g = S.groups[__T.gidOf('Tc')]; return g.rot; });
+      confere('o giro continua o mesmo', Math.round(semGiro), 30);
+    }
+    await shot(p, 'texto-cresce-na-caixa-girada');
   },
 
   // 23. Quina de um frame com layout girado: a quina oposta fica parada
@@ -517,6 +562,24 @@ const CENARIOS = {
     await p.mouse.move(hs.se.x, hs.se.y); await p.mouse.down(); await p.mouse.move(hs.se.x + 20, hs.se.y + 30, { steps:8 }); await p.mouse.up(); await p.waitForTimeout(300);
     const nw2 = await ev(p, () => { const h = handlesOf(selL()).find(o => o.k === 'nw'); return h && __T.scr(h); });
     confere('frame com layout girado escalado pela quina: a quina oposta fica parada', perto(nw2, hs.nw, 3), true) || console.log('       antes', hs.nw, 'depois', nw2);
+  },
+
+  // 25. Caixa girada: primeira edição, digita e cancela com Esc
+  async escNaCaixaGirada(p) {
+    await add(p, 'Adicionar caixa'); await nomeia(p, 'Ec'); await todos0(p); await esc(p);
+    await clique(p, await cen(p, 'Ec')); await gira(p, 30);
+    const nw0 = await ev(p, () => __T.scr(handlesOf(selL()).find(o => o.k === 'nw'))), t0 = await ev(p, () => __T.L('Ec').text);
+    const pos0 = await ev(p, () => { const L = __T.L('Ec'); return [L.x, L.y, JSON.stringify(L.fsz || null), JSON.stringify(S.groups[L.grp].fsz || null)]; });
+    await duplo(p, await cen(p, 'Ec'));
+    if (!(await ev(p, () => !!SED.el))) { confere('abre a edição', false, true); return; }
+    await p.keyboard.press('End'); await p.keyboard.press('Control+End'); await p.keyboard.press('Enter'); await p.keyboard.type('mais uma linha', { delay:10 });
+    await p.waitForTimeout(250); await p.keyboard.press('Escape'); await p.waitForTimeout(350);
+    confere('Esc devolve o texto', await ev(p, () => __T.L('Ec').text), t0);
+    const pos1 = await ev(p, () => { const L = __T.L('Ec'); return [L.x, L.y, JSON.stringify(L.fsz || null), JSON.stringify(S.groups[L.grp].fsz || null)]; });
+    confere('Esc devolve posição e âncora do texto', pos1, pos0);
+    await esc(p); await clique(p, await cen(p, 'Ec'));
+    const nw1 = await ev(p, () => __T.scr(handlesOf(selL()).find(o => o.k === 'nw')));
+    confere('depois do Esc a Caixa girada está no mesmo lugar', perto(nw1, nw0, 3), true) || console.log('       antes', nw0, 'depois', nw1, JSON.stringify(await st(p)));
   },
 
   // 13. Seleção por área dentro e fora de frame

@@ -3458,9 +3458,14 @@ function blockGeom(L) {
 }
 // texto do botão: caixa alta e espaço entre letras (em, como o do texto; o canvas mede e desenha com letterSpacing, que mantém o kerning)
 // caixa: alta | baixa | cap = só a primeira letra do texto | title = a inicial de cada palavra (o resto fica baixo)
-const caseTxt = (L, s) => L.upper ? s.toUpperCase() : L.lower ? s.toLowerCase()
+// aspas retas viram tipográficas só no desenho (o texto guardado não muda; mesmo tamanho, então índices de letra e trechos continuam): "x" → “x”, 'x' → ‘x’, d'água → d’água
+const curlyQ = s => s.includes('"') || s.includes("'")
+  ? s.replace(/"/g, (_, i) => i === 0 || /[\s([{—–‘-]/.test(s[i - 1]) ? '“' : '”')
+      .replace(/'/g, (_, i) => i === 0 || /[\s([{—–“"-]/.test(s[i - 1]) ? '‘' : '’')
+  : s;
+const caseTxt = (L, s) => curlyQ(L.upper ? s.toUpperCase() : L.lower ? s.toLowerCase()
   : L.title ? s.toLowerCase().replace(/(^|[^\p{L}\p{N}'’])(\p{L})/gu, (_, a, b) => a + b.toUpperCase())
-  : L.cap ? s.toLowerCase().replace(/\p{L}/u, c => c.toUpperCase()) : s;
+  : L.cap ? s.toLowerCase().replace(/\p{L}/u, c => c.toUpperCase()) : s);
 const ctaText = L => caseTxt(L, L.text || '');
 const ctaLs = L => (L.ls || 0) * L.size;
 // largura sem o espaço que o letterSpacing deixa depois da última letra (por quadro: guardada pela fonte + texto + espaço);
@@ -6015,6 +6020,40 @@ const gPivot = (gid, cached) => {
   const c = RT.gBox.get(gid), b = c && c.S === S ? c.b : cached ? null : groupBox(gid, gleaves(gid).filter(l => l.visible && !NOBOX(l)));
   return b ? boxC(b) : null;
 };
+/* Grupo girado: o pivô é o centro do conjunto, então mexer só em parte dele (arrastar ou setas num item de dentro, puxar o lado do
+   frame) andava com o pivô e o grupo inteiro escorregava na tela (reclamação do usuário: as outras peças andavam junto, o item não
+   seguia o mouse). `pivotHold` guarda, no começo do gesto, o pivô e a posição de todos do grupo girado mais de dentro que não anda
+   inteiro (ou o `gid` pedido); `pivotFix`, depois de cada passo, volta quem não mexeu ao lugar e desloca todos por (R − I)(c1 − c0):
+   as contas do gesto são feitas no espaço do pivô antigo (`D.cm` congelado), e assim o que se vê é exatamente o que elas pediram */
+const pvMem = g => gleaves(g).filter(l => l.visible && !NOBOX(l));
+function pivotHold(ls, gid) {
+  const ids = new Set(ls.map(l => l.id)), out = [], seen = new Set();
+  for (const L of ls) for (let g = L.grp, n = 0; g && n < 20; g = gpar(g), n++) {
+    if (gid && g !== gid) continue;
+    if (!gRad(g) || !gStyleOn(g)) continue;
+    if (!gid && pvMem(g).every(l => ids.has(l.id))) continue; // anda inteiro: o pivô anda junto e está certo
+    if (!seen.has(g)) {
+      seen.add(g); RT.gRev++;
+      const b = groupBox(g, pvMem(g));
+      if (b) out.push({ g, a:gRad(g), c0:boxC(b), base:new Map(gleaves(g).map(l => [l.id, { ...placeRaw(l) }])) });
+    }
+    break; // só o girado mais de dentro de cada item
+  }
+  return out;
+}
+function pivotFix(hold, moved) {
+  if (!hold || !hold.length) return;
+  const mv = new Set((moved || []).map(l => l.id));
+  for (const h of hold) {
+    const lv = gleaves(h.g);
+    for (const L of lv) if (!mv.has(L.id)) { const p = h.base.get(L.id), q = placeRaw(L); if (p && (q.x !== p.x || q.y !== p.y)) setPos(L, p.x, p.y); } // só quem saiu do lugar (fora do principal, setPos prende a posição)
+    RT.gRev++; const b = groupBox(h.g, pvMem(h.g)); if (!b) continue;
+    const c1 = boxC(b), d = { x:c1.x - h.c0.x, y:c1.y - h.c0.y }, r = rotPt(d, { x:0, y:0 }, h.a), tx = r.x - d.x, ty = r.y - d.y;
+    if (Math.abs(tx) + Math.abs(ty) < 1e-3) continue;
+    for (const L of lv) { const p = placeRaw(L); setPos(L, +(p.x + tx / W()).toFixed(6), +(p.y + ty / H()).toFixed(6)); }
+    RT.gRev++;
+  }
+}
 function camOf(L, skip) {
   const cam = layerStill(L) ? camAt(-1) : camAt(T), g = gRots(L, skip); // slide-imagem: desenhado sem câmera if (!L || (cam.s === 1 && !cam.dx && !cam.dy && !cam.r && !g.length)) return null;
   const els = S.layers.filter(l => l.visible && !NOBOX(l)), k = cam.par ? lerp(1, layerDepth(L, els.indexOf(L), els.length), cam.par) : 1;
@@ -6370,7 +6409,8 @@ function startResize(ev, pt, hd) {
   if (!grp) { const cm1 = colMid([L]), fm = fixedMid(L); RT.drag.mid = { x:cm1.x || fm.x, y:cm1.y || fm.y }; } // na coluna do layout do quadro que recentraliza (ou no frame de tamanho fixo que centraliza), o lado puxado andaria só metade
   if (!grp && (how === 'tw' || how === 'wid' || how === 'hei') && !ra && inFlow(L) && flowOf(L.grp)) { const fz = flowFz(L.grp); Object.assign(RT.drag, { flow:L.grp, fz, fz0:{ ...fz } }); } // item da fila: a âncora fica congelada (flowHug)
   // frame do grupo com layout: os lados mudam o tamanho dele; os cantos escalam tudo junto (como antes)
-  if (b.gid && (hx === 0 || hy === 0)) Object.assign(RT.drag, { how:'frame', gid:b.gid, B0:{ x0:b.x, y0:b.y, x1:b.x + b.w, y1:b.y + b.h } }); // alça do frame: muda o tamanho dele
+  if (b.gid && (hx === 0 || hy === 0)) Object.assign(RT.drag, { how:'frame', gid:b.gid, B0:{ x0:b.x, y0:b.y, x1:b.x + b.w, y1:b.y + b.h }, // alça do frame: muda o tamanho dele
+    pv:pivotHold(gleaves(b.gid), b.gid) }); // frame girado: o centro do giro andaria com o tamanho e o lado oposto escorregava na tela
   cv.setPointerCapture(ev.pointerId);
 }
 // deslocamento do centro calculado no espaço da forma (sem giro) -> na tela
@@ -6436,7 +6476,7 @@ function resizeTo(D, pt, ev) {
     }
   }
   const ex = pt.x - D.off.x - hx * p, ey = pt.y - D.off.y - hy * p; // onde a borda puxada está agora
-  if (D.how === 'frame') { flowResize(D, ex, ey, alt); return; }
+  if (D.how === 'frame') { flowResize(D, ex, ey, alt); pivotFix(D.pv, gleaves(D.gid)); return; }
   if (D.how === 'tw') { // caixa de largura fixa: o lado oposto fica parado (Alt: os dois lados)
     // não passa da margem: o limite é a distância do lado parado (ou do centro, com Alt) até a margem; só a largura total deixava a borda
     // puxada passar dela e o texto, empurrado para dentro, crescia para o outro lado
@@ -6667,7 +6707,9 @@ cv.addEventListener('pointermove', ev => {
     const its = [{ o:L, x0:D.x0, y0:D.y0 }, ...(D.others || [])];
     const ddx = clamp(x - D.x0, Math.max(...its.map(q => POS_LO - q.x0)), Math.min(...its.map(q => posHi() - q.x0)));
     const ddy = clamp(y - D.y0, Math.max(...its.map(q => POS_LO - q.y0)), Math.min(...its.map(q => POS_HI - q.y0)));
+    if (D.pv === undefined) D.pv = pivotHold(its.map(q => q.o)); // item de grupo girado: o pivô não anda com ele
     for (const q of its) setPos(q.o, +(q.x0 + ddx).toFixed(4), +(q.y0 + ddy).toFixed(4));
+    pivotFix(D.pv, its.map(q => q.o));
     // quem está fora da tela anda junto: a caixa tracejada acompanha
     for (const q of its) { const g = RT.ghost && RT.ghost.get(q.o.id); if (g && g.b) { g.b.x += (ddx - (D.gx || 0)) * W(); g.b.y += (ddy - (D.gy || 0)) * H(); } }
     D.gx = ddx; D.gy = ddy;
@@ -11104,7 +11146,7 @@ function clickOrRename(L, where, ev) {
   if (ev && (ev.ctrlKey || ev.metaKey) && L.type !== 'bg') { lastClick = { id:null, t:0 }; select(L.id, true); return; }
   const now = performance.now(), dbl = lastClick.id === L.id && now - lastClick.t < 700 && L.type !== 'bg';
   lastClick = dbl ? { id:null, t:0 } : { id:L.id, t:now };
-  if (dbl) renameLayer(L, where); else select(L.id, where === 'tl' || groupOf(L).length === 1);  // na timeline o item do grupo se escolhe sozinho; o grupo tem a própria linha
+  if (dbl) renameLayer(L, where); else select(L.id, true); // item do grupo se escolhe sozinho, na lista e na timeline (o grupo tem a própria linha; antes a lista escolhia o frame inteiro, pedido do usuário: igual à timeline)
 }
 // arrastar para reordenar (lista de camadas e nomes da timeline). Topo da tela = mais à frente.
 let dragLayerId = null, dragGroupId = null;
@@ -14082,10 +14124,13 @@ function nudge(dx, dy) {
   if (dy && !dx && frameStep(ls, dy)) return; // bloco na coluna do quadro: troca de lugar
   if (!nudgeT) pushUndo();
   clearTimeout(nudgeT); nudgeT = setTimeout(() => { nudgeT = null; }, 700);
+  const pv = pivotHold(ls); // item de grupo girado: o resto do grupo fica parado na tela
+  if (pv.length) { const cm = camOf(L), a = cm ? cm.ga || 0 : 0; if (a) ({ x:dx, y:dy } = rotPt({ x:dx, y:dy }, { x:0, y:0 }, -a)); } // e a seta anda na direção da tela, não na do grupo
   const p = posOf(L); let x = p.x + dx / W(), y = p.y + dy / H();
   if (!freeType(L) && L._bounds) { const f = fitInMargin(x * W(), y * H(), L._bounds.w, L._bounds.h); x = f.ax / W(); y = f.ay / H(); }
   const ddx = x - p.x, ddy = y - p.y;
   for (const o of ls) { const q = posOf(o); setPos(o, +clampPos(q.x + ddx).toFixed(5), +clampPos(q.y + ddy).toFixed(5)); }
+  pivotFix(pv, ls);
   syncPosFields(L); changed();
 }
 // I / O: a seleção entra / sai no quadro da agulha. Se a agulha passou do outro lado, o elemento inteiro vai para lá

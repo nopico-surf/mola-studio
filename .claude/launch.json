@@ -275,6 +275,28 @@
         "3197"
       ],
       "port": 3197
+    },
+    {
+      "name": "mola-ul",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3211"
+      ],
+      "port": 3211
+    },
+    {
+      "name": "mola-tex",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3223"
+      ],
+      "port": 3223
     }
   ]
 }
