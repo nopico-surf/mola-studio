@@ -2324,7 +2324,7 @@ const G_KEYS = { in:BLOCK_IN.image, out:BLOCK_OUT.image, idle:IDLE_BY.image };
 // giro do grupo (S.groups[gid].rot, graus, em torno do centro da caixa do conjunto): o conjunto já desenhado gira junto, como a forma (L.rot)
 const gRad = gid => { const g = S.groups && S.groups[gid]; return g && g.rot ? g.rot * Math.PI / 180 : 0; };
 // (frame só pintado, sem nada disso, não passa pela tela à parte: o fundo dele vai direto no quadro, antes do 1º item, em drawItems)
-const gStyleOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.shadow && g.shadow !== 'none') || (g.opacity ?? 1) < 1 || !!g.rot || !!blendOf(g) || blurOn(g)) && gMany(gid); };
+const gStyleOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.shadow && g.shadow !== 'none') || (g.opacity ?? 1) < 1 || !!g.rot || !!blendOf(g) || blurOn(g) || g.grain > 0) && gMany(gid); };
 // frame (grupo com layout automático) pintado: preenchimento e/ou contorno na caixa dele, com cantos (paintFrame), como um frame do Figma
 const gPaintOn = gid => { const g = S.groups && S.groups[gid]; return !!g && !!flowOf(gid) && ((!!g.fill && !noCol(g.fill)) || (!!g.stroke && !noCol(g.strokeColor || '#ffffff'))); };
 const gAnimOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.in || 'cut') !== 'cut' || (g.out || 'cut') !== 'cut' || (g.idle || 'none') !== 'none') && gMany(gid); };
@@ -4181,7 +4181,7 @@ function bgHidden(els, t) {
 function unitSig(u, t) {
   if (!u.gid) return layerSig(u.L, t);
   const gp = gpseudo(u.gid), ph = gp && phase(gp, t), g = gmeta(u.gid) || {};
-  const moves = !ph || ph.mode !== 'hold' || (!stillNow(u.ls[0]) && !!g.idle && g.idle !== 'none');
+  const moves = !ph || ph.mode !== 'hold' || (!stillNow(u.ls[0]) && ((!!g.idle && g.idle !== 'none') || (g.grain > 0 && texAnim(g))));
   return 'G' + u.gid + (ph ? ph.mode : 'off') + (moves ? '@' + t : '') + u.ls.map(l => layerSig(l, t)).join('');
 }
 function frameKey(tc, rs) {
@@ -5149,7 +5149,8 @@ function drawGroup(tc, gid, gp, els, t, R, cam, one, G, depth = 0) {
   const pu = gpad / R.rs, bx = voX(buf) / R.rs, by = voY(buf) / R.rs; // a margem e o começo do recorte em unidades do quadro
   // pela escala (não pelo tamanho do quadro): vale também em telas que mostram só parte do quadro (miniatura do carrossel)
   const blit = (c, x, y) => c.drawImage(buf, 0, 0, buf.width, buf.height, x - pu + bx, y - pu + by, buf.width / R.rs, buf.height / R.rs);
-  const out = gsh || gbm || gop < 1 || blurOn(gm) ? frameBuf(tc.canvas, 1, gpad) : null, dst = out ? out.getContext('2d') : tc;
+  const gtx = gm.grain > 0 && !RT.bbMask; // textura do grupo: o conjunto pronto à parte e a textura por cima só dos pixels dele
+  const out = gsh || gbm || gop < 1 || blurOn(gm) || gtx ? frameBuf(tc.canvas, 1, gpad) : null, dst = out ? out.getContext('2d') : tc;
   if (out) {
     dst.setTransform(1, 0, 0, 1, 0, 0); dst.globalAlpha = 1; dst.filter = 'none'; dst.globalCompositeOperation = 'source-over';
     dst.clearRect(0, 0, out.width, out.height); dst.setTransform(R.rs, 0, 0, R.rs, gpad - voX(out), gpad - voY(out)); dst.globalAlpha = gop;
@@ -5158,6 +5159,7 @@ function drawGroup(tc, gid, gp, els, t, R, cam, one, G, depth = 0) {
     tc.filter = 'none'; tc.globalAlpha = 1; tc.globalCompositeOperation = 'source-over';
     if (!out) return;
     dst.setTransform(1, 0, 0, 1, 0, 0); dst.globalAlpha = 1;
+    if (gtx) texPaint(dst, gp, t, new DOMMatrix([R.rs, 0, 0, R.rs, gpad - voX(out), gpad - voY(out)]), B ? B.x : 0, B ? B.y : 0); // presa à caixa do conjunto, antes da sombra
     composeOnto(tc, out, gL, gsh, gbm, R.rs);
   };
   if (!B) { dst.save(); blit(dst, 0, 0); dst.restore(); done(); return; }
@@ -13413,7 +13415,7 @@ function effectRows(L) {
       det:() => [rangeF(L, k, k === 'lblur' ? 'Desfoque' : 'Desfocar atrás', 0, 800, 1, v => Math.round(v || 0) + ' px', { get:() => L[k] || L[k + 'Off'] || 0, put:v => { for (const o of peersAny(L)) { o[k] = v; delete o[k + 'Off']; } } }),
         segPick(L, k, BLURS[k].filter(([v]) => v).map(([v, t]) => [v, t, `${t}: ${v} px`]), null, null, 0, peersAny),
         k === 'bblur' ? h('p', { class:'hint', text:'Desfoca o que está atrás, no formato do elemento. Com preenchimento meio transparente, vira vidro.' }) : null].filter(Boolean) })),
-    ...(TEX_TYPES.has(L.type) ? [{ k:'grain', t:'Textura', has:L.grain > 0 || L.grainOff > 0, on:L.grain > 0,
+    ...(TEX_TYPES.has(L.type) || L.__g != null ? [{ k:'grain', t:'Textura', has:L.grain > 0 || L.grainOff > 0, on:L.grain > 0,
       val:() => `${TEX_KINDS[texKind(L)][0]} · ${Math.round((L.grain || L.grainOff || 0) * 100)}%`,
       add:o => { delete o.grainOff; o.grain = TEX_ON; if (!TEX_KINDS[o.grainK]) o.grainK = 'film'; },
       hide:o => { if (o.grain > 0) { o.grainOff = o.grain; o.grain = 0; } else if (o.grainOff > 0) { o.grain = o.grainOff; delete o.grainOff; } },
