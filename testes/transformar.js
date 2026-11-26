@@ -72,6 +72,22 @@ const near = (a, b, e = .02) => Math.abs(a - b) <= e;
     await p.evaluate(() => { pause(); T = 2; needs = true; }); await p.waitForTimeout(250);
     await p.screenshot({ path:path.join(outDir, `transformar-${k}.png`), clip:await p.evaluate(() => { const r = $('#cv').getBoundingClientRect(); return { x:r.left, y:r.top, width:r.width, height:r.height }; }) });
   }
+  // Líquido sem piscada (reclamação do usuário): o brilho na janela, quadro a quadro a 60 fps, não cai de repente. Antes a gota
+  // sumia nas pontas (o Chrome aplica a opacidade antes do filtro, que corta o alfa abaixo de ~44%) e o elemento apagava 30%
+  const goo = await p.evaluate(id => {
+    const B = S.layers.find(l => l.id === id), k0 = B.xin.k; B.xin.k = 'goo'; RT.rev++;
+    const c = document.createElement('canvas'); c.width = Math.round(W() * .25); c.height = Math.round(H() * .25);
+    const x = c.getContext('2d', { willReadFrequently:true }), v = [];
+    for (let t = 1.6; t <= 2.4001; t += 1 / 60) {
+      x.clearRect(0, 0, c.width, c.height); renderFrame(x, t, .25);
+      const d = x.getImageData(0, 0, c.width, c.height).data; let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] + d[i + 1] + d[i + 2]; v.push(s);
+    }
+    B.xin.k = k0; RT.rev++;
+    let worst = 1; for (let i = 1; i < v.length; i++) worst = Math.min(worst, v[i] / v[i - 1]);
+    return +worst.toFixed(3);
+  }, ids.b);
+  ok(goo >= .87, 'Líquido: o brilho não cai de um quadro para o outro (sem piscada)', goo);
+
   // Ctrl+Z volta para a variação anterior; desfazer até antes de ligar devolve os tempos
   await p.evaluate(() => document.activeElement && document.activeElement.blur());
   await p.mouse.click(5, 940);

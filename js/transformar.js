@@ -141,6 +141,19 @@ function mphGooOk() {
   return MPH_GOO;
 }
 
+// a gota do Líquido desenhada em c com opacidade al (g = quanto do meio é gota). O desfoque cresce junto com g: enquanto a gota ainda divide a tela com o
+// desenho nítido ela é quase igual a ele (borrada demais, a letra fina sumia na gota e o elemento apagava por 2 ou 3 quadros).
+// Desfoque moderado e cada um desenhado duas vezes (reforça o alfa): letra fina não some na gota
+function mphGoo(c, a, b, A, B, M, w, q, g, G, al = g) {
+  const r = (2 + .045 * Math.min(Math.abs(M.w), Math.abs(M.h))) * Math.pow(q, .6) * g * g, T = xfTmp(G, 'xc'), t = T.getContext('2d');
+  for (let j = 0; j < 2; j++) { mphPiece(t, a, A, M, 1 - w, r); mphPiece(t, b, B, M, w, r); }
+  // o Chrome aplica o globalAlpha antes do filtro, e o filtro corta o alfa abaixo de ~44%: com g pequeno a gota sumia inteira.
+  // Gota meio transparente = a gota pronta (filtro com alfa 1) numa tela à parte, e só depois a opacidade
+  let src = T;
+  if (al < .999) { const E = xfTmp(G, 'xe'), e = E.getContext('2d'); e.filter = 'url(#mola-goo)'; e.drawImage(T, 0, 0); e.filter = 'none'; src = E; }
+  c.save(); c.globalAlpha = al; if (src === T) c.filter = 'url(#mola-goo)'; c.drawImage(src, 0, 0); c.restore();
+}
+
 /* presets: mix(c, a, b, u, Z, k, x, G, p) como os do XFS; G.M = quadro → px das telas, p = o par (A, B) */
 const MPH = {
   morph: { label:'Transformar', dur:.7, morph:true, mix:(c, a, b, u, Z, k, x, G, p) => {
@@ -165,15 +178,18 @@ const MPH = {
   } },
   goo: { label:'Líquido', dur:.9, morph:true, mix:(c, a, b, u, Z, k, x, G, p) => {
     const A = mphB(G, p.A, Z), B = mphB(G, p.B, Z), e = xfIO(u), q = 1 - Math.abs(2 * u - 1), M = mphLerp(A, B, e), w = xfSm((u - .3) / .4);
-    const g = xfSm(q * 2.2); // quanto do meio é gota
-    if (g > .01 && mphGooOk()) {
-      // desfoque moderado e cada um desenhado duas vezes (reforça o alfa): letra fina não some na gota
-      const r = (2 + .045 * Math.min(Math.abs(M.w), Math.abs(M.h))) * Math.pow(q, .6), T = xfTmp(G, 'xc'), t = T.getContext('2d');
-      for (let j = 0; j < 2; j++) { mphPiece(t, a, A, M, 1 - w, r); mphPiece(t, b, B, M, w, r); }
-      c.save(); c.globalAlpha = g; c.filter = 'url(#mola-goo)'; c.drawImage(T, 0, 0); c.restore();
+    const ok = mphGooOk(), g = ok ? xfSm(q * 2.2) : 0; // quanto do meio é gota
+    const ea = 1 - xfSm(u / .06), eb = xfSm((u - .94) / .06), f = Math.max(0, 1 - ea - eb); // pontas: as telas inteiras
+    if (g > .999 && f > .999) mphGoo(c, a, b, A, B, M, w, q, 1, G);
+    else {
+      // trocas (tela inteira ↔ desenho ↔ gota) somadas ('lighter') numa tela à parte, com pesos que fecham 1: duas camadas
+      // meio transparentes uma sobre a outra não chegam a 100% e o elemento piscava (reclamação do usuário)
+      const D = xfTmp(G, 'xd'), d = D.getContext('2d'); d.globalCompositeOperation = 'lighter';
+      xfPut(d, a, ea); xfPut(d, b, eb);
+      mphPiece(d, a, A, M, (1 - w) * (1 - g) * f); mphPiece(d, b, B, M, w * (1 - g) * f);
+      if (g * f > .002) mphGoo(d, a, b, A, B, M, w, q, g, G, g * f);
+      c.drawImage(D, 0, 0);
     }
-    mphPiece(c, a, A, M, (1 - w) * (1 - g)); mphPiece(c, b, B, M, w * (1 - g));
-    mphEnds(c, a, b, u);
   } },
   pill: { label:'Bloco', dur:1, morph:true, dir:true, mix:(c, a, b, u, Z, k, x, G, p) => {
     const A = mphB(G, p.A, Z, .06), B = mphB(G, p.B, Z, .06), [vx, vy] = XF_DIRS[x.dir || 'r'], cA = mphColor(p.A), cB = mphColor(p.B);
