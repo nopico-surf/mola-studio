@@ -4765,10 +4765,12 @@ function xfPairs(fresh) {
   if (!fresh && XFP && XFP.S === S && XFP.key === key) return XFP;
   const inn = new Map(), out = new Map(), ls = S.layers;
   if (!S.still) for (let i = 0; i < ls.length; i++) {
-    const B = ls[i], x = B.xin; if (!x || !XFS[x.k] || B.type !== 'image' || !B.visible) continue;
+    const B = ls[i], x = B.xin; if (!x || !XFS[x.k] || !B.visible) continue;
+    const mo = !!XFS[x.k].morph, kind = o => mo ? mphOk(o) : o.type === 'image'; // Transformar (js/transformar.js): texto, forma, logo, botão e imagem
+    if (!kind(B)) continue;
     let A = null, best = Infinity;
     for (let j = 0; j < ls.length; j++) {
-      const o = ls[j]; if (o === B || o.type !== 'image' || !o.visible || out.has(o.id)) continue;
+      const o = ls[j]; if (o === B || !kind(o) || !o.visible || out.has(o.id)) continue;
       const df = Math.abs((o.end ?? S.duration) - B.start); if (df > XF_TOL || o.start >= B.start - .05) continue;
       if (slides() > 1 && slideOfL(o) !== slideOfL(B)) continue;
       const sc = df + Math.abs(i - j) * 1e-4; // empate: o vizinho na pilha
@@ -4839,6 +4841,47 @@ function xfShift(c, ref, a, b, Z, x, e, trail) {
   }
   xfPut(c, acc);
 }
+/* transições de luz e lente (pedido do usuário: "transições de vídeo que não sejam vetoriais, zoom, flare etc."): em vez de
+   máscara/forma, mexem nos pixels do quadro (rastro de zoom/giro, luz somada, canais RGB separados, tremor). */
+// rastro: média de n cópias de src com a transformação espalhada (f(v), v de −.5 a .5, devolve [escala, giro, dx, dy]) =
+// desfoque de movimento de verdade (zoom e giro radiais), não um blur uniforme
+function xfTrail(c, ref, src, Z, a, n, f) {
+  if (n < 2) { const [s, r, dx, dy] = f(0); xfPut(c, src, a, Z, s, r, dx, dy); return; }
+  const acc = xfTmp(ref, 'xc'), ax = acc.getContext('2d');
+  for (let j = 0; j < n; j++) { const [s, r, dx, dy] = f(j / (n - 1) - .5); xfPut(ax, src, 1 / (j + 1), Z, s, r, dx, dy); }
+  xfPut(c, acc, a);
+}
+// os dois clipes cruzando numa tela (b com peso w; a sai de baixo quando b está inteiro)
+function xfMix(ref, a, b, w) {
+  const m = xfTmp(ref, 'xc'), x = m.getContext('2d');
+  if (w < 1) xfPut(x, a); xfPut(x, b, w);
+  return m;
+}
+// luz somada só onde há clipe: paint(g) desenha a luz ('lighter') numa tela à parte, recortada pelo próprio quadro (base)
+function xfGlow(c, ref, base, paint) {
+  const l = xfTmp(ref, 'xd'), x = l.getContext('2d');
+  x.globalCompositeOperation = 'lighter'; paint(x);
+  x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.filter = 'none'; x.globalCompositeOperation = 'destination-in'; x.drawImage(base, 0, 0);
+  xfPut(c, base); c.save(); c.globalCompositeOperation = 'lighter'; c.drawImage(l, 0, 0); c.restore();
+}
+const xfC = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${clamp(a).toFixed(3)})`;
+// mancha de luz (gradiente radial: miolo → meio → borda transparente)
+function xfBlob(g, X, Y, r, c0, c1, a) {
+  if (a <= .002 || r < 1) return;
+  const gr = g.createRadialGradient(X, Y, 0, X, Y, r);
+  gr.addColorStop(0, xfC(c0, a)); gr.addColorStop(.4, xfC(c1, a * .55)); gr.addColorStop(1, xfC(c1, 0));
+  g.fillStyle = gr; g.fillRect(X - r, Y - r, 2 * r, 2 * r);
+}
+// luz vazada: manchas quentes que atravessam o quadro (posição e deriva em fração da caixa)
+const XF_LEAK = [[.08, .25, .75, [255, 214, 160], [255, 84, 24], .55, .12], [.9, .35, .62, [255, 236, 190], [255, 160, 40], -.45, .18],
+  [.3, .92, .7, [255, 190, 200], [240, 30, 90], .35, -.25], [.72, .78, .5, [255, 250, 230], [255, 120, 60], -.25, -.1]];
+// um canal de cor da tela (multiply pela cor, alfa de volta ao do original)
+function xfChan(ref, src, col) {
+  const ch = xfTmp(ref, 'xd'), x = ch.getContext('2d'); x.drawImage(src, 0, 0);
+  x.globalCompositeOperation = 'multiply'; x.fillStyle = col; x.fillRect(0, 0, ch.width, ch.height);
+  x.globalCompositeOperation = 'destination-in'; x.drawImage(src, 0, 0); x.globalCompositeOperation = 'source-over';
+  return ch;
+}
 /* presets: mix(c, a, b, u, Z, k, x, ref). c = destino em px (sem transformação), a/b = os dois clipes prontos (mesma geometria),
    u = 0..1 na janela, Z = caixa dos clipes em px, k = px por px do vídeo (desfoque), x = B.xin (dir), ref = tela de referência.
    clip = recorta na caixa (o que se move não passa para fora do clipe nem para o slide vizinho). Com u = 1 sobra só b, inteiro. */
@@ -4889,8 +4932,87 @@ const XFS = {
       c.drawImage(src, 0, y, w, bh + 1, dx, y, w, bh + 1);
       c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = .18 * q; c.drawImage(src, 0, y, w, bh + 1, dx + Z.w * .012, y, w, bh + 1); c.restore();
     } } },
+  // ---- luz e lente (pixels, não forma) ----
+  // mergulho de zoom com rastro radial; o corte fica no pico, escondido pelo rastro e por um clarão curto
+  zblur:    { label:'Zoom com rastro', dur:.5, clip:true, mix:(c, a, b, u, Z, k, x, ref) => {
+    const q = 1 - Math.abs(2 * u - 1), n = q > .04 ? 10 : 1, sp = .55 * q * q, A = u < .5, src = A ? a : b;
+    const s = 1 + 1.3 * (A ? 2 * u : 2 - 2 * u) ** 3;
+    xfTint(src, '#fff', .3 * q ** 6);
+    xfTrail(c, ref, src, Z, 1, n, v => [s * (1 + sp * (v + .5)), 0, 0, 0]); } },
+  // rodopio com rastro: sai girando e o próximo chega no mesmo sentido
+  spinblur: { label:'Giro com rastro', dur:.55, clip:true, mix:(c, a, b, u, Z, k, x, ref) => {
+    const q = 1 - Math.abs(2 * u - 1), n = q > .04 ? 10 : 1, sp = .7 * q * q, A = u < .5, e = (A ? 2 * u : 2 - 2 * u) ** 3;
+    const r = (A ? 1 : -1) * Math.PI / 2 * e, K = Math.max(Z.w / Z.h, Z.h / Z.w);
+    // escala que cobre a caixa girada (sem cantos vazios), por cópia
+    const sc = th => { th = Math.min(Math.PI / 2, Math.abs(th)); return Math.cos(th) + K * Math.sin(th); };
+    xfTrail(c, ref, A ? a : b, Z, 1, n, v => { const th = r - sp * (v + .5); return [sc(th) * (1 + .15 * e), th, 0, 0]; }); } },
+  // flare de lente atravessando o quadro: miolo quente, risco anamórfico, fantasmas na linha do centro; no pico quase branco
+  flare:    { label:'Flare', dur:.8, clip:true, dir:true, mix:(c, a, b, u, Z, k, x, ref) => {
+    const q = 1 - Math.abs(2 * u - 1), I = q * q, base = xfMix(ref, a, b, xfSm((u - .45) / .1));
+    const [vx, vy] = xfV(x), e = xfIO(u), cx = Z.x + Z.w / 2, cy = Z.y + Z.h / 2, R = Math.max(Z.w, Z.h);
+    const lx = vx ? cx + vx * Z.w * .7 * (2 * e - 1) : Z.x + Z.w * .64, ly = vx ? Z.y + Z.h * .36 : cy + vy * Z.h * .7 * (2 * e - 1);
+    xfGlow(c, ref, base, g => {
+      g.globalAlpha = .3 * I ** 3; g.drawImage(base, 0, 0); g.globalAlpha = 1; // o quadro estoura um pouco
+      xfBlob(g, lx, ly, R * (.2 + .35 * I), [255, 240, 215], [255, 130, 40], .7 * I);
+      xfBlob(g, lx, ly, R * .07, [255, 255, 255], [255, 225, 190], Math.min(1, .5 + I));
+      for (const [th, al] of [[.012, 1], [.05, .35]]) { // risco horizontal fino + halo dele
+        g.save(); g.translate(lx, ly); g.scale(1, th); xfBlob(g, 0, 0, Z.w * 1.2, [215, 232, 255], [120, 170, 255], al * I); g.restore();
+      }
+      [[-.45, .05, [140, 255, 200]], [.35, .035, [255, 200, 120]], [.9, .11, [150, 180, 255]], [1.5, .07, [255, 140, 200]]].forEach(([t, r, col]) =>
+        xfBlob(g, cx + (cx - lx) * t, cy + (cy - ly) * t, R * r, col, col, .22 * I));
+      g.fillStyle = xfC([255, 238, 215], .8 * I ** 14); g.fillRect(Z.x, Z.y, Z.w, Z.h); // clarão só no pico (esconde o corte)
+    }); } },
+  // luz vazada (light leak): manchas laranja/rosa passando, cruzando os clipes por baixo
+  leak:     { label:'Luz vazada', dur:1.1, clip:true, mix:(c, a, b, u, Z, k, x, ref) => {
+    const q = 1 - Math.abs(2 * u - 1), I = xfSm(q * 1.35), base = xfMix(ref, a, b, xfSm((u - .35) / .3)), R = Math.max(Z.w, Z.h);
+    xfGlow(c, ref, base, g => {
+      g.globalAlpha = .3 * I * I; g.drawImage(base, 0, 0); g.globalAlpha = 1;
+      for (const [px, py, r, c0, c1, dx, dy] of XF_LEAK)
+        xfBlob(g, Z.x + Z.w * (px + dx * (u - .5)), Z.y + Z.h * (py + dy * (u - .5)), R * r * (.55 + .65 * I), c0, c1, .95 * I);
+    }); } },
+  // queimar filme: o fogo nasce de um ponto, se espalha tremendo até o branco e revela o próximo
+  burn:     { label:'Queimar filme', dur:.9, clip:true, mix:(c, a, b, u, Z, k, x, ref) => {
+    const I = u < .5 ? xfSm(u / .5) ** 2.2 : (1 - xfSm((u - .5) / .5)) ** 1.5, st = Math.floor(u * 24), R = Math.max(Z.w, Z.h);
+    const base = xfMix(ref, a, b, xfSm((u - .44) / .12));
+    xfGlow(c, ref, base, g => {
+      for (let i = 0; i < 6; i++) {
+        const fl = .75 + .5 * rand(i + 11, st), w = .35 + .65 * rand(i, 2);
+        const X = Z.x + Z.w * (.82 - .55 * rand(i, 3) * (i ? 1 : 0)), Y = Z.y + Z.h * (.18 + .7 * rand(i, 5) * (i ? 1 : 0));
+        const r = R * (.05 + .8 * w * clamp(I * 1.1 - i * .07));
+        xfBlob(g, X, Y, r, [255, 240, 195], [255, 105, 15], fl * I);
+        xfBlob(g, X, Y, r * 1.35, [255, 90, 10], [170, 20, 0], .35 * fl * I);
+      }
+      g.fillStyle = xfC([255, 244, 220], .8 * I ** 9); g.fillRect(Z.x, Z.y, Z.w, Z.h);
+    }); } },
+  // estourar: o quadro superexpõe com brilho (bloom) até o branco e o próximo desce dele
+  expo:     { label:'Estourar', dur:.6, clip:true, mix:(c, a, b, u, Z, k, x, ref) => {
+    const q = 1 - Math.abs(2 * u - 1), I = q ** 2.2, base = xfMix(ref, a, b, xfSm((u - .46) / .08));
+    xfGlow(c, ref, base, g => {
+      g.save(); g.beginPath(); g.rect(Z.x, Z.y, Z.w, Z.h); g.clip();
+      const bl = 28 * k * I; if (bl > .5) g.filter = `blur(${bl.toFixed(1)}px)`;
+      g.globalAlpha = Math.min(1, 1.5 * I); g.drawImage(base, 0, 0); g.globalAlpha = I; g.drawImage(base, 0, 0);
+      g.filter = 'none'; g.globalAlpha = 1; g.fillStyle = xfC([255, 252, 245], .9 * I ** 4); g.fillRect(Z.x, Z.y, Z.w, Z.h);
+      g.restore();
+    }); } },
+  // aberração RGB: os canais se separam com um soco de zoom e tremem; o corte fica no pico
+  rgb:      { label:'Aberração RGB', dur:.5, clip:true, mix:(c, a, b, u, Z, k, x, ref) => {
+    const q = 1 - Math.abs(2 * u - 1), e = q * q, src = u < .5 ? a : b;
+    if (e < .01) { xfPut(c, src); return; }
+    const st = Math.floor(u * 20), d = Z.w * .05 * e, s = 1 + .22 * e, jx = (rand(3, st) - .5) * Z.w * .025 * e, jy = (rand(4, st) - .5) * Z.h * .01 * e;
+    const out = xfTmp(ref, 'xe'), ox = out.getContext('2d'); ox.globalCompositeOperation = 'lighter';
+    for (const [col, side, ks] of [['#ff0000', -1, .04], ['#00ff00', 0, 0], ['#0000ff', 1, -.04]])
+      xfPut(ox, xfChan(ref, src, col), 1, Z, s * (1 + ks * e), 0, side * d + jx, side * d * .25 + jy);
+    xfPut(c, out); } },
+  // impacto: soco de zoom com tremor, clarão no corte e o próximo assentando
+  shake:    { label:'Impacto', dur:.45, clip:true, mix:(c, a, b, u, Z) => {
+    const st = Math.floor(u * 30), amp = Math.min(Z.w, Z.h) * .035, A = u < .5, e = A ? (2 * u) ** 3 : (2 - 2 * u) ** 2, src = A ? a : b;
+    if (A) xfTint(a, '#fff', .85 * xfSm((u - .38) / .12)); else if (u < .6) xfTint(b, '#fff', .85 * (1 - (u - .5) / .1));
+    const sh = amp * e;
+    xfPut(c, src, 1, Z, 1 + .25 * e, (rand(1, st) - .5) * .05 * e, (rand(2, st) - .5) * 2 * sh, (rand(3, st) - .5) * 2 * sh); } },
 };
-const XF_KEYS = ['dissolve', 'black', 'white', 'blur', 'push', 'slide', 'whip', 'zoom', 'zoomout', 'spin', 'wipe', 'circle', 'glitch'];
+const XF_KEYS = ['dissolve', 'black', 'white', 'blur', 'push', 'slide', 'whip', 'zoom', 'zoomout', 'spin', 'wipe', 'circle', 'glitch',
+  'zblur', 'spinblur', 'flare', 'leak', 'burn', 'expo', 'rgb', 'shake'];
+Object.assign(XFS, MPH); // Transformar: presets entre elementos (js/transformar.js, MPH_KEYS)
 // desenha a mistura de A e B no lugar do de cima (drawLayerFx)
 const XF_BUDGET = 4e6; // px de cada tela da transição no palco com zoom
 function xfDraw(tc, p, t, R, cam, depth, one) {
@@ -4923,7 +5045,8 @@ function xfDraw(tc, p, t, R, cam, depth, one) {
   const o = zoomed ? xfTmp(G, 'xo') : null, c = o ? o.getContext('2d') : tc;
   c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 1; c.filter = 'none'; c.globalCompositeOperation = 'source-over';
   if (p.P.clip) { c.beginPath(); c.rect(Z.x, Z.y, Z.w, Z.h); c.clip(); }
-  try { p.P.mix(c, a, b, u, Z, s, p.x, G); } catch (e) { console.error(e); }
+  G.M = M2; // quadro → px das telas (Transformar mede a caixa de cada um)
+  try { p.P.mix(c, a, b, u, Z, s, p.x, G, p); } catch (e) { console.error(e); }
   c.restore();
   if (o) { tc.save(); tc.setTransform(M.a / s, 0, 0, M.d / s, M.e + M.a * G.geo.x / s, M.f + M.d * G.geo.y / s); tc.globalAlpha = 1; tc.filter = 'none'; tc.globalCompositeOperation = 'source-over'; tc.drawImage(o, 0, 0); tc.restore(); }
 }
@@ -11781,6 +11904,7 @@ function openMenu(ev, L) {
       item('Virar na horizontal', () => { pushUndo(); L.flipX ? delete L.flipX : (L.flipX = true); changed({ layers:true }); renderProps(); }),
       item('Virar na vertical', () => { pushUndo(); L.flipY ? delete L.flipY : (L.flipY = true); changed({ layers:true }); renderProps(); })] : []),
     ...(tpPair() ? [item('Pôr o texto na forma', () => { const p = tpPair(); tpAttach(p.t, p.s); select(p.t.id); })] : []),
+    ...(mphPair() ? [item('Transformar um no outro', () => { const q = mphPair(); mphLink(q.A, q.B, 'morph'); select(q.B.id); propTab = 'anim'; renderProps(); }, { off:pickedLayers().some(o => o.locked) })] : []),
     ...(tpKind(L) ? [item('Voltar ao texto reto', () => { pushUndo(); for (const o of peersOf(L)) if (o.type === 'text') tpSetKind(o, ''); RT.layout.clear(); changed({ props:true }); }, { off:!!L.locked })] : []),
     h('hr'),
     item('Converter em vetor', vectorize, { off:isBg || !(L.type === 'text' || canOutline(L)), kbd:'Ctrl+Shift+O' }),
@@ -11852,7 +11976,7 @@ function placeHead() {
 function xfMarks(lane, L) {
   if (!lane) return;
   lane.querySelectorAll(':scope > .tl-xf').forEach(e => e.remove());
-  if (L.type !== 'image' || !L.id) return;
+  if (!mphOk(L) || !L.id) return;
   const X = xfPairs(true); if (!X.n) return;
   for (const p of [X.inn.get(L.id), X.out.get(L.id)]) if (p) lane.append(h('i', { class:'tl-xf', style:`left:${p.t0 / S.duration * 100}%;width:${p.d / S.duration * 100}%` }));
 }
@@ -13412,8 +13536,8 @@ function renderProps() {
       return [rangeF(L, sk, 'Velocidade', minS, maxS, .05, v => v.toFixed(2) + '×', { after }),
         rangeF(L, ik, 'Intensidade', 0, 1, .01, v => Math.round(v * 100) + '%', { after })];
     };
-    const xfNote = side => xfOn(L, side) ? h('p', { class:'hint', text:side === 'in' ? 'A transição do clipe anterior substitui esta entrada.' : 'A transição para o próximo clipe substitui esta saída.' }) : null;
-    { const s = xfSec(L, 'in'); if (s) box.append(s); } // transição entre clipes (vídeo/imagem colados na timeline)
+    const xfNote = side => xfOn(L, side) ? h('p', { class:'hint', text:L.type !== 'image' ? (side === 'in' ? 'A transformação a partir do anterior substitui esta entrada.' : 'A transformação no próximo substitui esta saída.') : side === 'in' ? 'A transição do clipe anterior substitui esta entrada.' : 'A transição para o próximo clipe substitui esta saída.' }) : null;
+    { const s = xfSec(L, 'in') || mphFromSec(L); if (s) box.append(s); } // transição entre clipes (vídeo/imagem colados na timeline); sem nada colado, "Transformar a partir de"
     box.append((() => { const slot = h('div'); const ref = () => { slot.innerHTML = ''; const f = slideDirF(L, 'in'); if (f) slot.append(f); }; ref();
       return h('section', { class:'sec' }, [h('h3', {}, ['Entrada', seeBtn('Ver a entrada (toca só este trecho)', () => previewIn(L))]), xfNote('in'), presetGrid(L, 'in', inKeys, map, ref), slot,
         ...rhythm('in', .4, 6, () => seekKeep(L))]); })());
@@ -13438,10 +13562,10 @@ function renderProps() {
 /* transição entre clipes no painel (aba Animação do vídeo/imagem): side 'in' = com o clipe que termina onde este começa (B.xin
    deste), 'out' = com o que começa onde este termina (B.xin daquele). Só aparece quando há um clipe colado (até XF_TOL s) */
 function xfNeighbor(L, side) {
-  if (L.type !== 'image' || S.still || layerStill(L)) return null;
+  if (!mphOk(L) || S.still || layerStill(L)) return null; // imagem/vídeo: transições de clipe; os outros (e misturados): Transformar
   const s0 = L.start, e0 = L.end ?? S.duration; let best = null, bd = XF_TOL + 1e-9;
   for (const o of S.layers) {
-    if (o === L || o.type !== 'image' || !o.visible || (slides() > 1 && slideOfL(o) !== slideOfL(L))) continue;
+    if (o === L || !mphOk(o) || !o.visible || (slides() > 1 && slideOfL(o) !== slideOfL(L))) continue;
     const df = side === 'in' ? Math.abs((o.end ?? S.duration) - s0) : Math.abs(o.start - e0);
     if (df < bd && (side === 'in' ? o.start < s0 - .05 : o.start > s0 + .05)) { bd = df; best = o; }
   }
@@ -13450,24 +13574,25 @@ function xfNeighbor(L, side) {
 const XF_ARROWS = [['l', 'ar_l', 'Para a esquerda'], ['r', 'ar_r', 'Para a direita'], ['u', 'ar_u', 'Para cima'], ['d', 'ar_d', 'Para baixo']];
 function xfSec(L, side) {
   const N = xfNeighbor(L, side); if (!N) return null;
-  const B = side === 'in' ? L : N, cur = B.xin && XFS[B.xin.k] ? B.xin : null;
+  const B = side === 'in' ? L : N, clip = L.type === 'image' && N.type === 'image', keys = clip ? [...XF_KEYS, ...MPH_KEYS] : MPH_KEYS; // só fotos/vídeos: as de clipe também
+  const cur = B.xin && XFS[B.xin.k] && keys.includes(B.xin.k) ? B.xin : null, none = clip ? 'Corte seco' : 'Nenhuma';
   const pair = () => xfPairs(true).inn.get(B.id);
   const seek = () => { const p = pair(); if (p) { pause(); T = clamp(p.c - p.d * .15, 0, S.duration); RT.userSeek = true; needs = true; } };
   const see = () => { const p = pair(); if (p) play(Math.max(0, p.t0 - .5), Math.min(S.duration - .001, p.t1 + .5)); };
   const redo = () => { changed({ layers:true, props:true }); renderTimeline(); seek(); };
   const wrap = h('div', { class:'chips' });
-  wrap.dataset.cur = cur ? XFS[cur.k].label : 'Corte seco';
-  for (const k of ['none', ...XF_KEYS]) {
-    const on = cur ? cur.k === k : k === 'none', label = k === 'none' ? 'Corte seco' : XFS[k].label;
+  wrap.dataset.cur = cur ? XFS[cur.k].label : none;
+  for (const k of ['none', ...keys]) {
+    const on = cur ? cur.k === k : k === 'none', label = k === 'none' ? none : XFS[k].label;
     wrap.append(h('button', { class:'chip', 'aria-pressed':String(on), title:label, onclick:() => {
       pushUndo();
       if (k === 'none') delete B.xin; else B.xin = { ...(B.xin || {}), k, d:B.xin && B.xin.d ? B.xin.d : XFS[k].dur };
       redo();
     } }, [h('span', { text:label })]));
   }
-  const kids = [h('h3', {}, [side === 'in' ? 'Transição do clipe anterior' : 'Transição para o próximo',
+  const kids = [h('h3', {}, [clip ? (side === 'in' ? 'Transição do clipe anterior' : 'Transição para o próximo') : side === 'in' ? 'Transformar a partir do anterior' : 'Transformar no próximo',
     cur ? h('button', { type:'button', class:'see', title:'Ver a transição (toca só este trecho)', 'aria-label':'Ver a transição', html:`${ICON_PLAY}<span>Ver</span>`, onclick:see }) : null]),
-    h('p', { class:'hint', text:side === 'in' ? `De “${N.name}” para este clipe.` : `Deste clipe para “${N.name}”.` }), wrap];
+    h('p', { class:'hint', text:clip ? (side === 'in' ? `De “${N.name}” para este clipe.` : `Deste clipe para “${N.name}”.`) : side === 'in' ? `“${N.name}” vira este elemento.` : `Este elemento vira “${N.name}”.` }), wrap];
   if (cur) {
     kids.push(rangeF(B, 'xinD', 'Duração', XF_MIN, 2, .05, v => (+v).toFixed(2) + 's', { get:() => B.xin.d || XFS[B.xin.k].dur, put:v => { B.xin.d = +(+v).toFixed(2); }, cap:XF_MAX, after:() => { renderTimeline(); seek(); } }));
     if (XFS[cur.k].dir) {
@@ -13477,7 +13602,8 @@ function xfSec(L, side) {
           onclick:() => { pushUndo(); B.xin.dir = v; draw(); changed(); seek(); } }))); };
       draw(); kids.push(field('Direção', segs));
     }
-    kids.push(h('p', { class:'hint', text:'Fica no meio do corte: o clipe que sai continua até o fim da transição e o que entra começa antes, com o resto do vídeo (se o arquivo acabar, fica parado no último quadro). Durante ela, a saída e a entrada dos dois clipes não valem.' }));
+    if (!clip || XFS[cur.k].morph) kids.push(h('p', { class:'hint', text:'Fica no meio da emenda: o que sai continua até o fim da transformação e o que entra já aparece antes. Durante ela, a saída de um e a entrada do outro não valem.' }));
+    else kids.push(h('p', { class:'hint', text:'Fica no meio do corte: o clipe que sai continua até o fim da transição e o que entra começa antes, com o resto do vídeo (se o arquivo acabar, fica parado no último quadro). Durante ela, a saída e a entrada dos dois clipes não valem.' }));
   }
   return h('section', { class:'sec' }, kids);
 }
@@ -14078,7 +14204,7 @@ function renderAll() { renderFormats(); renderAdds(); renderBrand(); renderLayer
    quando o conteúdo muda. O estado fica no navegador por título ('mola-fold'); sem escolha, o que é raro começa fechado
    (FOLD_SHUT). Fechado, o cabeçalho mostra o valor atual (preset escolhido, data-sum ou FOLD_SUM). */
 const FOLD = (() => { try { const o = JSON.parse(localStorage.getItem('mola-fold')); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } })();
-const FOLD_SHUT = new Set(['props:Enquanto está na tela', 'props:Marca à mão', 'props:Movimento dentro da imagem', 'props:Saída', 'props:Tempo',
+const FOLD_SHUT = new Set(['props:Transformar a partir de', 'props:Enquanto está na tela', 'props:Marca à mão', 'props:Movimento dentro da imagem', 'props:Saída', 'props:Tempo',
   'props:Ajustes', 'left:Marca', 'left:Componentes', 'left:Trilha', 'left:Arquivo']);
 const FOLD_SUM = {
   'left:Componentes': () => { const n = S ? Object.keys(COMP_DEF).filter(compCustom).length : 0; return n ? `${n} editado${n > 1 ? 's' : ''}` : 'de fábrica'; },
