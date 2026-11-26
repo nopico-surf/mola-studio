@@ -2325,7 +2325,7 @@ const G_KEYS = { in:BLOCK_IN.image, out:BLOCK_OUT.image, idle:IDLE_BY.image };
 // giro do grupo (S.groups[gid].rot, graus, em torno do centro da caixa do conjunto): o conjunto já desenhado gira junto, como a forma (L.rot)
 const gRad = gid => { const g = S.groups && S.groups[gid]; return g && g.rot ? g.rot * Math.PI / 180 : 0; };
 // (frame só pintado, sem nada disso, não passa pela tela à parte: o fundo dele vai direto no quadro, antes do 1º item, em drawItems)
-const gStyleOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.shadow && g.shadow !== 'none') || (g.opacity ?? 1) < 1 || !!g.rot || !!blendOf(g) || blurOn(g) || g.grain > 0) && gMany(gid); };
+const gStyleOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.shadow && g.shadow !== 'none') || (g.opacity ?? 1) < 1 || !!g.rot || !!blendOf(g) || blurOn(g) || g.grain > 0 || warpOn(g)) && gMany(gid); };
 // frame (grupo com layout automático) pintado: preenchimento e/ou contorno na caixa dele, com cantos (paintFrame), como um frame do Figma
 const gPaintOn = gid => { const g = S.groups && S.groups[gid]; return !!g && !!flowOf(gid) && ((!!g.fill && !noCol(g.fill)) || (!!g.stroke && !noCol(g.strokeColor || '#ffffff'))); };
 const gAnimOn = gid => { const g = S.groups && S.groups[gid]; return !!g && ((g.in || 'cut') !== 'cut' || (g.out || 'cut') !== 'cut' || (g.idle || 'none') !== 'none') && gMany(gid); };
@@ -4141,6 +4141,142 @@ function texPaint(c, L, t, M, ax = 0, ay = 0) {
   c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = clamp(L.grain, 0, 1); c.globalCompositeOperation = 'source-atop'; c.filter = 'none';
   c.fillStyle = pat; c.fillRect(0, 0, c.canvas.width, c.canvas.height); c.restore();
 }
+/* ------------ Distorção (pedido do usuário: texto em onda, derretendo, líquido…, em tudo: texto, forma, logo, botão, imagem, vídeo e
+   grupo/frame inteiro) ------------
+   L.warp = tipo (WARP_KINDS; ausente = sem), L.warpHide = escondido pelo olho, L.warpA = quanto empurra (px do vídeo), L.warpS = tamanho
+   de cada onda/mancha (px), L.warpF = força (−1..1) dos tipos que torcem a forma inteira (Redemoinho, Lente, Arco), L.warpV = movimento
+   (voltas por segundo; 0 = parado), L.warpD = 'h' | 'v' (direção da onda), L.warpSeed = variação. Ausentes = o padrão do tipo.
+   Como a Textura: a camada pronta vai para a tela à parte (drawLayerFx0; grupo: a tela do conjunto em drawGroup) e um shader WebGL2
+   (warpGL) redesenha cada pixel buscando de onde ele vem, preso à caixa da camada (_bounds). Antes da textura, da sombra e do desfoque,
+   então a sombra segue a forma distorcida. Determinístico pelo t (hash inteiro no shader). Peso: uma tela à parte e uma passada na placa
+   de vídeo por camada distorcida por quadro. Não vale no SVG nem no "Converter em vetor" (é efeito de pixels). */
+const WARP_KINDS = {
+  wave:['Onda', { a:28, s:260, v:.5, dir:1 }], liquid:['Líquido', { a:36, s:180, v:.25, seed:1 }], melt:['Derreter', { a:150, s:55, v:.1, seed:1 }],
+  flag:['Bandeira', { a:24, s:360, v:.6 }], zig:['Zigue-zague', { a:12, s:135, v:0, dir:1 }], ripple:['Ondulação', { a:10, s:120, v:.6 }],
+  glitch:['Falha', { a:30, s:24, v:1, seed:1 }], twirl:['Redemoinho', { f:.5, v:0 }], bulge:['Lente', { f:.5, v:0, neg:1 }], arc:['Arco', { f:.35, v:0, neg:1 }],
+};
+const WARP_IDS = Object.keys(WARP_KINDS);
+const warpOn = L => !!L && !!WARP_KINDS[L.warp] && !L.warpHide && L.type !== 'bg';
+const warpK = L => WARP_KINDS[L.warp][1];
+const warpV = (L, k) => L[{ a:'warpA', s:'warpS', f:'warpF', v:'warpV' }[k]] ?? warpK(L)[k] ?? 0;
+// px de fábrica (a, s) são para um elemento de 300 px de altura; ao ligar ou trocar o tipo, nascem na proporção do elemento
+function warpFit(o, k) {
+  o.warp = k; for (const q of ['warpA', 'warpS', 'warpF', 'warpV', 'warpD']) delete o[q];
+  const K = WARP_KINDS[k][1], b = o._bounds || (o.__g != null && RT.gBox.get(o.__g) ? RT.gBox.get(o.__g).b : null);
+  if (K.a == null || !b || !(b.h > 0)) return;
+  const r = clamp(Math.min(b.h, b.w * .6) / 300, .15, 6);
+  o.warpA = Math.max(1, Math.round(K.a * r)); o.warpS = Math.max(4, Math.round(K.s * r));
+}
+const warpMoves = L => warpOn(L) && warpV(L, 'v') > 0 && !stillNow(L);
+// quanto o desenho pode sair da caixa (unidades do quadro): telas à parte, alcance e "fora da vista" contam com isso
+function warpReach(L, b) {
+  if (!warpOn(L)) return 0;
+  const K = warpK(L); if (K.f != null) return Math.max(b.w, b.h) * .4 * Math.abs(warpV(L, 'f')) + 20;
+  return warpV(L, 'a') * (L.warp === 'melt' ? 1.5 : 1.3) + 20;
+}
+let WGL = null;
+function warpGL() {
+  if (WGL !== null) return WGL;
+  WGL = false;
+  const cv = document.createElement('canvas'), gl = cv.getContext('webgl2', { alpha:true, premultipliedAlpha:true, antialias:false });
+  if (!gl) return false;
+  const VS = `#version 300 es
+in vec2 p; void main() { gl_Position = vec4(p, 0., 1.); }`;
+  const FS = `#version 300 es
+precision highp float; precision highp int;
+uniform sampler2D u_img; uniform vec2 u_size; uniform vec4 u_box; uniform float u_k, u_a, u_s, u_f, u_t; uniform int u_kind, u_dir, u_seed;
+out vec4 o;
+uint hs(uint x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return x; }
+float h2(ivec2 p, int s) { return float(hs(uint(p.x) * 1973u ^ hs(uint(p.y) * 9277u ^ uint(s) * 26699u))) / 4294967295.; }
+float vn(vec2 p, int s) {
+  vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f); ivec2 I = ivec2(i);
+  return mix(mix(h2(I, s), h2(I + ivec2(1, 0), s), u.x), mix(h2(I + ivec2(0, 1), s), h2(I + ivec2(1, 1), s), u.x), u.y);
+}
+float fbm(vec2 p, int s) { float a = 0., m = .5; for (int i = 0; i < 4; i++) { a += vn(p, s + i * 7) * m; p = p * 2.03 + vec2(1.7, 9.2); m *= .5; } return a / .9375; }
+const float TAU = 6.2831853;
+void main() {
+  vec2 px = vec2(gl_FragCoord.x, u_size.y - gl_FragCoord.y);
+  vec2 P = (px - u_box.xy) / u_k, B = u_box.zw / u_k, C = B * .5, Q = P;
+  float A = u_a, Z = max(u_s, 1.), T = u_t;
+  if (u_kind == 0 || u_kind == 4) { // onda / zigue-zague: cada linha (ou coluna) anda para o lado
+    float x = (u_dir == 0 ? P.y : P.x) / Z - T, w = u_kind == 0 ? sin(TAU * x) : abs(fract(x) - .5) * 4. - 1.;
+    if (u_dir == 0) Q.x -= A * w; else Q.y -= A * w;
+  } else if (u_kind == 1) { // líquido: ruído dobrado sobre ele mesmo
+    vec2 q = P / Z, w = vec2(fbm(q + vec2(0., T), u_seed), fbm(q + vec2(5.2, 1.3 - T), u_seed + 1));
+    vec2 w2 = vec2(fbm(q + 3. * w + vec2(1.7, 9.2), u_seed + 3), fbm(q + 3. * w + vec2(8.3, 2.8), u_seed + 5));
+    Q -= A * 2. * (w2 - .5);
+  } else if (u_kind == 2) { // derreter: cada coluna escorre até A × pingo, esticando de 1/4 da altura para baixo (sem dobrar)
+    float x = P.x / Z, n = vn(vec2(x, T * 3.), u_seed), d = .08 + pow(smoothstep(.35, .95, n), 1.5) * 1.2 + .15 * vn(vec2(x * 3.1, 7.), u_seed + 2);
+    float y0 = B.y * .25, e = B.y + A * d;
+    if (P.y > y0) Q.y = P.y < e ? y0 + (P.y - y0) * (B.y - y0) / (e - y0) : P.y - A * d;
+    Q.x += A * .04 * sin(P.y / Z * 2. + x * 5.) * smoothstep(y0, B.y, P.y);
+  } else if (u_kind == 3) { // bandeira: presa na esquerda, ondula mais para a direita
+    float k = clamp(P.x / max(B.x, 1.), 0., 1.); Q.y -= A * k * sin(TAU * (P.x / Z - T));
+  } else if (u_kind == 5) { // ondulação: anéis a partir do centro
+    vec2 D = P - C; float r = length(D); if (r > 1e-3) Q -= D / r * A * sin(TAU * (r / Z - T));
+  } else if (u_kind == 6) { // falha: faixas que pulam para o lado
+    int band = int(floor(P.y / Z)), fr = int(floor(T * 12.));
+    if (h2(ivec2(band, fr), u_seed) > .62) Q.x -= (h2(ivec2(band, fr + 7919), u_seed) - .5) * 2. * A;
+  } else if (u_kind == 7) { // redemoinho
+    vec2 D = P - C; float R = length(C) * 1.05, r = length(D);
+    if (r < R) { float a = -u_f * 4. * pow(1. - r / R, 2.), cs = cos(a), sn = sin(a); Q = C + vec2(D.x * cs - D.y * sn, D.x * sn + D.y * cs); }
+  } else if (u_kind == 8) { // lente: estufa (força +) ou afunila (força −) no meio
+    vec2 D = P - C; float R = length(C) * 1.05, r = length(D);
+    if (r < R && r > 1e-3) { float e = u_f >= 0. ? 1. + u_f * 1.5 : 1. / (1. - u_f * 1.5); Q = C + D / r * R * pow(r / R, e); }
+  } else if (u_kind == 9) { // arco: o meio sobe (força −: desce)
+    float u = P.x / max(B.x, 1.) * 2. - 1.; Q.y += u_f * B.y * .8 * (1. - u * u);
+  }
+  vec2 uv = (u_box.xy + Q * u_k) / u_size;
+  o = uv.x < 0. || uv.y < 0. || uv.x > 1. || uv.y > 1. ? vec4(0.) : texture(u_img, uv);
+}`;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  try {
+    const pr = gl.createProgram();
+    gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(pr);
+    if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+    gl.useProgram(pr);
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(pr, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    const u = {}; for (const k of ['size', 'box', 'k', 'a', 's', 'f', 't', 'kind', 'dir', 'seed']) u[k] = gl.getUniformLocation(pr, 'u_' + k);
+    cv.addEventListener('webglcontextlost', () => { WGL = null; needs = true; });
+    WGL = { cv, gl, u, max:gl.getParameter(gl.MAX_TEXTURE_SIZE) };
+  } catch (e) { console.warn('Distorção:', e); }
+  return WGL;
+}
+// distorce no lugar o que está em c (a camada pronta). M = matriz do quadro (unidades → px de c); b = caixa da camada (unidades do quadro)
+function warpApply(c, L, t, M, b) {
+  const g = warpGL(); if (!g || !b || !(b.w > 0) || !(b.h > 0) || !c.width || !c.height || c.width > g.max || c.height > g.max) return;
+  const gl = g.gl, k = Math.hypot(M.a, M.b) || 1, K = warpK(L);
+  if (g.cv.width !== c.width || g.cv.height !== c.height) { g.cv.width = c.width; g.cv.height = c.height; }
+  gl.viewport(0, 0, c.width, c.height);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  const v = warpV(L, 'v'), ph = stillNow(L) ? 0 : t * v;
+  let f = warpV(L, 'f'); if (K.f != null && v > 0 && !stillNow(L)) f *= L.warp === 'twirl' ? Math.sin(t * v * Math.PI * 2) : .5 + .5 * Math.sin(t * v * Math.PI * 2);
+  gl.uniform2f(g.u.size, c.width, c.height);
+  gl.uniform4f(g.u.box, M.a * b.x + M.c * b.y + M.e, M.b * b.x + M.d * b.y + M.f, b.w * k, b.h * k);
+  gl.uniform1f(g.u.k, k); gl.uniform1f(g.u.a, warpV(L, 'a')); gl.uniform1f(g.u.s, warpV(L, 's')); gl.uniform1f(g.u.f, f); gl.uniform1f(g.u.t, ph);
+  gl.uniform1i(g.u.kind, WARP_IDS.indexOf(L.warp)); gl.uniform1i(g.u.dir, L.warpD === 'v' ? 1 : 0); gl.uniform1i(g.u.seed, (L.warpSeed | 0) * 31 + 3);
+  gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  const x = c.getContext('2d');
+  x.save(); x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.filter = 'none'; x.globalCompositeOperation = 'copy'; x.drawImage(g.cv, 0, 0); x.restore();
+}
+// amostra do tipo para a grade do painel: "Aa" distorcido pelo mesmo shader
+const WARPU = {};
+function warpThumb(k) {
+  if (WARPU[k] != null) return WARPU[k];
+  const c = document.createElement('canvas'); c.width = 120; c.height = 72;
+  const x = c.getContext('2d'), s = .2;
+  x.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--fg').trim() || '#D1D7E0';
+  x.font = '800 40px "Mona Sans", system-ui, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText('Aa', 60, 32);
+  x.fillRect(22, 52, 76, 3);
+  try { warpApply(c, { warp:k, type:'shape' }, .3, new DOMMatrix([s, 0, 0, s, 0, 0]), { x:18 / s, y:10 / s, w:84 / s, h:46 / s }); } catch (e) {}
+  return WARPU[k] = c.toDataURL();
+}
 function drawBg(ctx, L, t, R) { paintFill(ctx, L, t, FW(), H()); }
 // degradê exato (SVG importado): paradas em [posição 0..1 na caixa, cor]; só vale enquanto as três cores são as de quando entrou (editou a cor = volta ao degradê de três paradas)
 const gradStops = L => { const s = L.gst; return L.mode === 'linear' && s && s.stops && s.key === [L.c1, L.c2, L.c3].join('|') ? s.stops : null; };
@@ -4239,6 +4375,7 @@ function layerMoves(L, ph) {
   if (L.type === 'image' && L.move && L.move !== 'none') return true;
   if ((L.type === 'bg' || L.type === 'shape') && (L.mode || 'solid') !== 'solid' && (L.motion ?? 1) !== 0) return true;
   if (texOn(L) && texAnim(L)) return true; // textura que mexe: muda a cada quadro (parada não)
+  if (warpMoves(L)) return true; // distorção com movimento
   if (L.type === 'text' && L.mark && L.mark !== 'none') return true;
   if (L.capt) return true; // legenda: o bloco e a palavra da vez mudam com o tempo
   return false;
@@ -4287,7 +4424,7 @@ function bgHidden(els, t) {
 function unitSig(u, t) {
   if (!u.gid) return layerSig(u.L, t);
   const gp = gpseudo(u.gid), ph = gp && phase(gp, t), g = gmeta(u.gid) || {};
-  const moves = !ph || ph.mode !== 'hold' || (!stillNow(u.ls[0]) && ((!!g.idle && g.idle !== 'none') || (g.grain > 0 && texAnim(g))));
+  const moves = !ph || ph.mode !== 'hold' || (!stillNow(u.ls[0]) && ((!!g.idle && g.idle !== 'none') || (g.grain > 0 && texAnim(g)) || (warpOn(g) && warpV(g, 'v') > 0)));
   return 'G' + u.gid + (ph ? ph.mode : 'off') + (moves ? '@' + t : '') + u.ls.map(l => layerSig(l, t)).join('');
 }
 function frameKey(tc, rs) {
@@ -5052,7 +5189,7 @@ function reachOf(L, t) {
   const ph = phase(L, t); if (!ph || ph.mode !== 'hold') return null;
   const q = restRect(L); if (!q) return null;
   const b = q.b, sh = L.shadow && L.shadow !== 'none' ? SHADOWS[L.shadow] : null;
-  let pad = 240 + (L.lblur || 0) * 3 + (strokeOn(L) ? skW(L) * 2 : 0) + (waveOn(L) ? waveV(L, 'waveH') : 0) + q.size * 1.6 + (L.move && L.move !== 'none' ? Math.max(b.w, b.h) * .5 : 0);
+  let pad = 240 + (L.lblur || 0) * 3 + (strokeOn(L) ? skW(L) * 2 : 0) + (waveOn(L) ? waveV(L, 'waveH') : 0) + warpReach(L, b) + q.size * 1.6 + (L.move && L.move !== 'none' ? Math.max(b.w, b.h) * .5 : 0);
   if (sh) pad += sh.long ? 160 : ((sh.blur || 0) + Math.max(Math.abs(sh.x || 0), Math.abs(sh.y || 0))) * 1.6;
   return { b, size:q.size, cx:b.x + b.w / 2, cy:b.y + b.h / 2, r:Math.hypot(b.w, b.h) / 2 * 1.6 + pad };
 }
@@ -5079,7 +5216,7 @@ function offView(tc, L, t, cam, depth) {
 function contentRect(L, q) {
   const b = q.b, mx = Math.max(b.w, b.h), idle = stillNow(L) ? 'none' : L.idle || 'none';
   const turn = !!L.rot || ['spin', 'sway', 'wiggle', 'float3d'].includes(idle), w = turn ? Math.hypot(b.w, b.h) : b.w, hh = turn ? w : b.h;
-  let m = 48 + mx * .12 + (strokeOn(L) ? skW(L) * 2 : 0) + q.size * .6 + (waveOn(L) ? waveV(L, 'waveH') : 0); // linha ondulada sai da caixa
+  let m = 48 + mx * .12 + (strokeOn(L) ? skW(L) * 2 : 0) + q.size * .6 + (waveOn(L) ? waveV(L, 'waveH') : 0) + warpReach(L, b); // linha ondulada e distorção saem da caixa
   if (L.type === 'text' && L.mark && L.mark !== 'none') m += q.size * 1.6;
   if (['float', 'float3d', 'wiggle', 'bounce'].includes(idle)) m += 80;
   if (idle === 'glow') m += Math.min(b.w, b.h) * .4 + 40;
@@ -5143,8 +5280,9 @@ function drawLayerFx0(tc, L, t, R, cam, depth, one) {
   const sh = L.type !== 'bg' && L.shadow && L.shadow !== 'none' ? SHADOWS[L.shadow] : null, bm = blendOf(L);
   const back = L.type === 'image' && L.move && L.move !== 'none' ? imageMotion(L, t) : null;
   const tx = L.type !== 'bg' && texOn(L) && !RT.bbMask; // textura: a camada pronta à parte e a textura por cima só dos pixels dela
+  const wp = warpOn(L); // distorção: a camada pronta à parte, redesenhada pelo shader (warpApply)
   try {
-    if (!sh && !bm && !blurOn(L) && !tx) { tc.save(); applyCam(tc, cam, L, depth); one(tc, L); tc.restore(); return; }
+    if (!sh && !bm && !blurOn(L) && !tx && !wp) { tc.save(); applyCam(tc, cam, L, depth); one(tc, L); tc.restore(); return; }
     if (!phase(L, t)) return;
     const lk = lcKey(tc, L, t, R, cam), le = lk && LCACHE.get(L.id);
     if (le && le.key === lk) { LCACHE.delete(L.id); LCACHE.set(L.id, le); lcBlit(tc, le); if (le.b) L._bounds = le.b; return; }
@@ -5156,16 +5294,17 @@ function drawLayerFx0(tc, L, t, R, cam, depth, one) {
       x.setTransform(R.rs, 0, 0, R.rs, P - voX(c), P - voY(c)); applyCam(x, cam, L, depth); one(x, L);
       return c;
     };
-    const src = paint(1);
+    const src = paint(1), b0 = L._bounds;
+    const camM = c => { const x = c.getContext('2d'); x.save(); x.setTransform(R.rs, 0, 0, R.rs, P - voX(c), P - voY(c)); applyCam(x, cam, L, depth); const M = x.getTransform(); x.restore(); return M; };
+    if (wp) warpApply(src, L, t, camM(src), b0); // distorção antes da textura (que fica nítida), da sombra e do desfoque (que seguem a forma nova)
     if (tx) { // presa à caixa da camada (anda com ela), antes da sombra, do desfoque e da mesclagem
       const x = src.getContext('2d'), b = L._bounds;
-      x.save(); x.setTransform(R.rs, 0, 0, R.rs, P - voX(src), P - voY(src)); applyCam(x, cam, L, depth); const M = x.getTransform(); x.restore();
-      texPaint(x, L, t, M, b ? b.x : 0, b ? b.y : 0);
+      texPaint(x, L, t, camM(src), b ? b.x : 0, b ? b.y : 0);
     }
     // "Desfocar atrás" numa forma: o desfoque vale na forma inteira, mesmo com o preenchimento transparente ou "sem cor" (como no
     // Figma). A forma é desenhada de novo com o preenchimento opaco (RT.bbMask) e essa é a máscara do vidro
     let mask = null;
-    if (L.type === 'shape' && (L.bblur || 0) * R.rs > 0) { RT.bbMask = true; try { mask = paint('bb'); } finally { RT.bbMask = false; } }
+    if (L.type === 'shape' && (L.bblur || 0) * R.rs > 0) { RT.bbMask = true; try { mask = paint('bb'); } finally { RT.bbMask = false; } if (wp) { warpApply(mask, L, t, camM(mask), b0); L._bounds = b0; } }
     // onde a camada parada pode ter pixels (px do quadro, com folga para o movimento contínuo e o giro): o "desfocar atrás" só
     // precisa de margem de tela onde ela chega perto da borda do quadro. Entrando/saindo, em grupo ou com câmera: não sabe (null)
     let box = null;
@@ -5257,7 +5396,8 @@ function drawGroup(tc, gid, gp, els, t, R, cam, one, G, depth = 0) {
   // pela escala (não pelo tamanho do quadro): vale também em telas que mostram só parte do quadro (miniatura do carrossel)
   const blit = (c, x, y) => c.drawImage(buf, 0, 0, buf.width, buf.height, x - pu + bx, y - pu + by, buf.width / R.rs, buf.height / R.rs);
   const gtx = gm.grain > 0 && !RT.bbMask; // textura do grupo: o conjunto pronto à parte e a textura por cima só dos pixels dele
-  const out = gsh || gbm || gop < 1 || blurOn(gm) || gtx ? frameBuf(tc.canvas, 1, gpad) : null, dst = out ? out.getContext('2d') : tc;
+  const gwp = warpOn(gm); // distorção do grupo: o conjunto pronto (já animado) redesenhado pelo shader, preso à caixa do conjunto
+  const out = gsh || gbm || gop < 1 || blurOn(gm) || gtx || gwp ? frameBuf(tc.canvas, 1, gpad) : null, dst = out ? out.getContext('2d') : tc;
   if (out) {
     dst.setTransform(1, 0, 0, 1, 0, 0); dst.globalAlpha = 1; dst.filter = 'none'; dst.globalCompositeOperation = 'source-over';
     dst.clearRect(0, 0, out.width, out.height); dst.setTransform(R.rs, 0, 0, R.rs, gpad - voX(out), gpad - voY(out)); dst.globalAlpha = gop;
@@ -5266,6 +5406,7 @@ function drawGroup(tc, gid, gp, els, t, R, cam, one, G, depth = 0) {
     tc.filter = 'none'; tc.globalAlpha = 1; tc.globalCompositeOperation = 'source-over';
     if (!out) return;
     dst.setTransform(1, 0, 0, 1, 0, 0); dst.globalAlpha = 1;
+    if (gwp && B) warpApply(out, gp, t, new DOMMatrix([R.rs, 0, 0, R.rs, gpad - voX(out), gpad - voY(out)]), B);
     if (gtx) texPaint(dst, gp, t, new DOMMatrix([R.rs, 0, 0, R.rs, gpad - voX(out), gpad - voY(out)]), B ? B.x : 0, B ? B.y : 0); // presa à caixa do conjunto, antes da sombra
     composeOnto(tc, out, gL, gsh, gbm, R.rs);
   };
@@ -13503,6 +13644,7 @@ Object.assign(ICONS, {
   fx_shadow:SI('<rect x="2.5" y="2.5" width="8.5" height="8.5" rx="1.5"/><path d="M13.5 5.5v6.5a1.5 1.5 0 0 1-1.5 1.5H5.5" stroke-opacity=".55"/>'),
   fx_lblur:SI('<circle cx="8" cy="8" r="5.5" stroke-dasharray="1.5 1.8"/><circle cx="8" cy="8" r="2.5"/>'),
   fx_bblur:SI('<rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke-dasharray="1.5 1.8"/><path d="M5.5 10.5l5-5" stroke-opacity=".55"/>'),
+  fx_warp:SI('<path d="M2.5 5c1.8-1.6 3.7-1.6 5.5 0s3.7 1.6 5.5 0M2.5 11c1.8-1.6 3.7-1.6 5.5 0s3.7 1.6 5.5 0M5 2.5c-1.6 1.8-1.6 3.7 0 5.5s1.6 3.7 0 5.5" stroke-opacity=".9"/>'),
   fx_grain:SI('<path d="M3.5 3.5h.01M8 3.5h.01M12.5 3.5h.01M5.8 6h.01M10.2 6h.01M3.5 8.5h.01M8 8.5h.01M12.5 8.5h.01M5.8 11h.01M10.2 11h.01M3.5 13h.01M8 13h.01M12.5 13h.01" stroke-width="1.8"/>'),
 });
 const TEX_ON = .3; // força que o "+" põe
@@ -13520,6 +13662,26 @@ function texFields(L, peers = peersAny) {
     rangeF(L, 'grain', 'Força', 0, 1, .01, v => Math.round((v || 0) * 100) + '%', { ico:'nf_grain', get:() => L.grain || L.grainOff || 0, put:v => { for (const o of peers(L)) { o.grain = v; delete o.grainOff; } } }),
     rangeF(L, 'grainS', 'Tamanho', .25, 8, .05, v => (v ?? 1).toFixed(2) + '×', { get:() => L.grainS ?? 1, put:v => { for (const o of peers(L)) o.grainS = v; } }),
     modeF('Movimento', [[true, 'Mexe', 'Muda a cada quadro, como granulado de filme'], [false, 'Parada', 'Fica igual o tempo todo, presa ao elemento']], anim, v => put(o => { o.grainAnim = v; }))];
+}
+/* Distorção (efeito de texto, forma, logo, botão, imagem/vídeo e grupo inteiro): tipo numa grade com a amostra, quanto empurra e o
+   tamanho da onda (ou a força, nos tipos que torcem a forma inteira), direção, movimento e "Sortear outra" nos que têm acaso */
+function warpFields(L, peers = peersAny) {
+  const put = fn => { const a = document.activeElement; if (a && a.closest && a.closest('.pop')) a.blur(); optSet(L, fn, peers); seekLayer(L); };
+  const grid = h('div', { class:'tex-grid', role:'group', 'aria-label':'Tipo de distorção' }, Object.entries(WARP_KINDS).map(([k, [t]]) => {
+    const sw = h('span', { class:'tex-sw warp-sw' }); sw.style.backgroundImage = `url(${warpThumb(k)})`;
+    return h('button', { type:'button', class:'tex-k', 'aria-pressed':String(L.warp === k), title:t,
+      onclick:() => put(o => { if (o.warp !== k) warpFit(o, k); }) }, [sw, h('span', { text:t })]);
+  }));
+  const K = warpK(L), num = (key, k) => ({ get:() => warpV(L, k), put:v => { for (const o of peers(L)) o[key] = v; } });
+  return [field('Tipo', grid, null, true),
+    ...(K.f != null ? [rangeF(L, 'warpF', 'Força', K.neg ? -1 : 0, 1, .01, v => Math.round((v || 0) * 100) + '%', num('warpF', 'f'))]
+      : [rangeF(L, 'warpA', 'Força', 0, 600, 1, v => Math.round(v || 0) + 'px', num('warpA', 'a')),
+         L.warp === 'glitch' ? rangeF(L, 'warpS', 'Altura das faixas', 2, 600, 1, v => Math.round(v || 0) + 'px', num('warpS', 's'))
+           : rangeF(L, 'warpS', L.warp === 'melt' ? 'Largura dos pingos' : L.warp === 'liquid' ? 'Tamanho das manchas' : 'Tamanho da onda', 8, 2000, 1, v => Math.round(v || 0) + 'px', num('warpS', 's'))]),
+    K.dir ? modeF('Direção', [['h', 'Para os lados', 'Cada linha anda para os lados', 'ar_r'], ['v', 'Para cima e para baixo', 'Cada coluna sobe e desce', 'ar_d']], L.warpD === 'v' ? 'v' : 'h', v => put(o => { o.warpD = v; })) : null,
+    rangeF(L, 'warpV', 'Movimento', 0, 4, .05, v => (v || 0).toFixed(2) + '×', num('warpV', 'v')),
+    h('p', { class:'hint', text:'Movimento 0 = parado.' + (K.f != null ? ' Com movimento, a força vai e volta.' : '') }),
+    K.seed ? h('div', { class:'row' }, [h('button', { class:'btn small', text:'Sortear outra', onclick:() => put(o => { o.warpSeed = ((o.warpSeed | 0) + 1) % 997; }) })]) : null].filter(Boolean);
 }
 function effectRows(L) {
   const shOn = !!L.shadow && L.shadow !== 'none';
@@ -13546,6 +13708,10 @@ function effectRows(L) {
       add:o => { delete o.grainOff; o.grain = TEX_ON; if (!TEX_KINDS[o.grainK]) o.grainK = 'film'; },
       hide:o => { if (o.grain > 0) { o.grainOff = o.grain; o.grain = 0; } else if (o.grainOff > 0) { o.grain = o.grainOff; delete o.grainOff; } },
       rm:o => { o.grain = 0; delete o.grainOff; }, det:() => texFields(L, peersAny) }] : []),
+    ...(TEX_TYPES.has(L.type) && L.type !== 'bg' || L.__g != null ? [{ k:'warp', t:'Distorção', has:!!WARP_KINDS[L.warp], on:!!WARP_KINDS[L.warp] && !L.warpHide,
+      val:() => (WARP_KINDS[L.warp] || [''])[0],
+      add:o => { warpFit(o, 'wave'); delete o.warpHide; }, hide:o => { if (o.warpHide) delete o.warpHide; else o.warpHide = true; },
+      rm:o => { for (const q of ['warp', 'warpHide', 'warpA', 'warpS', 'warpF', 'warpV', 'warpD', 'warpSeed']) delete o[q]; }, det:() => warpFields(L, peersAny) }] : []),
   ];
   const set = fn => { optSet(L, fn, peersAny); seekLayer(L); };
   const rows = FX.filter(f => f.has).map(f => {

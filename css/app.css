@@ -975,6 +975,7 @@ body.nf-scrub,body.nf-scrub *{cursor:ew-resize !important;user-select:none}
 .tex-k:hover{border-color:var(--line-2);color:var(--fg)}
 .tex-k[aria-pressed="true"],.tex-k[aria-pressed="true"]:hover{border-color:var(--accent);background:var(--accent-on);color:var(--fg)}
 .tex-sw{display:block;height:30px;border-radius:3px;background-color:var(--faint);background-size:128px;background-repeat:repeat}
+.tex-sw.warp-sw{height:40px;background-color:var(--raised);background-size:contain;background-position:center;background-repeat:no-repeat}
 .fill-sw{position:relative}
 .fill-sw::before{content:"";position:absolute;inset:4px;border-radius:3px;border:1px solid var(--line-2);background:var(--g,transparent),var(--checker)}
 .fill-sw i{position:relative;display:grid;place-items:center}
