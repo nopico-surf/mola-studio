@@ -274,10 +274,11 @@ for (const k in TEXT_TO_BLOCK) BP[k].cat ||= TP[k].cat;
 for (const k of BLOCK_TO_TEXT) TP[k].cat ||= BP[k].cat;
 
 const IDLE = { none:'Sem animação', float:'Flutuar', breathe:'Respirar', sway:'Balançar', shine:'Brilho', pulse:'Pulsar', spin:'Girar',
-               float3d:'Flutuar 3D', bounce:'Quicar', wiggle:'Tremer', glow:'Neon', glitch:'Interferência' };
+               float3d:'Flutuar 3D', bounce:'Quicar', wiggle:'Tremer', glow:'Neon', glitch:'Interferência', cols:'Colunas elásticas', rows:'Linhas elásticas' };
 const IDLE_BY = { text:['none','float','breathe','sway','pulse'], logo:['none','shine','breathe','float','sway','pulse'], cta:['none','pulse','shine','breathe','sway','float'], image:['none','float','breathe','sway','shine','pulse'],
                  shape:['none','float','breathe','sway','spin','pulse','shine'] };
 for (const t in IDLE_BY) IDLE_BY[t].push(...['shine','float3d','bounce','wiggle','glow','glitch','spin'].filter(k => !IDLE_BY[t].includes(k)));
+IDLE_BY.text.push('cols', 'rows'); // letra a letra, só no texto (ewPlan, antes de drawText)
 const SHAPE_KINDS = { rect:'Retângulo', ellipse:'Círculo', triangle:'Triângulo', polygon:'Polígono', star:'Estrela', line:'Linha', custom:'Vetor' };
 const BG_MODES = { mesh:'Gradiente vivo', linear:'Linear girando', spot:'Holofote', solid:'Sólido', image:'Imagem' };
 // fundo e forma também enchem com vídeo (pedido do usuário); os Componentes continuam só com BG_MODES
@@ -3053,6 +3054,109 @@ function counterText(txt, e) {
 }
 const SCR = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%&*+=?';
 
+/* ------------ Colunas e linhas elásticas (presets "Enquanto está na tela" do texto) ------------
+   Pedido do usuário: tipografia como o "Room to grow" do Pinterest, como preset (sem keyframes). Letra a letra:
+   - cols "Colunas elásticas": cada letra estica só na altura. Com 2 linhas ou mais, as letras que ficam uma em cima da outra dividem a
+     altura da coluna (a de cima cresce, a de baixo encolhe), então o bloco não muda de tamanho. Linha curta ou pequena (o "to" entre
+     duas palavras: `rider`) não estica, vai junto na emenda e ocupa só a própria altura. Uma linha só: cada letra estica a partir da base.
+   - rows "Linhas elásticas": cada letra estica só na largura e as da mesma linha dividem a largura dela (linhas vizinhas em oposição).
+   A onda passa pelas letras (`ewDir`: r → | l ← | c do meio para fora | a todas juntas; `ewN` = ondas na largura do bloco), `ewBeat`
+   hold = segura cada lado um instante (tanh), soft = seno. Ciclo de EW_T s a 1× (Velocidade do "na tela"); Intensidade = quanto estica.
+   Entra aos poucos nos primeiros 0,6 s depois da entrada (sem salto) e continua na saída, por baixo do preset dela.
+   ewPlan devolve, por letra, E(v) = n + s·(v − b) em cada eixo; ewApply junta com o estado do preset no pivô da letra. Determinístico pelo t.
+   Peso: uma conta por letra por quadro (como os presets de texto). Texto em curva e legenda não usam. */
+const EW_KEYS = new Set(['cols', 'rows']);
+const EW_T = 2.4;
+const ewDir = L => L.ewDir || 'r', ewBeat = L => L.ewBeat || 'hold', ewN = L => L.ewN ?? .7;
+function ewWave(L, u, ph0, t) {
+  const d = ewDir(L), off = d === 'a' ? 0 : (d === 'l' ? 1 - u : d === 'c' ? Math.abs(u - .5) * 2 : u) * ewN(L);
+  const s = Math.sin(TAU * (t / EW_T - off) + ph0);
+  return ewBeat(L) === 'soft' ? s : Math.tanh(2.4 * s) / Math.tanh(2.4);
+}
+// faixa de cada linha (do alto da letra mais alta até o pé da que mais desce) e quem é linha principal
+function ewBands(lay) {
+  if (lay._ewb) return lay._ewb;
+  let curF = null;
+  const B = lay.lines.map(line => {
+    const gs = line.glyphs.filter(g => !g.space); if (!gs.length) return null;
+    let asc = 0, desc = 0;
+    for (const g of gs) { if (curF !== g.f) MCTX.font = curF = g.f; const m = MCTX.measureText(g.ch); asc = Math.max(asc, m.actualBoundingBoxAscent || 0); desc = Math.max(desc, m.actualBoundingBoxDescent || 0); }
+    if (asc + desc < 1) asc = lay.size * .72;
+    const last = gs[gs.length - 1];
+    return { li:line.li, top:line.baseline - asc, bot:line.baseline + desc, h:asc + desc, x0:line.x0 + gs[0].x, x1:line.x0 + last.x + last.w, main:true };
+  });
+  const ok = B.filter(Boolean), mh = Math.max(0, ...ok.map(b => b.h)), mw = Math.max(0, ...ok.map(b => b.x1 - b.x0));
+  for (const b of ok) b.main = !(b.h < mh * .6 || b.x1 - b.x0 < mw * .55);
+  if (ok.filter(b => b.main).length < 2) for (const b of ok) b.main = true; // "to" só é carona entre duas linhas principais
+  B.gap = clamp(lay.lineH - mh, lay.size * .02, lay.size * .12); // emenda entre as faixas
+  return lay._ewb = B;
+}
+function ewPlan(L, lay, tl, ph) {
+  if (!EW_KEYS.has(L.idle) || !ph || stillNow(L) || lay.tp || L.capt) return null;
+  const sp = spdOf(L, 'idle'), I = intOf(L, 'idle');
+  const ramp = x => { const u = clamp(x / .6); return u * u * (3 - 2 * u); };
+  const hold = Math.max(0, (L.end ?? S.duration) - L.start - ph.inD - ph.outD);
+  const w = ph.mode === 'in' ? 0 : ph.mode === 'hold' ? ramp(tl - ph.inD) : ramp(hold);
+  if (w <= 0) return null;
+  const t = tl * sp, out = new Map(), W0 = lay.innerW || lay.blockW || 1, uOf = x => clamp((x + W0 / 2) / W0);
+  const put = (g, e) => {
+    if (w < 1) {
+      if (e.sy != null) { e.ny = e.by + w * (e.ny - e.by); e.sy = 1 + w * (e.sy - 1); }
+      if (e.sx != null) { e.nx = e.bx + w * (e.nx - e.bx); e.sx = 1 + w * (e.sx - 1); }
+    }
+    out.set(g, e);
+  };
+  if (L.idle === 'rows') {
+    const A = .2 + .7 * I;
+    for (const line of lay.lines) {
+      const gs = line.glyphs; if (!gs.length) continue;
+      const cell = gs.map((g, k) => (k + 1 < gs.length ? gs[k + 1].x : Math.max(line.width, g.x + g.w)) - g.x);
+      const r = gs.map(g => g.space ? 1 : Math.exp(A * ewWave(L, uOf(line.x0 + g.x + g.w / 2), Math.PI * line.li, t)));
+      let sw = 0, swr = 0; gs.forEach((g, k) => { if (!g.space) { sw += cell[k]; swr += cell[k] * r[k]; } });
+      if (!swr) continue;
+      const k0 = sw / swr; let x = gs[0].x;
+      gs.forEach((g, k) => { const s = g.space ? 1 : r[k] * k0; if (!g.space) put(g, { bx:line.x0 + g.x, nx:line.x0 + x, sx:s }); x += cell[k] * s; });
+    }
+    return out;
+  }
+  const B = ewBands(lay), ok = B.filter(Boolean), main = ok.filter(b => b.main);
+  if (main.length < 2) { // uma linha só: cada letra estica a partir da base
+    const A1 = .2 + .5 * I;
+    for (const line of lay.lines) { const b = B[line.li]; if (b) for (const g of line.glyphs) if (!g.space) put(g, { by:b.bot, ny:b.bot, sy:Math.exp(A1 * ewWave(L, uOf(line.x0 + g.x + g.w / 2), 0, t)) }); }
+    return out;
+  }
+  const A = .25 + .75 * I, phOf = new Map(main.map((b, j) => [b, TAU * j / main.length]));
+  for (const line of lay.lines) {
+    const b0 = B[line.li]; if (!b0) continue;
+    for (const g of line.glyphs) {
+      if (g.space) continue;
+      const cx = line.x0 + g.x + g.w / 2, cov = ok.filter(b => cx >= b.x0 - 1 && cx <= b.x1 + 1);
+      if (!cov.includes(b0)) cov.push(b0), cov.sort((a, b) => a.li - b.li);
+      const ms = cov.filter(b => b.main); if (!ms.length) continue;
+      const u = uOf(cx), rider = cov.reduce((s, b) => s + (b.main ? 0 : b.h), 0);
+      const avail = Math.max(lay.size * .05 * ms.length, cov[cov.length - 1].bot - cov[0].top - rider - B.gap * (cov.length - 1));
+      const rs = ms.map(b => b.h * Math.exp(A * ewWave(L, u, phOf.get(b), t))), sum = rs.reduce((a, b) => a + b, 0);
+      let y = cov[0].top;
+      for (const b of cov) {
+        const hh = b.main ? avail * rs[ms.indexOf(b)] / sum : b.h;
+        if (b === b0) { put(g, { by:b.top, ny:y, sy:hh / b.h }); break; }
+        y += hh + B.gap;
+      }
+    }
+  }
+  return out;
+}
+// junta E (da letra) com o estado do preset (d + M·(v − P) no pivô P): d' = d + M·(E(P) − P), escala × s
+function ewApply(st, e, px, py) {
+  if (!e) return st;
+  const sxE = e.sx ?? 1, syE = e.sy ?? 1, sc = st.sc ?? 1;
+  let vx = e.bx == null ? 0 : e.nx + sxE * (px - e.bx) - px, vy = e.by == null ? 0 : e.ny + syE * (py - e.by) - py;
+  vx *= sc * (st.sx ?? 1); vy *= sc * (st.sy ?? 1);
+  if (st.kx) vx += st.kx * vy;
+  if (st.rot) { const c = Math.cos(st.rot), s = Math.sin(st.rot); [vx, vy] = [c * vx - s * vy, s * vx + c * vy]; }
+  return { ...st, dx:(st.dx || 0) + vx, dy:(st.dy || 0) + vy, sx:(st.sx ?? 1) * sxE, sy:(st.sy ?? 1) * syE };
+}
+
 function drawText(ctx, L, t, R) {
   if (L.capt && !L._capView) return drawCaption(ctx, L, t, R); // legenda: desenha o bloco da vez (js/legenda.js)
   const ph = phase(L, t); if (!ph) return;
@@ -3071,6 +3175,7 @@ function drawText(ctx, L, t, R) {
   const size = lay.size;
   const pl = placeOf(L), fit = textFit(L, lay, pl), ax = fit.ax, ay = fit.ay, fk = fit.k * pl.k;
   const idl = idleState(L, tl, ph, true, lay.blockH / 2);
+  const ewP = ewPlan(L, lay, tl, ph); // colunas/linhas elásticas: quanto cada letra estica e para onde vai
   L._bounds = { x:ax - lay.blockW * fk / 2, y:ay - lay.blockH * fk / 2, w:lay.blockW * fk, h:lay.blockH * fk, k:fk };
 
   ctx.save();
@@ -3204,7 +3309,7 @@ function drawText(ctx, L, t, R) {
       for (const g of line.glyphs) {
         if (g.space) continue;
         const idx = unit === 'char' ? g.ci : unit === 'word' ? g.word : unit === 'line' ? line.li : 0;
-        const st = stOf(idx);
+        let st = stOf(idx);
         // pivô da unidade
         let px, py;
         if (unit === 'char') { px = line.x0 + g.x + g.w / 2; }
@@ -3212,11 +3317,12 @@ function drawText(ctx, L, t, R) {
         else if (unit === 'line') px = line.x0 + line.width / 2;
         else px = 0;
         py = (unit === 'all') ? 0 : (P && P.pivot === 'base' ? line.baseline : P && P.pivot === 'top' ? line.baseline - size * .74 : line.baseline - size * .34);
+        const ew = ewP && ewP.get(g); if (ew) st = ewApply(st, ew, px, py);
         const track = st.track ? (g.k - (nInLine - 1) / 2) * st.track : 0;
         // rastro: a mesma unidade alguns instantes antes, cada vez mais apagada
         if (trail && stOf !== none) for (let j = trail.n; j >= 1; j--) {
           const pr = ph.p - j * trail.lag; if (pr <= 0) continue;
-          const sj = stAt(idx, pr);
+          const sj = ewApply(stAt(idx, pr), ew, px, py);
           drawGlyph(c, line, g, { ...sj, a:(sj.a ?? 1) * (1 - j / (trail.n + 1)) * .45 * tfade }, px, py, track);
         }
         if (drawGlyph(c, line, g, st, px, py, track) && P && P.cursor) lastVisible = Math.max(lastVisible, g.ci);
@@ -4978,6 +5084,7 @@ function contentRect(L, q) {
   if (['float', 'float3d', 'wiggle', 'bounce'].includes(idle)) m += 80;
   if (idle === 'glow') m += Math.min(b.w, b.h) * .4 + 40;
   if (idle === 'pulse' || idle === 'breathe') m += mx * .06;
+  if (idle === 'cols') m += b.h * 1.2; // uma linha só: as letras crescem para cima (até ~2×)
   if (idle === 'float3d' || idle === 'glitch') m += mx * .25;
   if (L.type === 'image' && L.device && L.device !== 'none') m += b.w * .1;
   if (L.move && L.move !== 'none') m += mx * .5;
@@ -13092,10 +13199,28 @@ function lineF(L) {
   if (!L.lineColor) L.lineColor = S.brand.colors[2];
   return colorF(L, 'lineColor', 'Cor da linha');
 }
-function idleGrid(L) {
+function idleGrid(L, onPick) {
   const keys = IDLE_BY[L.type] || ['none'];
-  const map = Object.fromEntries(keys.map(k => [k, { label:IDLE[k] }]));
-  return presetGrid(L, 'idle', keys, map);
+  const map = Object.fromEntries(keys.map(k => [k, { label:IDLE[k], cat:EW_KEYS.has(k) ? 'txt' : undefined }]));
+  return presetGrid(L, 'idle', keys, map, onPick);
+}
+// opções das colunas/linhas elásticas (ewPlan): direção da onda, ritmo e quantas ondas cabem na largura
+Object.assign(ICONS, {
+  ew_mid:SI('<path d="M8 8h5.5M11 5.5 13.5 8 11 10.5M8 8H2.5M5 5.5 2.5 8 5 10.5"/>'),
+  ew_all:SI('<path d="M4 3.5v9M8 3.5v9M12 3.5v9"/>'),
+});
+const EW_DIRS = [['r', 'Da esquerda para a direita', '', 'ar_r'], ['l', 'Da direita para a esquerda', '', 'ar_l'], ['c', 'Do meio para fora', '', 'ew_mid'], ['a', 'Todas juntas', '', 'ew_all']];
+function ewFields(L) {
+  if (!EW_KEYS.has(L.idle)) return [];
+  const ps = () => peersOf(L).filter(o => EW_KEYS.has(o.idle));
+  for (const o of ps()) o.ewN ??= .7;
+  const set = (k, v) => { pushUndo(); for (const o of ps()) o[k] = v; changed(); renderProps(); };
+  return [
+    modeF('Onda', EW_DIRS, ewDir(L), v => set('ewDir', v)),
+    modeF('Ritmo', [['hold', 'Com pausa', 'Segura cada lado um instante'], ['soft', 'Contínuo', 'Vai e volta sem parar']], ewBeat(L), v => set('ewBeat', v)),
+    ewDir(L) === 'a' ? null : rangeF(L, 'ewN', 'Ondas na largura', .2, 3, .05, v => v.toFixed(2), { ico:'nf_drag' }),
+    h('p', { class:'hint', text:L.idle === 'cols' ? 'Com duas linhas ou mais, a letra de cima e a de baixo dividem a altura da coluna. Uma linha curta ou pequena entre elas (como “to”) vai junto na emenda.' : 'As letras de cada linha dividem a largura dela; linhas vizinhas se mexem ao contrário.' }),
+  ].filter(Boolean);
 }
 let propTab = 'anim';
 function renderProps() {
@@ -13151,7 +13276,8 @@ function renderProps() {
     box.append((() => { const slot = h('div'); const ref = () => { slot.innerHTML = ''; const f = slideDirF(L, 'in'); if (f) slot.append(f); }; ref();
       return h('section', { class:'sec' }, [h('h3', {}, ['Entrada', seeBtn('Ver a entrada (toca só este trecho)', () => previewIn(L))]), xfNote('in'), presetGrid(L, 'in', inKeys, map, ref), slot,
         ...rhythm('in', .4, 6, () => seekKeep(L))]); })());
-    box.append(h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), idleGrid(L), ...rhythm('idle', .2, 4, () => seekKeep(L))]));
+    box.append((() => { const slot = h('div', { class:'ew-opts' }); const ref = () => { slot.innerHTML = ''; slot.append(...ewFields(L)); }; ref();
+      return h('section', { class:'sec' }, [h('h3', { text:'Enquanto está na tela' }), idleGrid(L, ref), slot, ...rhythm('idle', .2, 4, () => seekKeep(L))]); })());
     box.append(...animExtras(L)); // marca à mão (texto), movimento dentro da imagem
     { const s = xfSec(L, 'out'); if (s) box.append(s); }
     box.append((() => { const slot = h('div'); const ref = () => { slot.innerHTML = ''; const f = slideDirF(L, 'out'); if (f) slot.append(f); }; ref();

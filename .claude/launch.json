@@ -297,6 +297,17 @@
         "3223"
       ],
       "port": 3223
+    },
+    {
+      "name": "mola-ew",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "serve",
+        ".",
+        "-l",
+        "3233"
+      ],
+      "port": 3233
     }
   ]
 }
